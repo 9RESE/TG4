@@ -1,7 +1,7 @@
 ccxt>=4.2.0
 pandas
 numpy
-vectorbt
+vectorbt>=0.26.0
 ta-lib
 torch==2.3.0+rocm5.6
 torchvision==0.18.0+rocm5.6
