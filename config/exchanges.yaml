@@ -1,0 +1,18 @@
+paper_trading: true
+starting_balance:
+  USDT: 1000.0
+  XRP: 500.0
+
+exchanges:
+  kraken:
+    enabled: true
+    api_key: "YOUR_KRAKEN_KEY"    # leave blank for paper
+    secret: "YOUR_KRAKEN_SECRET"
+  blofin:
+    enabled: true
+    api_key: ""
+    secret: ""
+  bitrue:
+    enabled: true
+    api_key: ""
+    secret: ""

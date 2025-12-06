@@ -1,0 +1,14 @@
+ccxt>=4.2.0
+pandas
+numpy
+vectorbt
+ta-lib
+torch==2.3.0+rocm5.6
+torchvision==0.18.0+rocm5.6
+torchaudio==2.3.0+rocm5.6
+--extra-index-url https://download.pytorch.org/whl/rocm5.6
+scikit-learn
+xgboost
+pyyaml
+matplotlib
+seaborn
