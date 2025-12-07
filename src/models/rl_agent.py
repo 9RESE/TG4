@@ -17,12 +17,17 @@ from portfolio import Portfolio
 class TradingEnv(gym.Env):
     """
     Custom Trading Environment for RL agent.
-    Phase 9: Rebound capture + selective offense.
+    Phase 11: Bear Profit Tuning + Mean Reversion + USDT Yield.
     Goals: Accumulate BTC (45%), XRP (35%), USDT (20% as collateral)
     Features:
     - Vol penalty discourages leverage in choppy markets
     - Rebound bonus rewards correctly timed dip-buys
     - RSI-based offense triggers in greed regime
+    - SHORT actions for bear market profit capture
+    - Phase 11: Lowered short thresholds (RSI >65, ATR >4%)
+    - Phase 11: USDT yield simulation (~5-8% APY while parked)
+    - Phase 11: Stronger short rewards (5x multiplier on profitable shorts)
+    - Decay penalty prevents holding shorts too long
     """
 
     def __init__(self, data_dict, initial_balance=None):
@@ -34,31 +39,46 @@ class TradingEnv(gym.Env):
         # Phase 7: Simplified targets - USDT as collateral/safety
         self.targets = {'BTC': 0.45, 'XRP': 0.35, 'USDT': 0.20}
 
-        # Actions: 0-2 BTC (buy/hold/sell), 3-5 XRP, 6-8 USDT (park/hold/deploy)
-        self.action_space = spaces.Discrete(9)
+        # Phase 10: Extended actions with shorts
+        # 0-2: BTC (buy/hold/sell), 3-5: XRP (buy/hold/sell)
+        # 6-8: USDT (park/hold/deploy), 9-10: SHORT (BTC/XRP)
+        # 11: Close all shorts
+        self.action_space = spaces.Discrete(12)
 
-        # Phase 9: Extended observations with volatility + RSI features
-        # 4 features per symbol + 3 portfolio + 2 volatility + 2 RSI features
-        n_features = len(self.symbols) * 4 + 3 + 4
+        # Phase 10: Extended observations with volatility + RSI + short position features
+        # 4 features per symbol + 3 portfolio + 2 volatility + 2 RSI + 2 short positions
+        n_features = len(self.symbols) * 4 + 3 + 4 + 2
         self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(n_features,), dtype=np.float32)
 
         self.current_step = 0
         self.max_steps = min(len(df) for df in data_dict.values()) - 1
         self.portfolio = None
 
-        # Leverage tracking for margin positions
+        # Leverage tracking for margin positions (longs)
         self.margin_positions = {'BTC': 0.0, 'XRP': 0.0}
         self.margin_entries = {'BTC': 0.0, 'XRP': 0.0}  # Track entry prices
         self.leverage = 10  # Kraken 10x
 
+        # Phase 10: Short position tracking
+        self.short_positions = {'BTC': 0.0, 'XRP': 0.0}
+        self.short_entries = {'BTC': 0.0, 'XRP': 0.0}
+        self.short_open_step = {'BTC': 0, 'XRP': 0}  # Track when shorts opened
+        self.short_leverage = 5  # Conservative 5x for shorts
+        self.max_short_duration = 336  # ~14 days in hourly steps
+
         # Phase 8: Volatility tracking
         self.current_volatility = 0.0
-        self.vol_high_threshold = 0.05  # ATR% above this = high vol
+        self.vol_high_threshold = 0.04  # Phase 11: Lowered from 0.05 - ATR% for bear signal
         self.vol_low_threshold = 0.02   # ATR% below this = greed/calm
 
         # Phase 9: RSI tracking for rebound detection
         self.current_rsi = {'XRP': 50.0, 'BTC': 50.0}
         self.rsi_oversold = 30  # RSI below this = oversold dip
+        self.rsi_overbought = 65  # Phase 11: Lowered from 70 - earlier overbought detection
+        self.rsi_short_exit = 40  # Phase 11: Auto-exit shorts when RSI drops below this
+
+        # Phase 11: USDT yield simulation (5-8% APY)
+        self.usdt_yield_per_step = 0.0001  # ~5-8% APY when parked in defensive mode
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
@@ -66,6 +86,10 @@ class TradingEnv(gym.Env):
         self.portfolio = Portfolio(self.initial_balance.copy())
         self.margin_positions = {'BTC': 0.0, 'XRP': 0.0}
         self.margin_entries = {'BTC': 0.0, 'XRP': 0.0}
+        # Phase 10: Reset short positions
+        self.short_positions = {'BTC': 0.0, 'XRP': 0.0}
+        self.short_entries = {'BTC': 0.0, 'XRP': 0.0}
+        self.short_open_step = {'BTC': 0, 'XRP': 0}
         self.current_volatility = 0.0
         self.current_rsi = {'XRP': 50.0, 'BTC': 50.0}
         return self._get_obs(), {}
@@ -156,6 +180,11 @@ class TradingEnv(gym.Env):
                 self.current_rsi[asset] = rsi
                 obs.append(rsi / 100.0)  # Normalized RSI (0-1)
 
+        # Phase 10: Add short position features
+        for asset in ['BTC', 'XRP']:
+            short_size = self.short_positions.get(asset, 0)
+            obs.append(1.0 if short_size > 0 else 0.0)  # Has short flag
+
         return np.array(obs, dtype=np.float32)
 
     def _current_prices(self):
@@ -170,54 +199,100 @@ class TradingEnv(gym.Env):
     def step(self, action):
         prices = self._current_prices()
         prev_value = self.portfolio.get_total_usd(prices)
+        prev_prices = prices.copy()  # Track for short P&L
 
         # Execute action
         # Actions 0-2: BTC (buy/hold/sell)
         # Actions 3-5: XRP (buy/hold/sell)
         # Actions 6-8: USDT operations (park more / hold / deploy to margin)
-        assets = ['BTC', 'XRP', 'USDT']
-        asset_idx = action // 3
-        action_type = action % 3  # 0=buy/park, 1=hold, 2=sell/deploy
+        # Phase 10: Actions 9-11: SHORT operations
+        # 9: Short BTC, 10: Short XRP, 11: Close all shorts
 
-        if asset_idx < len(assets):
-            asset = assets[asset_idx]
-            price = prices.get(asset, 1.0)
+        if action <= 8:
+            # Original actions (0-8)
+            assets = ['BTC', 'XRP', 'USDT']
+            asset_idx = action // 3
+            action_type = action % 3  # 0=buy/park, 1=hold, 2=sell/deploy
 
-            if asset == 'USDT':
-                # USDT actions: 6=park (sell assets), 7=hold, 8=deploy (buy assets)
-                if action_type == 0:  # Park - sell some XRP/BTC to USDT
-                    for sell_asset in ['XRP', 'BTC']:
-                        holding = self.portfolio.balances.get(sell_asset, 0)
-                        if holding > 0:
-                            sell_amount = holding * 0.05  # Sell 5%
-                            self.portfolio.update(sell_asset, -sell_amount)
-                            self.portfolio.update('USDT', sell_amount * prices.get(sell_asset, 1.0))
-                elif action_type == 2:  # Deploy - open leveraged position
-                    usdt = self.portfolio.balances.get('USDT', 0)
-                    # Phase 8: Only deploy if volatility is acceptable
-                    if usdt > 100 and self.current_volatility < self.vol_high_threshold:
-                        # Simulate 10x leverage position on XRP
-                        margin_usdt = usdt * 0.1  # Use 10% as margin
-                        exposure = margin_usdt * self.leverage
-                        xrp_price = prices.get('XRP', 1.0)
-                        position_size = exposure / xrp_price
-                        self.margin_positions['XRP'] += position_size
-                        self.margin_entries['XRP'] = xrp_price  # Track entry
-                        self.portfolio.update('USDT', -margin_usdt)  # Lock margin
-            else:
-                # BTC/XRP spot trades
-                if action_type == 0:  # Buy
-                    usdt = self.portfolio.balances.get('USDT', 0)
-                    buy_amount = usdt * 0.15 / price  # 15% of USDT (more aggressive)
-                    if buy_amount > 0 and usdt >= buy_amount * price:
-                        self.portfolio.update('USDT', -buy_amount * price)
-                        self.portfolio.update(asset, buy_amount)
-                elif action_type == 2:  # Sell
-                    holding = self.portfolio.balances.get(asset, 0)
-                    sell_amount = holding * 0.1  # 10% of holding
-                    if sell_amount > 0:
-                        self.portfolio.update(asset, -sell_amount)
-                        self.portfolio.update('USDT', sell_amount * price)
+            if asset_idx < len(assets):
+                asset = assets[asset_idx]
+                price = prices.get(asset, 1.0)
+
+                if asset == 'USDT':
+                    # USDT actions: 6=park (sell assets), 7=hold, 8=deploy (buy assets)
+                    if action_type == 0:  # Park - sell some XRP/BTC to USDT
+                        for sell_asset in ['XRP', 'BTC']:
+                            holding = self.portfolio.balances.get(sell_asset, 0)
+                            if holding > 0:
+                                sell_amount = holding * 0.05  # Sell 5%
+                                self.portfolio.update(sell_asset, -sell_amount)
+                                self.portfolio.update('USDT', sell_amount * prices.get(sell_asset, 1.0))
+                    elif action_type == 2:  # Deploy - open leveraged position
+                        usdt = self.portfolio.balances.get('USDT', 0)
+                        # Phase 8: Only deploy if volatility is acceptable
+                        if usdt > 100 and self.current_volatility < self.vol_high_threshold:
+                            # Simulate 10x leverage position on XRP
+                            margin_usdt = usdt * 0.1  # Use 10% as margin
+                            exposure = margin_usdt * self.leverage
+                            xrp_price = prices.get('XRP', 1.0)
+                            position_size = exposure / xrp_price
+                            self.margin_positions['XRP'] += position_size
+                            self.margin_entries['XRP'] = xrp_price  # Track entry
+                            self.portfolio.update('USDT', -margin_usdt)  # Lock margin
+                else:
+                    # BTC/XRP spot trades
+                    if action_type == 0:  # Buy
+                        usdt = self.portfolio.balances.get('USDT', 0)
+                        buy_amount = usdt * 0.15 / price  # 15% of USDT (more aggressive)
+                        if buy_amount > 0 and usdt >= buy_amount * price:
+                            self.portfolio.update('USDT', -buy_amount * price)
+                            self.portfolio.update(asset, buy_amount)
+                    elif action_type == 2:  # Sell
+                        holding = self.portfolio.balances.get(asset, 0)
+                        sell_amount = holding * 0.1  # 10% of holding
+                        if sell_amount > 0:
+                            self.portfolio.update(asset, -sell_amount)
+                            self.portfolio.update('USDT', sell_amount * price)
+
+        elif action == 9:  # Short BTC
+            usdt = self.portfolio.balances.get('USDT', 0)
+            if usdt > 100 and self.short_positions['BTC'] == 0:
+                # Open BTC short with 5x leverage, 8% of USDT
+                margin = usdt * 0.08
+                btc_price = prices.get('BTC', 90000.0)
+                exposure = margin * self.short_leverage
+                size = exposure / btc_price
+                self.short_positions['BTC'] = size
+                self.short_entries['BTC'] = btc_price
+                self.short_open_step['BTC'] = self.current_step
+                self.portfolio.update('USDT', -margin)
+
+        elif action == 10:  # Short XRP
+            usdt = self.portfolio.balances.get('USDT', 0)
+            if usdt > 100 and self.short_positions['XRP'] == 0:
+                # Open XRP short with 5x leverage, 8% of USDT
+                margin = usdt * 0.08
+                xrp_price = prices.get('XRP', 2.0)
+                exposure = margin * self.short_leverage
+                size = exposure / xrp_price
+                self.short_positions['XRP'] = size
+                self.short_entries['XRP'] = xrp_price
+                self.short_open_step['XRP'] = self.current_step
+                self.portfolio.update('USDT', -margin)
+
+        elif action == 11:  # Close all shorts
+            for asset in ['BTC', 'XRP']:
+                if self.short_positions[asset] > 0:
+                    current_price = prices.get(asset, 1.0)
+                    entry_price = self.short_entries[asset]
+                    size = self.short_positions[asset]
+                    # Short P&L: profit when price drops
+                    pnl = (entry_price - current_price) * size
+                    # Return collateral + P&L
+                    collateral = (size * entry_price) / self.short_leverage
+                    self.portfolio.update('USDT', collateral + pnl)
+                    self.short_positions[asset] = 0.0
+                    self.short_entries[asset] = 0.0
 
         self.current_step += 1
 
@@ -245,6 +320,13 @@ class TradingEnv(gym.Env):
         # Phase 8: Enhanced USDT bonus during high volatility
         if self.current_volatility > self.vol_high_threshold and usdt_weight >= 0.20:
             usdt_bonus += 0.2  # Extra bonus for parking during chop
+
+        # Phase 11: USDT yield simulation (~5-8% APY while parked in defensive mode)
+        usdt_yield = 0.0
+        usdt_balance = self.portfolio.balances.get('USDT', 0)
+        is_defensive = self.current_volatility > self.vol_high_threshold or usdt_weight >= 0.20
+        if usdt_balance > 100 and is_defensive:
+            usdt_yield = self.usdt_yield_per_step * usdt_balance  # Simulate yield on parked USDT
 
         # Margin P&L from leveraged positions (with actual entry tracking)
         margin_pnl = 0.0
@@ -284,8 +366,60 @@ class TradingEnv(gym.Env):
         if action == 8 and self.current_volatility < self.vol_low_threshold:
             rebound_bonus += 4.0  # Reward deploying leverage in calm dips
 
-        # Combined reward: base + alignment + USDT safety + margin + rebound - vol penalty
-        reward = base_reward + 3.0 * alignment_score + usdt_bonus + margin_pnl + rebound_bonus - vol_penalty
+        # Phase 11: Bear market short rewards (stronger multipliers)
+        short_bonus = 0.0
+        short_decay = 0.0
+        action_is_short = action in [9, 10]  # Short BTC or XRP
+
+        # Calculate short P&L
+        short_pnl = 0.0
+        for asset in ['BTC', 'XRP']:
+            if self.short_positions[asset] > 0:
+                current_price = prices.get(asset, 1.0)
+                entry_price = self.short_entries[asset]
+                size = self.short_positions[asset]
+                # Short profits when price drops
+                pnl_pct = (entry_price - current_price) / entry_price if entry_price > 0 else 0
+                raw_short_pnl = pnl_pct * size
+
+                # Phase 11: Stronger short rewards (5.0x multiplier on profitable shorts)
+                if raw_short_pnl > 0:
+                    short_pnl += 5.0 * abs(raw_short_pnl)  # Strong downside capture reward
+                else:
+                    short_pnl += raw_short_pnl * 0.1  # Scaled loss
+
+                # Decay penalty for holding shorts too long
+                duration = self.current_step - self.short_open_step[asset]
+                if duration > self.max_short_duration:
+                    short_decay += 0.5  # Penalty forces timely exits
+
+                # Phase 11: Auto-exit bonus when RSI drops below exit threshold (mean reversion)
+                asset_rsi = self.current_rsi.get(asset, 50)
+                if asset_rsi < self.rsi_short_exit and action == 11:
+                    short_bonus += 2.0  # Reward mean reversion exit
+
+        # High vol + RSI overbought + short action = bear confirmation bonus
+        if action_is_short:
+            asset = 'BTC' if action == 9 else 'XRP'
+            asset_rsi = self.current_rsi.get(asset, 50)
+
+            # Phase 11: Lowered thresholds - bear signal: ATR >4% + RSI >65
+            if self.current_volatility > self.vol_high_threshold and asset_rsi > self.rsi_overbought:
+                short_bonus += 5.0 * self.short_leverage  # Phase 11: Amplified to 5x
+
+            # Moderate bear signal: high vol only
+            elif self.current_volatility > self.vol_high_threshold:
+                short_bonus += 3.0  # Phase 11: Increased from 2.0
+
+        # Reward closing shorts with profit
+        if action == 11:  # Close shorts
+            if short_pnl > 0:
+                short_bonus += 5.0  # Phase 11: Increased from 3.0 for profitable exit
+
+        # Combined reward: base + alignment + USDT safety + yield + margin + rebound + shorts - penalties
+        # Phase 11: Added usdt_yield to reward defensive USDT parking
+        reward = (base_reward + 3.0 * alignment_score + usdt_bonus + usdt_yield + margin_pnl +
+                  rebound_bonus + short_bonus + short_pnl - vol_penalty - short_decay)
 
         done = self.current_step >= self.max_steps
         truncated = False

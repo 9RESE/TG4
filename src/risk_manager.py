@@ -1,6 +1,7 @@
 """
-Phase 8: Volatility-Aware Risk Manager
-Dynamic leverage scaling + fear/greed detection
+Phase 11: Volatility-Aware Risk Manager
+Dynamic leverage scaling + fear/greed detection + short position guards
+Phase 11: Lowered short thresholds, 15% max exposure, RSI<40 auto-exit
 """
 import numpy as np
 from typing import Dict, Optional
@@ -10,23 +11,32 @@ class RiskManager:
     """
     Risk management with volatility-aware position sizing and leverage scaling.
     Defensive in high-vol periods, aggressive on calm dips.
+    Phase 11: Tuned short thresholds, 15% max exposure, RSI<40 auto-exit.
     """
 
     def __init__(self, max_drawdown: float = 0.20, max_leverage: float = 10.0):
         self.max_dd = max_drawdown
         self.max_lev = max_leverage
 
-        # Phase 8: Volatility thresholds
-        self.vol_high = 0.05      # ATR% above this = high volatility
+        # Phase 11: Volatility thresholds (lowered for earlier short entries)
+        self.vol_high = 0.04      # Phase 11: Lowered from 0.05 - ATR% for bear signal
         self.vol_extreme = 0.08   # ATR% above this = extreme (park USDT)
         self.vol_low = 0.02       # ATR% below this = calm market
 
         # Fear/Greed state (simulated from volatility)
-        self.market_state = 'neutral'  # 'fear', 'extreme_fear', 'neutral', 'greed'
+        self.market_state = 'neutral'  # 'fear', 'extreme_fear', 'neutral', 'greed', 'bear'
 
         # Position sizing limits
         self.min_collateral_pct = 0.05  # Min 5% of USDT per trade
         self.max_collateral_pct = 0.10  # Max 10% of USDT per trade
+
+        # Phase 11: Short position limits (tuned for more shorts)
+        self.max_short_leverage = 5     # Cap short leverage at 5x
+        self.max_short_exposure = 0.15  # Phase 11: Lowered from 0.20 to 15% max exposure
+        self.short_rsi_threshold = 65   # Phase 11: Lowered from 70 - earlier overbought
+        self.short_rsi_exit = 40        # Phase 11: Auto-exit shorts when RSI < 40
+        self.short_stop_loss = 0.08     # 8% loss triggers stop loss for shorts
+        self.short_take_profit = 0.15   # 15% gain triggers take profit for shorts
 
     def dynamic_leverage(self, volatility: float, base_max: int = 10) -> int:
         """
@@ -196,4 +206,161 @@ class RiskManager:
             'vol_category': 'extreme' if volatility > self.vol_extreme else
                            'high' if volatility > self.vol_high else
                            'normal' if volatility > self.vol_low else 'low'
+        }
+
+    # ========== Phase 10: Short Position Guards ==========
+
+    def can_open_short(self, portfolio_value: float, current_short_exposure: float,
+                       volatility: float, rsi: float) -> bool:
+        """
+        Phase 10: Check if conditions allow opening a short position.
+
+        Args:
+            portfolio_value: Total portfolio value in USD
+            current_short_exposure: Current short exposure in USD
+            volatility: Current ATR%
+            rsi: Current RSI value
+
+        Returns:
+            bool: True if short can be opened
+        """
+        # Check max exposure limit (20% of portfolio)
+        if current_short_exposure >= portfolio_value * self.max_short_exposure:
+            return False
+
+        # Only short in high volatility + overbought conditions
+        if volatility < self.vol_high:
+            return False  # Need high vol for shorts
+
+        if rsi < self.short_rsi_threshold:
+            return False  # Need overbought condition
+
+        return True
+
+    def short_position_size(self, usdt_balance: float, volatility: float,
+                            confidence: float = 0.8) -> float:
+        """
+        Phase 10: Calculate optimal short position size.
+
+        Args:
+            usdt_balance: Available USDT for collateral
+            volatility: Current ATR%
+            confidence: Bear signal confidence (0-1)
+
+        Returns:
+            float: USDT collateral for short position
+        """
+        # Base risk: 5-8% of USDT for shorts (conservative)
+        if volatility > self.vol_extreme:
+            risk_pct = 0.05  # 5% in extreme vol
+        elif confidence > 0.9:
+            risk_pct = 0.08  # 8% on high conviction bear
+        else:
+            risk_pct = 0.06  # 6% default for shorts
+
+        # Scale by confidence
+        risk_pct *= confidence
+
+        return usdt_balance * risk_pct
+
+    def short_leverage(self, volatility: float) -> int:
+        """
+        Phase 10: Get optimal leverage for short position.
+        More conservative than longs - max 5x.
+
+        Args:
+            volatility: Current ATR%
+
+        Returns:
+            int: Recommended short leverage (1-5)
+        """
+        if volatility > self.vol_extreme:
+            return 2  # Minimal leverage in extreme vol
+
+        elif volatility > self.vol_high:
+            return 3  # Moderate leverage
+
+        else:
+            return min(self.max_short_leverage, 5)  # Max 5x for shorts
+
+    def check_short_liquidation(self, entry_price: float, current_price: float,
+                                 leverage: float) -> bool:
+        """
+        Phase 10: Check if short position would be liquidated.
+        Shorts get liquidated when price goes UP.
+
+        Args:
+            entry_price: Entry price of short position
+            current_price: Current market price
+            leverage: Position leverage
+
+        Returns:
+            bool: True if position is liquidated
+        """
+        # Short liquidation: price rises to (entry * (1 + 0.9/leverage))
+        liq_price = entry_price * (1 + 0.9 / leverage)
+        return current_price >= liq_price
+
+    def should_close_short(self, entry_price: float, current_price: float,
+                           leverage: float, duration_hours: int = 0,
+                           rsi: float = 50.0) -> tuple:
+        """
+        Phase 11: Check if short should be closed (take profit, stop loss, decay, or RSI exit).
+
+        Args:
+            entry_price: Entry price of short
+            current_price: Current price
+            leverage: Position leverage
+            duration_hours: How long position has been open
+            rsi: Current RSI value (Phase 11: auto-exit when RSI < 40)
+
+        Returns:
+            tuple: (should_close: bool, reason: str)
+        """
+        # Calculate P&L for short (profit when price drops)
+        pnl_pct = ((entry_price - current_price) / entry_price) * leverage
+
+        # Take profit at configured threshold
+        if pnl_pct >= self.short_take_profit:
+            return True, 'take_profit'
+
+        # Stop loss at configured threshold
+        if pnl_pct <= -self.short_stop_loss:
+            return True, 'stop_loss'
+
+        # Phase 11: Mean reversion exit - close when RSI drops below 40
+        if rsi < self.short_rsi_exit:
+            return True, 'rsi_mean_reversion'
+
+        # Decay timeout: close after 336 hours (~14 days) regardless
+        if duration_hours >= 336:
+            return True, 'decay_timeout'
+
+        # Check liquidation
+        if self.check_short_liquidation(entry_price, current_price, leverage):
+            return True, 'liquidation'
+
+        return False, 'hold'
+
+    def get_short_risk_params(self, volatility: float, rsi: float,
+                               confidence: float) -> Dict:
+        """
+        Phase 11: Get all short-specific risk parameters.
+
+        Returns:
+            dict: Complete short risk parameter set
+        """
+        can_short = rsi > self.short_rsi_threshold and volatility > self.vol_high
+        leverage = self.short_leverage(volatility)
+
+        return {
+            'can_short': can_short,
+            'short_leverage': leverage,
+            'rsi': rsi,
+            'rsi_overbought': rsi > self.short_rsi_threshold,
+            'rsi_exit_threshold': self.short_rsi_exit,  # Phase 11: RSI<40 auto-exit
+            'stop_loss': self.short_stop_loss,
+            'take_profit': self.short_take_profit,
+            'max_exposure': self.max_short_exposure,
+            'market_state': 'bear' if can_short else self.market_state
         }

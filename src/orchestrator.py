@@ -1,6 +1,6 @@
 """
 RL Orchestrator - Master controller for RL-driven trading decisions
-Phase 9: Rebound Capture + Selective Offense + Live Paper Deployment
+Phase 11: Bear Profit Tuning - Lower Short Thresholds + Mean Reversion + USDT Yield
 """
 import numpy as np
 from models.rl_agent import TradingEnv, load_rl_agent
@@ -10,16 +10,18 @@ from exchanges.kraken_margin import KrakenMargin
 from exchanges.bitrue_etf import BitrueETF
 from strategies.ripple_momentum_lstm import generate_xrp_signals, generate_btc_signals
 from strategies.dip_buy_lstm import generate_dip_signals
+from strategies.mean_reversion import calculate_vwap, is_above_vwap
 from risk_manager import RiskManager
 
 
 class RLOrchestrator:
     """
-    Phase 9: Orchestrates RL agent with asymmetric offense.
-    - Defensive in high-vol (park USDT)
+    Phase 11: Orchestrates RL agent with tuned bear market shorting.
+    - Defensive in high-vol (park USDT + earn yield) OR deploy selective shorts
     - Aggressive offense in greed regime (low ATR + RSI oversold)
     - LSTM dip detector must align for leverage execution
     - Up to 10x Kraken / 3x Bitrue ETFs on confirmed dips
+    - Phase 11: Earlier overbought entry (RSI>65, ATR>4%) + VWAP mean reversion filter
     """
 
     # Confidence threshold for leverage trades
@@ -28,6 +30,12 @@ class RLOrchestrator:
     # Phase 9: Offensive thresholds
     OFFENSIVE_CONFIDENCE_THRESHOLD = 0.85  # Higher bar for offense
     GREED_VOL_THRESHOLD = 0.02  # ATR% below this = greed regime
+
+    # Phase 11: Tuned bear mode thresholds (lowered for earlier entry)
+    BEAR_CONFIDENCE_THRESHOLD = 0.80  # Lowered from 0.82 for earlier shorts
+    BEAR_VOL_THRESHOLD = 0.04  # Lowered from 0.05 - ATR% above this = bear regime
+    RSI_OVERBOUGHT = 65  # Lowered from 70 - earlier overbought detection
+    RSI_SHORT_EXIT = 40  # Auto-exit shorts when RSI drops below this (mean reversion complete)
 
     def __init__(self, portfolio: Portfolio, data_dict: dict):
         self.portfolio = portfolio
@@ -48,8 +56,11 @@ class RLOrchestrator:
         # Phase 9: RSI tracking
         self.current_rsi = {'XRP': 50.0, 'BTC': 50.0}
 
-        # Phase 9: Trading mode
-        self.mode = 'defensive'  # 'defensive' or 'offensive'
+        # Phase 10: Trading mode (defensive/offensive/bear)
+        self.mode = 'defensive'  # 'defensive', 'offensive', or 'bear'
+
+        # Phase 10: Short position tracking
+        self.short_positions = {'BTC': None, 'XRP': None}  # Track active shorts
 
         # Try to load trained RL model
         try:
@@ -66,6 +77,7 @@ class RLOrchestrator:
 
         # Action mapping: action_id -> (asset, action_type)
         # 0-2: BTC (buy/hold/sell), 3-5: XRP (buy/hold/sell), 6-8: USDT (park/hold/deploy)
+        # Phase 10: 9-11: Short actions
         self.action_map = {
             0: ('BTC', 'buy'),
             1: ('BTC', 'hold'),
@@ -76,6 +88,9 @@ class RLOrchestrator:
             6: ('USDT', 'park'),    # Sell assets to USDT
             7: ('USDT', 'hold'),    # Keep USDT
             8: ('USDT', 'deploy'),  # Deploy USDT to margin
+            9: ('BTC', 'short'),    # Phase 10: Short BTC
+            10: ('XRP', 'short'),   # Phase 10: Short XRP
+            11: ('SHORT', 'close'), # Phase 10: Close all shorts
         }
 
         # Risk parameters (Phase 9: increased for offense)
@@ -164,12 +179,13 @@ class RLOrchestrator:
 
     def decide_and_execute(self, prices: dict = None):
         """
-        Phase 9: Get RL model prediction and execute with asymmetric offense.
+        Phase 10: Get RL model prediction and execute with bear market shorting.
 
-        - Defensive in high-vol (park USDT)
+        - Defensive in high-vol (park USDT) OR deploy selective shorts
         - Aggressive offense in greed regime (low ATR <2% + RSI oversold)
         - LSTM dip detector must align for leverage execution
         - Up to 10x Kraken / 3x Bitrue ETFs on confirmed dips
+        - Phase 10: Selective shorts on bear signals (high ATR + RSI overbought)
 
         Args:
             prices: Current prices dict. If None, uses env's internal prices.
@@ -237,8 +253,34 @@ class RLOrchestrator:
             btc_dip_signal.get('confidence', 0) > self.OFFENSIVE_CONFIDENCE_THRESHOLD
         )
 
+        # Phase 11: Check for bear mode (tuned: ATR>4% + RSI>65 + above VWAP)
+        xrp_overbought = xrp_rsi > self.RSI_OVERBOUGHT
+        btc_overbought = btc_rsi > self.RSI_OVERBOUGHT
+        is_bear_regime = self.current_volatility > self.BEAR_VOL_THRESHOLD
+
+        # Phase 11: Add VWAP mean reversion filter - only short when price above VWAP
+        xrp_above_vwap = is_above_vwap(self.data, 'XRP/USDT') if 'XRP/USDT' in self.data else False
+        btc_above_vwap = is_above_vwap(self.data, 'BTC/USDT') if 'BTC/USDT' in self.data else False
+
+        xrp_bear = (
+            is_bear_regime and
+            xrp_overbought and
+            xrp_above_vwap and  # Phase 11: VWAP filter
+            xrp_dip_signal.get('confidence', 0) > self.BEAR_CONFIDENCE_THRESHOLD
+        )
+        btc_bear = (
+            is_bear_regime and
+            btc_overbought and
+            btc_above_vwap and  # Phase 11: VWAP filter
+            btc_dip_signal.get('confidence', 0) > self.BEAR_CONFIDENCE_THRESHOLD
+        )
+
         # Update mode
-        if xrp_offensive or btc_offensive:
+        if xrp_bear or btc_bear:
+            self.mode = 'bear'
+            result['mode'] = 'bear'
+            print(f"BEAR PROFIT MODE: Overbought deviation (ATR: {self.current_volatility*100:.2f}%, XRP RSI: {xrp_rsi:.1f}, BTC RSI: {btc_rsi:.1f}, VWAP: XRP={xrp_above_vwap}, BTC={btc_above_vwap})")
+        elif xrp_offensive or btc_offensive:
             self.mode = 'offensive'
             result['mode'] = 'offensive'
             print(f"OFFENSIVE MODE: Greed regime detected (ATR: {self.current_volatility*100:.2f}%, XRP RSI: {xrp_rsi:.1f}, BTC RSI: {btc_rsi:.1f})")
@@ -246,10 +288,45 @@ class RLOrchestrator:
             self.mode = 'defensive'
             result['mode'] = 'defensive'
 
+        # Phase 11: Bear mode - deploy selective shorts with tuned sizing
+        if self.mode == 'bear' and usdt_available > 100:
+            short_leverage = self.risk.dynamic_leverage(self.current_volatility)
+            short_leverage = min(short_leverage, 5)  # Cap shorts at 5x
+
+            if xrp_bear and self.short_positions['XRP'] is None:
+                price = prices.get('XRP', 2.0) if prices else 2.0
+                collateral = usdt_available * 0.06  # Phase 11: 6% for shorts (from 8%)
+                success = self.kraken.open_short('XRP', collateral, price, leverage=short_leverage)
+                if success:
+                    self.short_positions['XRP'] = {'entry': price, 'collateral': collateral}
+                    result['executed'] = True
+                    result['leverage_used'] = True
+                    result['leverage'] = short_leverage
+                    result['short'] = 'XRP'
+                    result['collateral'] = collateral
+                    print(f"BEAR PROFIT MODE: Short deployed on overbought deviation - {short_leverage}x XRP @ ${price:.4f}")
+                    return result
+
+            elif btc_bear and self.short_positions['BTC'] is None:
+                price = prices.get('BTC', 90000.0) if prices else 90000.0
+                # Use Bitrue 3x short ETF for BTC
+                collateral = usdt_available * 0.10  # 10% for BTC shorts
+                success = self.bitrue.buy_etf('BTC3S', collateral, price)
+                if success:
+                    self.short_positions['BTC'] = {'entry': price, 'collateral': collateral}
+                    result['executed'] = True
+                    result['leverage_used'] = True
+                    result['leverage'] = 3
+                    result['etf'] = 'BTC3S'
+                    result['short'] = 'BTC'
+                    result['collateral'] = collateral
+                    print(f"BEAR MODE: Deployed 3x BTC3S ETF @ ${price:.2f}")
+                    return result
+
         # Phase 8: Check if we should park USDT (defensive mode)
-        if self.risk.should_park_usdt(self.current_volatility):
+        if self.mode == 'defensive' and self.risk.should_park_usdt(self.current_volatility):
             result['defensive_mode'] = True
-            if action_type not in ['park', 'hold']:
+            if action_type not in ['park', 'hold', 'short', 'close']:
                 print(f"DEFENSIVE: High volatility ({self.current_volatility*100:.1f}%) - parking USDT")
                 # Override to park mode
                 action_type = 'park'
@@ -415,6 +492,71 @@ class RLOrchestrator:
                 else:
                     print(f"DEFENSIVE: No high-conviction deploy signal (XRP: {xrp_conf:.2f}, BTC: {btc_conf:.2f})")
 
+        # Phase 10: Handle explicit short actions from RL agent
+        elif action_type == 'short' and asset in ['BTC', 'XRP']:
+            # Validate bear conditions before opening short
+            if is_bear_regime and usdt_available > 100:
+                short_leverage = min(self.risk.dynamic_leverage(self.current_volatility), 5)
+
+                if asset == 'XRP' and self.short_positions['XRP'] is None:
+                    price = prices.get('XRP', 2.0) if prices else 2.0
+                    collateral = usdt_available * 0.08
+                    success = self.kraken.open_short('XRP', collateral, price, leverage=short_leverage)
+                    if success:
+                        self.short_positions['XRP'] = {'entry': price, 'collateral': collateral, 'leverage': short_leverage}
+                        result['executed'] = True
+                        result['leverage_used'] = True
+                        result['leverage'] = short_leverage
+                        result['short'] = 'XRP'
+                        result['collateral'] = collateral
+                        print(f"SHORT: Deployed {short_leverage}x short on XRP @ ${price:.4f}")
+
+                elif asset == 'BTC' and self.short_positions['BTC'] is None:
+                    price = prices.get('BTC', 90000.0) if prices else 90000.0
+                    collateral = usdt_available * 0.10
+                    success = self.bitrue.buy_etf('BTC3S', collateral, price)
+                    if success:
+                        self.short_positions['BTC'] = {'entry': price, 'collateral': collateral, 'leverage': 3}
+                        result['executed'] = True
+                        result['leverage_used'] = True
+                        result['leverage'] = 3
+                        result['etf'] = 'BTC3S'
+                        result['short'] = 'BTC'
+                        result['collateral'] = collateral
+                        print(f"SHORT: Deployed BTC3S ETF @ ${price:.2f}")
+            else:
+                print(f"SHORT BLOCKED: Not in bear regime (ATR: {self.current_volatility*100:.2f}%)")
+
+        # Phase 10: Handle close shorts action
+        elif action_type == 'close' and asset == 'SHORT':
+            closed_any = False
+
+            # Close XRP short (Kraken margin)
+            if self.short_positions['XRP'] is not None:
+                price = prices.get('XRP', 2.0) if prices else 2.0
+                pnl = self.kraken.close_short('XRP', price)
+                entry = self.short_positions['XRP']['entry']
+                pnl_pct = ((entry - price) / entry) * 100
+                print(f"CLOSED XRP SHORT: Entry ${entry:.4f} -> Exit ${price:.4f} (PnL: {pnl_pct:+.2f}%)")
+                self.short_positions['XRP'] = None
+                result['short_pnl_xrp'] = pnl
+                closed_any = True
+
+            # Close BTC short (Bitrue ETF)
+            if self.short_positions['BTC'] is not None:
+                price = prices.get('BTC', 90000.0) if prices else 90000.0
+                if self.bitrue.etf_holdings.get('BTC3S', 0) > 0:
+                    self.bitrue.sell_etf('BTC3S', underlying_price=price)
+                entry = self.short_positions['BTC']['entry']
+                pnl_pct = ((entry - price) / entry) * 100
+                print(f"CLOSED BTC SHORT (BTC3S): Entry ${entry:.2f} -> Exit ${price:.2f} (PnL: {pnl_pct:+.2f}%)")
+                self.short_positions['BTC'] = None
+                closed_any = True
+
+            if closed_any:
+                result['executed'] = True
+                result['closed_shorts'] = True
+
         return result
 
     def update_env_step(self):
@@ -429,13 +571,14 @@ class RLOrchestrator:
         """
         Check margin positions for liquidation and take profit.
         Call this regularly during paper trading.
+        Phase 10: Also manages short positions.
         """
-        # Check liquidations
+        # Check long liquidations
         liquidated = self.kraken.check_liquidations(prices)
         if liquidated:
-            print(f"WARNING: Positions liquidated: {liquidated}")
+            print(f"WARNING: Long positions liquidated: {liquidated}")
 
-        # Take profit on large gains (>20%)
+        # Take profit on large gains (>20%) for longs
         for asset, pos in list(self.kraken.positions.items()):
             current_price = prices.get(asset, pos['entry'])
             pnl_pct = self.kraken.get_unrealized_pnl(asset, current_price) / pos['collateral']
@@ -447,6 +590,76 @@ class RLOrchestrator:
             elif pnl_pct < -0.10:  # 10% loss - reduce position
                 print(f"STOP LOSS: {asset} at {pnl_pct*100:.1f}%")
                 self.kraken.close_position(asset, current_price)
+
+        # Phase 10: Manage short positions
+        self._manage_short_positions(prices)
+
+    def _manage_short_positions(self, prices: dict):
+        """
+        Phase 11: Manage short positions - take profit, stop loss, RSI mean reversion exit.
+        """
+        # Get current RSI for mean reversion exit
+        xrp_rsi = self.current_rsi.get('XRP', 50)
+        btc_rsi = self.current_rsi.get('BTC', 50)
+
+        # Check XRP short (Kraken margin)
+        if self.short_positions['XRP'] is not None:
+            pos = self.short_positions['XRP']
+            current_price = prices.get('XRP', 2.0)
+            entry_price = pos['entry']
+            collateral = pos['collateral']
+            leverage = pos.get('leverage', 5)
+
+            # Calculate P&L for short (profit when price drops)
+            pnl_pct = ((entry_price - current_price) / entry_price) * leverage
+
+            # Take profit at 15% gain
+            if pnl_pct > 0.15:
+                pnl = self.kraken.close_short('XRP', current_price)
+                print(f"SHORT TAKE PROFIT XRP: {pnl_pct*100:.1f}% gain")
+                self.short_positions['XRP'] = None
+
+            # Stop loss at 8% loss (price went UP)
+            elif pnl_pct < -0.08:
+                pnl = self.kraken.close_short('XRP', current_price)
+                print(f"SHORT STOP LOSS XRP: {pnl_pct*100:.1f}% loss")
+                self.short_positions['XRP'] = None
+
+            # Phase 11: Mean reversion exit - close when RSI drops below 40
+            elif xrp_rsi < self.RSI_SHORT_EXIT:
+                pnl = self.kraken.close_short('XRP', current_price)
+                print(f"SHORT MEAN REVERSION EXIT XRP: RSI {xrp_rsi:.1f} < {self.RSI_SHORT_EXIT} (PnL: {pnl_pct*100:.1f}%)")
+                self.short_positions['XRP'] = None
+
+        # Check BTC short (Bitrue ETF)
+        if self.short_positions['BTC'] is not None:
+            pos = self.short_positions['BTC']
+            current_price = prices.get('BTC', 90000.0)
+            entry_price = pos['entry']
+
+            # Calculate P&L for short ETF (3x)
+            pnl_pct = ((entry_price - current_price) / entry_price) * 3
+
+            # Take profit at 12% gain
+            if pnl_pct > 0.12:
+                if self.bitrue.etf_holdings.get('BTC3S', 0) > 0:
+                    self.bitrue.sell_etf('BTC3S', underlying_price=current_price)
+                print(f"SHORT TAKE PROFIT BTC: {pnl_pct*100:.1f}% gain")
+                self.short_positions['BTC'] = None
+
+            # Stop loss at 10% loss
+            elif pnl_pct < -0.10:
+                if self.bitrue.etf_holdings.get('BTC3S', 0) > 0:
+                    self.bitrue.sell_etf('BTC3S', underlying_price=current_price)
+                print(f"SHORT STOP LOSS BTC: {pnl_pct*100:.1f}% loss")
+                self.short_positions['BTC'] = None
+
+            # Phase 11: Mean reversion exit - close when RSI drops below 40
+            elif btc_rsi < self.RSI_SHORT_EXIT:
+                if self.bitrue.etf_holdings.get('BTC3S', 0) > 0:
+                    self.bitrue.sell_etf('BTC3S', underlying_price=current_price)
+                print(f"SHORT MEAN REVERSION EXIT BTC: RSI {btc_rsi:.1f} < {self.RSI_SHORT_EXIT} (PnL: {pnl_pct*100:.1f}%)")
+                self.short_positions['BTC'] = None
 
     def get_status(self) -> dict:
         """Get full orchestrator status"""
