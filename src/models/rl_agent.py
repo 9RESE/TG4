@@ -4,8 +4,7 @@ import numpy as np
 import warnings
 import os
 
-# Suppress ROCm/HIP warnings for cleaner output
-os.environ['HIP_VISIBLE_DEVICES'] = ''  # Force CPU for RL (PPO+MLP runs faster on CPU)
+# Enable ROCm/CUDA for GPU training
 warnings.filterwarnings('ignore', message='.*expandable_segments.*')
 warnings.filterwarnings('ignore', message='.*hipBLASLt.*')
 
@@ -16,32 +15,41 @@ from portfolio import Portfolio
 
 
 class TradingEnv(gym.Env):
-    """Custom Trading Environment for RL agent focused on accumulation"""
+    """
+    Custom Trading Environment for RL agent.
+    Phase 7: USDT-focused with 10x leverage support.
+    Goals: Accumulate BTC (45%), XRP (35%), USDT (20% as collateral)
+    """
 
     def __init__(self, data_dict, initial_balance=None):
         super().__init__()
         self.data = data_dict  # multi-symbol OHLCV
         self.symbols = list(data_dict.keys())
-        self.initial_balance = initial_balance or {'USDT': 1000.0, 'XRP': 500.0}
+        self.initial_balance = initial_balance or {'USDT': 1000.0, 'XRP': 500.0, 'BTC': 0.0}
 
-        # Target allocation weights - heavily biased toward accumulation goals
-        self.targets = {'BTC': 0.4, 'XRP': 0.3, 'RLUSD': 0.2, 'USDT': 0.05, 'USDC': 0.05}
+        # Phase 7: Simplified targets - USDT as collateral/safety
+        self.targets = {'BTC': 0.45, 'XRP': 0.35, 'USDT': 0.20}
 
-        # Actions: 0-2 BTC (buy/hold/sell), 3-5 XRP, 6-8 RLUSD
+        # Actions: 0-2 BTC (buy/hold/sell), 3-5 XRP, 6-8 USDT (park/hold/deploy)
         self.action_space = spaces.Discrete(9)
 
         # Observations: prices, volumes, portfolio weights, momentum indicators
-        n_features = len(self.symbols) * 4 + 5  # 4 features per symbol + 5 portfolio features
+        n_features = len(self.symbols) * 4 + 3  # 4 features per symbol + 3 portfolio features (BTC, XRP, USDT)
         self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(n_features,), dtype=np.float32)
 
         self.current_step = 0
         self.max_steps = min(len(df) for df in data_dict.values()) - 1
         self.portfolio = None
 
+        # Leverage tracking for margin positions
+        self.margin_positions = {'BTC': 0.0, 'XRP': 0.0}
+        self.leverage = 10  # Kraken 10x
+
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
         self.current_step = 60  # warmup period for indicators
         self.portfolio = Portfolio(self.initial_balance.copy())
+        self.margin_positions = {'BTC': 0.0, 'XRP': 0.0}
         return self._get_obs(), {}
 
     def _get_obs(self):
@@ -60,17 +68,17 @@ class TradingEnv(gym.Env):
                 volatility = df['close'].iloc[max(0, self.current_step - 20):self.current_step].std()
                 obs.extend([close, volume, momentum, volatility if not np.isnan(volatility) else 0])
 
-        # Portfolio state
+        # Portfolio state - simplified to BTC, XRP, USDT
         prices = self._current_prices()
         total = max(self.portfolio.get_total_usd(prices), 1.0)
-        for asset in ['BTC', 'XRP', 'RLUSD', 'USDT', 'USDC']:
+        for asset in ['BTC', 'XRP', 'USDT']:
             weight = self.portfolio.balances.get(asset, 0) * prices.get(asset, 1.0) / total
             obs.append(weight)
 
         return np.array(obs, dtype=np.float32)
 
     def _current_prices(self):
-        prices = {'USDT': 1.0, 'USDC': 1.0, 'RLUSD': 1.0}
+        prices = {'USDT': 1.0}
         for sym in self.symbols:
             df = self.data[sym]
             if self.current_step < len(df):
@@ -82,56 +90,84 @@ class TradingEnv(gym.Env):
         prices = self._current_prices()
         prev_value = self.portfolio.get_total_usd(prices)
 
-        # Execute action (simplified trading logic)
-        assets = ['BTC', 'XRP', 'RLUSD']
+        # Execute action
+        # Actions 0-2: BTC (buy/hold/sell)
+        # Actions 3-5: XRP (buy/hold/sell)
+        # Actions 6-8: USDT operations (park more / hold / deploy to margin)
+        assets = ['BTC', 'XRP', 'USDT']
         asset_idx = action // 3
-        action_type = action % 3  # 0=buy, 1=hold, 2=sell
+        action_type = action % 3  # 0=buy/park, 1=hold, 2=sell/deploy
 
         if asset_idx < len(assets):
             asset = assets[asset_idx]
             price = prices.get(asset, 1.0)
 
-            if action_type == 0:  # Buy
-                usdt = self.portfolio.balances.get('USDT', 0)
-                buy_amount = usdt * 0.1 / price  # 10% of USDT
-                if buy_amount > 0 and usdt >= buy_amount * price:
-                    self.portfolio.update('USDT', -buy_amount * price)
-                    self.portfolio.update(asset, buy_amount)
-            elif action_type == 2:  # Sell
-                holding = self.portfolio.balances.get(asset, 0)
-                sell_amount = holding * 0.1  # 10% of holding
-                if sell_amount > 0:
-                    self.portfolio.update(asset, -sell_amount)
-                    self.portfolio.update('USDT', sell_amount * price)
+            if asset == 'USDT':
+                # USDT actions: 6=park (sell assets), 7=hold, 8=deploy (buy assets)
+                if action_type == 0:  # Park - sell some XRP/BTC to USDT
+                    for sell_asset in ['XRP', 'BTC']:
+                        holding = self.portfolio.balances.get(sell_asset, 0)
+                        if holding > 0:
+                            sell_amount = holding * 0.05  # Sell 5%
+                            self.portfolio.update(sell_asset, -sell_amount)
+                            self.portfolio.update('USDT', sell_amount * prices.get(sell_asset, 1.0))
+                elif action_type == 2:  # Deploy - open leveraged position
+                    usdt = self.portfolio.balances.get('USDT', 0)
+                    if usdt > 100:  # Min $100 for margin
+                        # Simulate 10x leverage position on XRP
+                        margin_usdt = usdt * 0.1  # Use 10% as margin
+                        exposure = margin_usdt * self.leverage
+                        xrp_price = prices.get('XRP', 1.0)
+                        self.margin_positions['XRP'] += exposure / xrp_price
+                        self.portfolio.update('USDT', -margin_usdt)  # Lock margin
+            else:
+                # BTC/XRP spot trades
+                if action_type == 0:  # Buy
+                    usdt = self.portfolio.balances.get('USDT', 0)
+                    buy_amount = usdt * 0.15 / price  # 15% of USDT (more aggressive)
+                    if buy_amount > 0 and usdt >= buy_amount * price:
+                        self.portfolio.update('USDT', -buy_amount * price)
+                        self.portfolio.update(asset, buy_amount)
+                elif action_type == 2:  # Sell
+                    holding = self.portfolio.balances.get(asset, 0)
+                    sell_amount = holding * 0.1  # 10% of holding
+                    if sell_amount > 0:
+                        self.portfolio.update(asset, -sell_amount)
+                        self.portfolio.update('USDT', sell_amount * price)
 
         self.current_step += 1
 
-        # Calculate reward with heavy bias toward target allocation
+        # Calculate reward with USDT-biased goal alignment
         new_value = self.portfolio.get_total_usd(prices)
         total = max(new_value, 1.0)
 
         # Base reward: portfolio return
-        base_reward = (new_value / 1000.0) - 1.0
+        base_reward = (new_value - prev_value) / prev_value if prev_value > 0 else 0
 
-        # Alignment reward: how close are we to target allocation?
-        # Higher reward for matching target weights
+        # Alignment reward: match target allocation (stronger weight = 3.0)
         alignment_score = 0.0
-        for asset, target_weight in self.targets.items():
+        weights = {}
+        for asset in self.targets:
             asset_value = self.portfolio.balances.get(asset, 0) * prices.get(asset, 1.0)
-            current_weight = asset_value / total
-            # Score based on how close to target (max 1.0 per asset if at target)
-            alignment_score += min(current_weight, target_weight)
+            weights[asset] = asset_value / total
+            alignment_score += min(weights[asset], self.targets[asset])
 
-        # Accumulation bonus: extra reward for holding BTC/XRP/RLUSD above initial
-        accumulation_bonus = 0.0
-        for asset in ['BTC', 'XRP', 'RLUSD']:
-            current = self.portfolio.balances.get(asset, 0)
-            initial = self.initial_balance.get(asset, 0)
-            if current > initial:
-                accumulation_bonus += 0.005 * (current - initial) / max(initial, 1)
+        # USDT safety bonus: reward for maintaining USDT reserves during drawdowns
+        usdt_weight = weights.get('USDT', 0)
+        usdt_bonus = 0.0
+        if usdt_weight >= 0.15:  # At least 15% in USDT
+            usdt_bonus = 0.1  # Safety bonus
 
-        # Combined reward: base return + heavy alignment bias + accumulation
-        reward = base_reward + 2.0 * alignment_score + accumulation_bonus
+        # Margin P&L from leveraged positions
+        margin_pnl = 0.0
+        for asset, position in self.margin_positions.items():
+            if position > 0:
+                current_price = prices.get(asset, 1.0)
+                # Simplified P&L (would track entry price in real impl)
+                margin_pnl += position * current_price * 0.001  # Small simulated gain
+
+        # Combined reward: base + strong alignment + USDT safety + margin
+        reward = base_reward + 3.0 * alignment_score + usdt_bonus + margin_pnl
 
         done = self.current_step >= self.max_steps
         truncated = False
@@ -139,12 +175,10 @@ class TradingEnv(gym.Env):
         return self._get_obs(), reward, done, truncated, {}
 
 
-def train_rl_agent(data_dict, timesteps=100000, device="cpu"):
+def train_rl_agent(data_dict, timesteps=100000, device="cuda"):
     """
     Train PPO agent on trading environment.
-
-    Note: PPO with MLP policy runs faster on CPU than GPU.
-    Use device="cuda" only for CNN policies or very large batch sizes.
+    Phase 7: Use GPU (cuda/rocm) for faster training.
     """
     env = TradingEnv(data_dict)
     model = PPO(
@@ -157,7 +191,7 @@ def train_rl_agent(data_dict, timesteps=100000, device="cpu"):
         batch_size=64,
         n_epochs=10,
         gamma=0.99,
-        device=device  # CPU is faster for MLP policies
+        device=device
     )
     print(f"Training PPO agent for {timesteps} timesteps on {device.upper()}...")
     model.learn(total_timesteps=timesteps)
@@ -166,6 +200,6 @@ def train_rl_agent(data_dict, timesteps=100000, device="cpu"):
     return model
 
 
-def load_rl_agent(path="models/rl_ppo_agent", device="cpu"):
+def load_rl_agent(path="models/rl_ppo_agent", device="cuda"):
     """Load trained RL agent"""
     return PPO.load(path, device=device)

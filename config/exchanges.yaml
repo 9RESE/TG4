@@ -2,6 +2,19 @@ paper_trading: true
 starting_balance:
   USDT: 1000.0
   XRP: 500.0
+  BTC: 0.0  # Explicit
+
+targets:  # RL/rebalancer allocation targets
+  BTC: 0.45
+  XRP: 0.35
+  USDT: 0.20
+
+leverage:
+  kraken:
+    max_leverage: 10  # 10x margin on XRP/BTC
+    risk_per_trade: 0.20  # 20% of USDT collateral
+  bitrue:
+    etf_leverage: 3  # 3x ETFs (XRP3L, BTC3L)
 
 exchanges:
   kraken:

@@ -10,49 +10,49 @@ warnings.filterwarnings('ignore', category=UserWarning, module='torch')
 from data_fetcher import DataFetcher
 from portfolio import Portfolio
 from backtester import Backtester
-from strategies.ripple_momentum_lstm import generate_ripple_signals
-from strategies.stablecoin_arb import StableArb
+from strategies.ripple_momentum_lstm import generate_ripple_signals, generate_xrp_signals, generate_btc_signals
 from strategies.rebalancer import rebalance
 from risk_manager import RiskManager
 from executor import Executor
-from ensemble import Ensemble
 from orchestrator import RLOrchestrator
 import yaml
 import time
+
 
 def load_config():
     with open('config/exchanges.yaml') as f:
         return yaml.safe_load(f)
 
+
 def main():
-    parser = argparse.ArgumentParser(description="TG4 Local AI Crypto Trader")
+    parser = argparse.ArgumentParser(description="TG4 Local AI Crypto Trader - Phase 7")
     parser.add_argument('--mode', choices=['fetch', 'backtest', 'paper', 'train-rl'], default='fetch')
     parser.add_argument('--timesteps', type=int, default=100000, help='RL training timesteps')
+    parser.add_argument('--device', type=str, default='cuda', help='Training device (cuda/cpu)')
     args = parser.parse_args()
 
     config = load_config()
     portfolio = Portfolio(config['starting_balance'])
     fetcher = DataFetcher()
 
-    print("TG4 Platform Initialized")
+    print("=" * 60)
+    print("TG4 Platform - Phase 7: USDT Focus + 10x Leverage")
+    print("=" * 60)
+    print(f"Targets: BTC {config['targets']['BTC']*100:.0f}% | XRP {config['targets']['XRP']*100:.0f}% | USDT {config['targets']['USDT']*100:.0f}%")
     print(portfolio)
 
     if args.mode == 'fetch':
-        # Example: fetch latest prices
-        symbols = ['BTC/USDT', 'XRP/USDT', 'RLUSD/USDT', 'XRP/RLUSD']
+        # Fetch latest prices for core pairs
+        symbols = ['BTC/USDT', 'XRP/USDT']
+        print("\nFetching current prices...")
         for symbol in symbols:
             prices = fetcher.get_best_price(symbol)
             if prices:
-                print(f"{symbol}: {prices}")
-
-        # Also fetch RLUSD pairs
-        print("\nFetching RLUSD pairs...")
-        rlusd_data = fetcher.fetch_rlusd_pairs()
-        for sym, df in rlusd_data.items():
-            print(f"{sym}: {len(df)} candles, latest close: {df['close'].iloc[-1]:.4f}")
+                print(f"  {symbol}: {prices}")
 
     elif args.mode == 'backtest':
-        symbols = ['XRP/USDT', 'XRP/RLUSD', 'BTC/USDT']
+        # Phase 7: USDT-based backtest
+        symbols = ['XRP/USDT', 'BTC/USDT']
         data = {}
         for sym in symbols:
             print(f"Fetching {sym}...")
@@ -72,13 +72,7 @@ def main():
             print(f"Final Value:     ${pf.value().iloc[-1]:.2f}")
             print(f"{'='*50}\n")
 
-        if 'XRP/RLUSD' in data:
-            signals = generate_ripple_signals(data, 'XRP/RLUSD')
-            bt = Backtester(data)
-            pf = bt.run_with_lstm_signals('XRP/RLUSD', signals)
-            print_backtest_results(pf, 'XRP/RLUSD')
-        elif 'XRP/USDT' in data:
-            # Fallback to XRP/USDT if RLUSD pair not available
+        if 'XRP/USDT' in data:
             signals = generate_ripple_signals(data, 'XRP/USDT')
             bt = Backtester(data)
             pf = bt.run_with_lstm_signals('XRP/USDT', signals)
@@ -87,8 +81,9 @@ def main():
     elif args.mode == 'train-rl':
         from models.rl_agent import train_rl_agent
 
-        print("\n[RL TRAINING MODE]")
-        print(f"Training for {args.timesteps} timesteps...")
+        print("\n[RL TRAINING MODE - Phase 7]")
+        print(f"Training for {args.timesteps} timesteps on {args.device.upper()}...")
+        print(f"Target allocation: BTC 45% | XRP 35% | USDT 20%")
 
         # Fetch data for RL training
         symbols = ['XRP/USDT', 'BTC/USDT']
@@ -100,21 +95,23 @@ def main():
                 data[sym] = df
 
         if data:
-            model = train_rl_agent(data, timesteps=args.timesteps)
-            print("RL training complete!")
+            model = train_rl_agent(data, timesteps=args.timesteps, device=args.device)
+            print("\nRL training complete!")
+            print("Model saved to models/rl_ppo_agent.zip")
         else:
             print("No data available for training")
 
     elif args.mode == 'paper':
-        print("\n[PAPER TRADING MODE] Starting live monitoring...")
+        print("\n[PAPER TRADING MODE - Phase 7]")
+        print("10x Kraken margin + 3x Bitrue ETFs enabled")
         print("Press Ctrl+C to stop\n")
 
         # Initialize execution engine
         executor = Executor(portfolio)
 
-        # Fetch initial data for ensemble
+        # Fetch initial data
         print("Fetching initial market data...")
-        symbols = ['XRP/USDT', 'BTC/USDT', 'RLUSD/USDT']
+        symbols = ['XRP/USDT', 'BTC/USDT']
         data = {}
         for sym in symbols:
             df = fetcher.fetch_ohlcv('kraken', sym, '1h', 500)
@@ -122,15 +119,15 @@ def main():
                 data[sym] = df
                 print(f"  {sym}: {len(df)} candles")
 
-        # Initialize ensemble strategy
-        ensemble = Ensemble(data, portfolio)
-
-        # Initialize RL Orchestrator (uses trained model if available)
+        # Initialize RL Orchestrator with leverage support
         orchestrator = RLOrchestrator(portfolio, data)
         rl_enabled = orchestrator.enabled
+
         if rl_enabled:
             print("\n[RL ORCHESTRATOR] Enabled - using trained PPO model")
             print(f"  Target allocation: {orchestrator.get_target_allocation()}")
+            print(f"  Kraken margin: 10x max")
+            print(f"  Risk per trade: 20% of USDT")
         else:
             print("\n[RL ORCHESTRATOR] Disabled - no trained model found")
             print("  Run 'python main.py --mode train-rl --timesteps 500000' to train")
@@ -146,8 +143,8 @@ def main():
                 print(f"{'='*60}")
 
                 # Fetch current prices
-                prices = {'USDT': 1.0, 'USDC': 1.0, 'RLUSD': 1.0}
-                for sym in ['XRP/USDT', 'BTC/USDT', 'RLUSD/USDT']:
+                prices = {'USDT': 1.0}
+                for sym in ['XRP/USDT', 'BTC/USDT']:
                     p = fetcher.get_best_price(sym)
                     if p:
                         base = sym.split('/')[0]
@@ -158,7 +155,15 @@ def main():
                 portfolio.record_snapshot(prices)
                 total_value = portfolio.get_total_usd(prices)
                 print(f"\nPortfolio Value: ${total_value:.2f}")
-                print(f"Holdings: {portfolio}")
+                print(f"Spot Holdings: {portfolio}")
+
+                # Show margin positions
+                if orchestrator.kraken.positions:
+                    print("\nMargin Positions:")
+                    for asset, pos in orchestrator.kraken.positions.items():
+                        unrealized = orchestrator.kraken.get_unrealized_pnl(asset, prices.get(asset, pos['entry']))
+                        pnl_pct = (unrealized / pos['collateral']) * 100 if pos['collateral'] > 0 else 0
+                        print(f"  {asset}: {pos['size']:.4f} @ ${pos['entry']:.2f} ({pos['leverage']}x) | P&L: ${unrealized:.2f} ({pnl_pct:+.1f}%)")
 
                 # Show allocation vs targets
                 if rl_enabled:
@@ -166,10 +171,10 @@ def main():
                     targets = orchestrator.get_target_allocation()
                     alignment = orchestrator.get_alignment_score(prices)
                     print(f"\nAllocation (target in brackets):")
-                    for asset in ['BTC', 'XRP', 'RLUSD', 'USDT']:
+                    for asset in ['BTC', 'XRP', 'USDT']:
                         curr = current_alloc.get(asset, 0) * 100
                         tgt = targets.get(asset, 0) * 100
-                        status = "✓" if abs(curr - tgt) < 5 else "↓" if curr < tgt else "↑"
+                        status = "OK" if abs(curr - tgt) < 5 else "LOW" if curr < tgt else "HIGH"
                         print(f"  {asset}: {curr:.1f}% [{tgt:.0f}%] {status}")
                     print(f"  Alignment Score: {alignment:.2f}/1.0")
 
@@ -180,36 +185,37 @@ def main():
                         df = fetcher.fetch_ohlcv('kraken', sym, '1h', 500)
                         if not df.empty:
                             data[sym] = df
-                    ensemble.update_data(data)
                     last_data_refresh = time.time()
 
-                # Get ensemble signal
-                signal = ensemble.get_signal('XRP/USDT')
-                print(f"\nEnsemble Signal: {signal['action']} (confidence: {signal['confidence']:.2f})")
-                print(f"  LSTM: {signal['signals']['lstm']:.2f}")
-                print(f"  Arb:  {signal['signals']['arb']:.2f}")
-                print(f"  Rebal: {signal['signals']['rebalance']:.2f}")
+                # Get momentum signals
+                xrp_signal = generate_xrp_signals(data)
+                btc_signal = generate_btc_signals(data)
 
-                # RL Orchestrator decision (if enabled and every other loop)
-                if rl_enabled and loop_count % 2 == 0:
+                print(f"\nMomentum Signals:")
+                print(f"  XRP: {xrp_signal['signal']} (conf: {xrp_signal['confidence']:.2f}, dip: {xrp_signal['is_dip']}, lev_ok: {xrp_signal['leverage_ok']})")
+                print(f"  BTC: {btc_signal['signal']} (conf: {btc_signal['confidence']:.2f}, dip: {btc_signal['is_dip']}, lev_ok: {btc_signal['leverage_ok']})")
+
+                # RL Orchestrator decision (every loop)
+                if rl_enabled:
                     print(f"\n[RL DECISION]")
                     rl_result = orchestrator.decide_and_execute(prices)
                     print(f"  Action: {rl_result['asset']} {rl_result['action_type']}")
                     if rl_result['executed']:
-                        print(f"  Executed: {rl_result.get('amount', 0):.4f} @ {rl_result.get('leverage', 1.0)}x")
+                        if rl_result.get('leverage_used'):
+                            print(f"  LEVERAGED: {rl_result.get('leverage', 10)}x with ${rl_result.get('collateral', 0):.2f} collateral")
+                        else:
+                            print(f"  Spot: {rl_result.get('amount', 0):.4f}")
                     orchestrator.update_env_step()
 
-                # Ensemble-based execution (fallback or complement to RL)
-                elif signal['action'] == 'long_xrp' and signal['confidence'] > 0.5:
-                    xrp_price = prices.get('XRP', 2.0)
-                    usdt_available = portfolio.balances.get('USDT', 0)
-                    if usdt_available > 50:  # Min $50 trade
-                        trade_size = min(usdt_available * 0.1, 100) / xrp_price  # 10% or max $100
-                        executor.place_paper_order('XRP/USDT', 'buy', trade_size, leverage=2.0)
+                    # Check and manage margin positions
+                    orchestrator.check_and_manage_positions(prices)
 
-                elif signal['action'] == 'arb_rlusd' and signal['arb_opportunities']:
-                    best_arb = signal['arb_opportunities'][0]
-                    print(f"\n[ARB OPPORTUNITY] {best_arb}")
+                # Manual leverage entry on strong dip signals (if RL disabled)
+                elif xrp_signal['leverage_ok'] and xrp_signal['is_dip']:
+                    usdt = portfolio.balances.get('USDT', 0)
+                    if usdt > 100:
+                        collateral = usdt * 0.2
+                        orchestrator.kraken.open_long('XRP', collateral, prices['XRP'])
 
                 # Rebalance check (every 12 loops = ~1 hour with 5min loop)
                 if loop_count % 12 == 0:
@@ -223,19 +229,30 @@ def main():
                 time.sleep(300)  # 5min loop for live trading
 
             except KeyboardInterrupt:
-                print("\n\n" + "="*60)
+                print("\n\n" + "=" * 60)
                 print("Stopping paper trading...")
-                print("="*60)
-                print(f"Final {portfolio}")
+                print("=" * 60)
+
+                # Close all margin positions
+                if orchestrator.kraken.positions:
+                    print("\nClosing margin positions...")
+                    for asset in list(orchestrator.kraken.positions.keys()):
+                        orchestrator.kraken.close_position(asset, prices.get(asset, 1.0))
+
+                print(f"\nFinal {portfolio}")
                 print(f"Total trades executed: {len(executor.trade_log)}")
+
                 if executor.trade_log:
-                    print("\nTrade History:")
-                    for trade in executor.trade_log[-10:]:  # Last 10 trades
+                    print("\nTrade History (last 10):")
+                    for trade in executor.trade_log[-10:]:
                         print(f"  {trade['timestamp']}: {trade['side'].upper()} {trade['amount']:.4f} {trade['symbol']} @ {trade['price']:.4f}")
+
                 if rl_enabled:
                     final_alignment = orchestrator.get_alignment_score(prices)
                     print(f"\nFinal RL Alignment Score: {final_alignment:.2f}/1.0")
+
                 break
+
 
 if __name__ == "__main__":
     main()

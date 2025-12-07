@@ -1,15 +1,19 @@
 """
 RL Orchestrator - Master controller for RL-driven trading decisions
+Phase 7: USDT-focused with 10x Kraken margin and 3x Bitrue ETFs
 """
 import numpy as np
 from models.rl_agent import TradingEnv, load_rl_agent
 from executor import Executor
 from portfolio import Portfolio
+from exchanges.kraken_margin import KrakenMargin
+from exchanges.bitrue_etf import BitrueETF
+from strategies.ripple_momentum_lstm import generate_xrp_signals, generate_btc_signals
 
 
 class RLOrchestrator:
     """
-    Orchestrates RL agent decisions and execution.
+    Orchestrates RL agent decisions with leverage execution.
     Maps RL actions to actual paper trades with proper sizing and leverage.
     """
 
@@ -17,6 +21,10 @@ class RLOrchestrator:
         self.portfolio = portfolio
         self.data = data_dict
         self.executor = Executor(portfolio)
+
+        # Initialize exchange modules
+        self.kraken = KrakenMargin(portfolio, max_leverage=10.0)
+        self.bitrue = BitrueETF(portfolio)
 
         # Try to load trained RL model
         try:
@@ -32,7 +40,7 @@ class RLOrchestrator:
             self.enabled = False
 
         # Action mapping: action_id -> (asset, action_type)
-        # 0-2: BTC (buy/hold/sell), 3-5: XRP, 6-8: RLUSD
+        # 0-2: BTC (buy/hold/sell), 3-5: XRP (buy/hold/sell), 6-8: USDT (park/hold/deploy)
         self.action_map = {
             0: ('BTC', 'buy'),
             1: ('BTC', 'hold'),
@@ -40,24 +48,14 @@ class RLOrchestrator:
             3: ('XRP', 'buy'),
             4: ('XRP', 'hold'),
             5: ('XRP', 'sell'),
-            6: ('RLUSD', 'buy'),
-            7: ('RLUSD', 'hold'),
-            8: ('RLUSD', 'sell'),
+            6: ('USDT', 'park'),    # Sell assets to USDT
+            7: ('USDT', 'hold'),    # Keep USDT
+            8: ('USDT', 'deploy'),  # Deploy USDT to margin
         }
 
-        # Leverage settings per asset
-        self.leverage = {
-            'BTC': 1.0,   # Spot only for BTC (safer)
-            'XRP': 3.0,   # 3x leverage for XRP accumulation
-            'RLUSD': 1.0  # Spot for stablecoin
-        }
-
-        # Position sizing (% of available USDT)
-        self.position_size = {
-            'BTC': 0.05,   # 5% per trade
-            'XRP': 0.10,   # 10% per trade (more aggressive)
-            'RLUSD': 0.15  # 15% per trade (accumulate stablecoin)
-        }
+        # Risk parameters
+        self.max_leverage_risk = 0.20  # Max 20% of USDT for margin
+        self.spot_trade_size = 0.15    # 15% of USDT per spot trade
 
     def get_observation(self):
         """Get current observation for RL model"""
@@ -65,9 +63,41 @@ class RLOrchestrator:
             return None
         return self.env._get_obs()
 
+    def get_target_allocation(self):
+        """Get target allocation from environment"""
+        if self.enabled and self.env is not None:
+            return self.env.targets
+        return {'BTC': 0.45, 'XRP': 0.35, 'USDT': 0.20}
+
+    def get_current_allocation(self, prices: dict):
+        """Calculate current portfolio allocation"""
+        total = self.portfolio.get_total_usd(prices)
+        if total == 0:
+            return {}
+
+        allocation = {}
+        for asset in ['BTC', 'XRP', 'USDT']:
+            value = self.portfolio.balances.get(asset, 0) * prices.get(asset, 1.0)
+            allocation[asset] = value / total
+
+        return allocation
+
+    def get_alignment_score(self, prices: dict):
+        """Calculate how well current allocation matches targets"""
+        targets = self.get_target_allocation()
+        current = self.get_current_allocation(prices)
+
+        score = 0.0
+        for asset, target in targets.items():
+            current_weight = current.get(asset, 0)
+            score += min(current_weight, target)
+
+        return score  # Max score is 1.0 (perfect alignment)
+
     def decide_and_execute(self, prices: dict = None):
         """
         Get RL model prediction and execute corresponding trade.
+        Integrates leverage on strong momentum signals.
 
         Args:
             prices: Current prices dict. If None, uses env's internal prices.
@@ -94,44 +124,91 @@ class RLOrchestrator:
             'action_id': action,
             'asset': asset,
             'action_type': action_type,
-            'executed': False
+            'executed': False,
+            'leverage_used': False
         }
 
-        # Execute trade based on action
-        if action_type == 'buy':
+        # Get momentum signals for leverage decisions
+        xrp_signal = generate_xrp_signals(self.data) if 'XRP/USDT' in self.data else {'leverage_ok': False}
+        btc_signal = generate_btc_signals(self.data) if 'BTC/USDT' in self.data else {'leverage_ok': False}
+
+        usdt_available = self.portfolio.balances.get('USDT', 0)
+
+        # Execute based on action
+        if action_type == 'buy' and asset in ['BTC', 'XRP']:
             symbol = f"{asset}/USDT"
-            leverage = self.leverage.get(asset, 1.0)
-            size_pct = self.position_size.get(asset, 0.05)
+            price = prices.get(asset, 1.0) if prices else self.env._current_prices().get(asset, 1.0)
 
-            usdt_available = self.portfolio.balances.get('USDT', 0)
-            if usdt_available > 50:  # Min $50 for trade
-                # Get price
-                if prices and asset in prices:
-                    price = prices[asset]
-                else:
-                    price = self.env._current_prices().get(asset, 1.0)
+            # Check if leverage is appropriate
+            signal = xrp_signal if asset == 'XRP' else btc_signal
+            use_leverage = signal.get('leverage_ok', False) and signal.get('is_dip', False)
 
-                trade_value = usdt_available * size_pct
+            if use_leverage and usdt_available > 100:
+                # 10x leverage on dip
+                collateral = usdt_available * self.max_leverage_risk
+                success = self.kraken.open_long(asset, collateral, price)
+                if success:
+                    result['executed'] = True
+                    result['leverage_used'] = True
+                    result['leverage'] = 10
+                    result['collateral'] = collateral
+            elif usdt_available > 50:
+                # Spot buy
+                trade_value = usdt_available * self.spot_trade_size
                 amount = trade_value / price
-
-                success = self.executor.place_paper_order(
-                    symbol, 'buy', amount, leverage=leverage
-                )
+                success = self.executor.place_paper_order(symbol, 'buy', amount)
                 result['executed'] = success
                 result['amount'] = amount
-                result['leverage'] = leverage
 
-        elif action_type == 'sell':
+        elif action_type == 'sell' and asset in ['BTC', 'XRP']:
+            # Close any margin positions first
+            if asset in self.kraken.positions:
+                price = prices.get(asset, 1.0) if prices else self.env._current_prices().get(asset, 1.0)
+                pnl = self.kraken.close_position(asset, price)
+                result['margin_pnl'] = pnl
+
+            # Sell spot holdings
             asset_balance = self.portfolio.balances.get(asset, 0)
             if asset_balance > 0:
                 symbol = f"{asset}/USDT"
                 sell_amount = asset_balance * 0.2  # Sell 20% of holdings
-
-                success = self.executor.place_paper_order(
-                    symbol, 'sell', sell_amount
-                )
+                success = self.executor.place_paper_order(symbol, 'sell', sell_amount)
                 result['executed'] = success
                 result['amount'] = sell_amount
+
+        elif action_type == 'park':
+            # Park: sell assets to USDT for safety
+            for sell_asset in ['XRP', 'BTC']:
+                holding = self.portfolio.balances.get(sell_asset, 0)
+                if holding > 0:
+                    price = prices.get(sell_asset, 1.0) if prices else 1.0
+                    sell_amount = holding * 0.1  # Sell 10%
+                    self.portfolio.update(sell_asset, -sell_amount)
+                    self.portfolio.update('USDT', sell_amount * price)
+                    result['executed'] = True
+                    result['parked'] = True
+
+        elif action_type == 'deploy':
+            # Deploy: open leveraged positions on momentum
+            if usdt_available > 200:
+                # Check which asset has better momentum
+                xrp_mom = xrp_signal.get('momentum', 0)
+                btc_mom = btc_signal.get('momentum', 0)
+
+                if xrp_mom > btc_mom and xrp_signal.get('leverage_ok', False):
+                    target_asset = 'XRP'
+                    price = prices.get('XRP', 2.0) if prices else 2.0
+                elif btc_signal.get('leverage_ok', False):
+                    target_asset = 'BTC'
+                    price = prices.get('BTC', 90000.0) if prices else 90000.0
+                else:
+                    return result
+
+                collateral = usdt_available * self.max_leverage_risk
+                success = self.kraken.open_long(target_asset, collateral, price)
+                result['executed'] = success
+                result['leverage_used'] = True
+                result['deployed_to'] = target_asset
 
         return result
 
@@ -143,34 +220,34 @@ class RLOrchestrator:
                 self.env.max_steps - 1
             )
 
-    def get_target_allocation(self):
-        """Get target allocation from environment"""
-        if self.enabled and self.env is not None:
-            return self.env.targets
-        return {'BTC': 0.4, 'XRP': 0.3, 'RLUSD': 0.2, 'USDT': 0.05, 'USDC': 0.05}
+    def check_and_manage_positions(self, prices: dict):
+        """
+        Check margin positions for liquidation and take profit.
+        Call this regularly during paper trading.
+        """
+        # Check liquidations
+        liquidated = self.kraken.check_liquidations(prices)
+        if liquidated:
+            print(f"WARNING: Positions liquidated: {liquidated}")
 
-    def get_current_allocation(self, prices: dict):
-        """Calculate current portfolio allocation"""
-        total = self.portfolio.get_total_usd(prices)
-        if total == 0:
-            return {}
+        # Take profit on large gains (>20%)
+        for asset, pos in list(self.kraken.positions.items()):
+            current_price = prices.get(asset, pos['entry'])
+            pnl_pct = self.kraken.get_unrealized_pnl(asset, current_price) / pos['collateral']
 
-        allocation = {}
-        for asset in ['BTC', 'XRP', 'RLUSD', 'USDT', 'USDC']:
-            value = self.portfolio.balances.get(asset, 0) * prices.get(asset, 1.0)
-            allocation[asset] = value / total
+            if pnl_pct > 0.20:  # 20% profit
+                print(f"TAKE PROFIT: {asset} at {pnl_pct*100:.1f}%")
+                self.kraken.close_position(asset, current_price)
 
-        return allocation
+            elif pnl_pct < -0.10:  # 10% loss - reduce position
+                print(f"STOP LOSS: {asset} at {pnl_pct*100:.1f}%")
+                self.kraken.close_position(asset, current_price)
 
-    def get_alignment_score(self, prices: dict):
-        """Calculate how well current allocation matches targets"""
-        targets = self.get_target_allocation()
-        current = self.get_current_allocation(prices)
-
-        score = 0.0
-        for asset, target in targets.items():
-            current_weight = current.get(asset, 0)
-            # Score based on minimum of current and target
-            score += min(current_weight, target)
-
-        return score  # Max score is 1.0 (perfect alignment)
+    def get_status(self) -> dict:
+        """Get full orchestrator status"""
+        return {
+            'rl_enabled': self.enabled,
+            'kraken': self.kraken.get_status(),
+            'bitrue': self.bitrue.get_status(),
+            'targets': self.get_target_allocation()
+        }
