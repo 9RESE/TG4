@@ -1,6 +1,6 @@
 """
 RL Orchestrator - Master controller for RL-driven trading decisions
-Phase 7: USDT-focused with 10x Kraken margin and 3x Bitrue ETFs
+Phase 8: Defensive Leverage + Volatility Filters + Selective Execution
 """
 import numpy as np
 from models.rl_agent import TradingEnv, load_rl_agent
@@ -9,22 +9,35 @@ from portfolio import Portfolio
 from exchanges.kraken_margin import KrakenMargin
 from exchanges.bitrue_etf import BitrueETF
 from strategies.ripple_momentum_lstm import generate_xrp_signals, generate_btc_signals
+from risk_manager import RiskManager
 
 
 class RLOrchestrator:
     """
-    Orchestrates RL agent decisions with leverage execution.
-    Maps RL actions to actual paper trades with proper sizing and leverage.
+    Phase 8: Orchestrates RL agent decisions with volatility-aware leverage.
+    - Smart, selective leverage (Kraken 10x only when probability >80%)
+    - Bitrue 3x ETFs for asymmetric upside
+    - USDT parking during high-fear periods
     """
+
+    # Confidence threshold for leverage trades
+    LEVERAGE_CONFIDENCE_THRESHOLD = 0.80
 
     def __init__(self, portfolio: Portfolio, data_dict: dict):
         self.portfolio = portfolio
         self.data = data_dict
         self.executor = Executor(portfolio)
 
+        # Phase 8: Initialize risk manager with volatility awareness
+        self.risk = RiskManager(max_drawdown=0.20, max_leverage=10.0)
+
         # Initialize exchange modules
         self.kraken = KrakenMargin(portfolio, max_leverage=10.0)
         self.bitrue = BitrueETF(portfolio)
+
+        # Current volatility state
+        self.current_volatility = 0.05  # Default moderate
+        self.current_atr = {}  # Per-asset ATR tracking
 
         # Try to load trained RL model
         try:
@@ -53,9 +66,28 @@ class RLOrchestrator:
             8: ('USDT', 'deploy'),  # Deploy USDT to margin
         }
 
-        # Risk parameters
-        self.max_leverage_risk = 0.20  # Max 20% of USDT for margin
-        self.spot_trade_size = 0.15    # 15% of USDT per spot trade
+        # Risk parameters (Phase 8: reduced from 20% to 10% max)
+        self.max_leverage_risk = 0.10  # Max 10% of USDT for margin
+        self.spot_trade_size = 0.10    # 10% of USDT per spot trade
+
+    def update_volatility(self, symbol: str = 'XRP/USDT'):
+        """Update current volatility from market data."""
+        if symbol not in self.data:
+            return
+
+        df = self.data[symbol]
+        if len(df) < 20:
+            return
+
+        high = df['high'].values
+        low = df['low'].values
+        close = df['close'].values
+
+        atr_pct = self.risk.calculate_atr_pct(high, low, close, period=14)
+        self.current_volatility = atr_pct
+        self.current_atr[symbol] = atr_pct
+
+        return atr_pct
 
     def get_observation(self):
         """Get current observation for RL model"""
@@ -96,8 +128,11 @@ class RLOrchestrator:
 
     def decide_and_execute(self, prices: dict = None):
         """
-        Get RL model prediction and execute corresponding trade.
-        Integrates leverage on strong momentum signals.
+        Phase 8: Get RL model prediction and execute with volatility-aware leverage.
+
+        - Only leverage when confidence > 80% AND volatility permits
+        - Use Bitrue 3x ETFs for asymmetric upside on BTC
+        - Park USDT during high-fear periods
 
         Args:
             prices: Current prices dict. If None, uses env's internal prices.
@@ -113,6 +148,10 @@ class RLOrchestrator:
         if obs is None:
             return {'action': 'error', 'reason': 'Could not get observation'}
 
+        # Update volatility from market data
+        self.update_volatility('XRP/USDT')
+        self.update_volatility('BTC/USDT')
+
         # Get model prediction
         action, _ = self.model.predict(obs, deterministic=True)
         action = int(action)
@@ -125,40 +164,83 @@ class RLOrchestrator:
             'asset': asset,
             'action_type': action_type,
             'executed': False,
-            'leverage_used': False
+            'leverage_used': False,
+            'volatility': self.current_volatility,
+            'market_state': self.risk.get_market_state()
         }
 
         # Get momentum signals for leverage decisions
-        xrp_signal = generate_xrp_signals(self.data) if 'XRP/USDT' in self.data else {'leverage_ok': False}
-        btc_signal = generate_btc_signals(self.data) if 'BTC/USDT' in self.data else {'leverage_ok': False}
+        xrp_signal = generate_xrp_signals(self.data) if 'XRP/USDT' in self.data else {'leverage_ok': False, 'confidence': 0}
+        btc_signal = generate_btc_signals(self.data) if 'BTC/USDT' in self.data else {'leverage_ok': False, 'confidence': 0}
 
         usdt_available = self.portfolio.balances.get('USDT', 0)
+
+        # Phase 8: Check if we should park USDT (defensive mode)
+        if self.risk.should_park_usdt(self.current_volatility):
+            result['defensive_mode'] = True
+            if action_type not in ['park', 'hold']:
+                print(f"DEFENSIVE: High volatility ({self.current_volatility*100:.1f}%) - parking USDT")
+                # Override to park mode
+                action_type = 'park'
+                result['action_type'] = 'park'
+                result['override_reason'] = 'high_volatility'
 
         # Execute based on action
         if action_type == 'buy' and asset in ['BTC', 'XRP']:
             symbol = f"{asset}/USDT"
             price = prices.get(asset, 1.0) if prices else self.env._current_prices().get(asset, 1.0)
 
-            # Check if leverage is appropriate
+            # Get signal for this asset
             signal = xrp_signal if asset == 'XRP' else btc_signal
-            use_leverage = signal.get('leverage_ok', False) and signal.get('is_dip', False)
+            confidence = signal.get('confidence', 0.5)
+            is_dip = signal.get('is_dip', False)
+            leverage_ok = signal.get('leverage_ok', False)
+
+            # Phase 8: Dynamic leverage based on volatility
+            dynamic_lev = self.risk.dynamic_leverage(self.current_volatility)
+
+            # Only use leverage if confidence > 80% AND dip detected AND volatility permits
+            use_leverage = (
+                leverage_ok and
+                is_dip and
+                confidence > self.LEVERAGE_CONFIDENCE_THRESHOLD and
+                dynamic_lev > 1
+            )
 
             if use_leverage and usdt_available > 100:
-                # 10x leverage on dip
-                collateral = usdt_available * self.max_leverage_risk
-                success = self.kraken.open_long(asset, collateral, price)
-                if success:
-                    result['executed'] = True
-                    result['leverage_used'] = True
-                    result['leverage'] = 10
-                    result['collateral'] = collateral
-            elif usdt_available > 50:
-                # Spot buy
+                # Calculate position size based on volatility and confidence
+                collateral = self.risk.dynamic_position_size(
+                    usdt_available, self.current_volatility, confidence
+                )
+
+                if asset == 'XRP':
+                    # Kraken 10x margin for XRP (scaled by dynamic_lev)
+                    success = self.kraken.open_long(asset, collateral, price, leverage=dynamic_lev)
+                    if success:
+                        result['executed'] = True
+                        result['leverage_used'] = True
+                        result['leverage'] = dynamic_lev
+                        result['collateral'] = collateral
+                        result['confidence'] = confidence
+                else:
+                    # BTC: Use Bitrue 3x ETF for asymmetric upside
+                    success = self.bitrue.buy_etf('BTC3L', collateral, price)
+                    if success:
+                        result['executed'] = True
+                        result['leverage_used'] = True
+                        result['leverage'] = 3
+                        result['etf'] = 'BTC3L'
+                        result['collateral'] = collateral
+
+            elif usdt_available > 50 and not self.risk.should_park_usdt(self.current_volatility):
+                # Spot buy (only if not in defensive mode)
                 trade_value = usdt_available * self.spot_trade_size
                 amount = trade_value / price
                 success = self.executor.place_paper_order(symbol, 'buy', amount)
                 result['executed'] = success
                 result['amount'] = amount
+            else:
+                print(f"DEFENSIVE: Holding USDT - no high-conviction signal (conf: {confidence:.2f})")
 
         elif action_type == 'sell' and asset in ['BTC', 'XRP']:
             # Close any margin positions first
@@ -166,6 +248,13 @@ class RLOrchestrator:
                 price = prices.get(asset, 1.0) if prices else self.env._current_prices().get(asset, 1.0)
                 pnl = self.kraken.close_position(asset, price)
                 result['margin_pnl'] = pnl
+
+            # Close any ETF positions
+            if asset == 'BTC':
+                btc_price = prices.get('BTC', 90000.0) if prices else 90000.0
+                for etf in ['BTC3L', 'BTC3S']:
+                    if self.bitrue.etf_holdings.get(etf, 0) > 0:
+                        self.bitrue.sell_etf(etf, underlying_price=btc_price)
 
             # Sell spot holdings
             asset_balance = self.portfolio.balances.get(asset, 0)
@@ -189,26 +278,39 @@ class RLOrchestrator:
                     result['parked'] = True
 
         elif action_type == 'deploy':
-            # Deploy: open leveraged positions on momentum
-            if usdt_available > 200:
+            # Deploy: open leveraged positions on momentum (Phase 8: with vol filter)
+            if usdt_available > 200 and not self.risk.should_park_usdt(self.current_volatility):
                 # Check which asset has better momentum
-                xrp_mom = xrp_signal.get('momentum', 0)
-                btc_mom = btc_signal.get('momentum', 0)
+                xrp_conf = xrp_signal.get('confidence', 0)
+                btc_conf = btc_signal.get('confidence', 0)
+                xrp_dip = xrp_signal.get('is_dip', False)
+                btc_dip = btc_signal.get('is_dip', False)
 
-                if xrp_mom > btc_mom and xrp_signal.get('leverage_ok', False):
+                dynamic_lev = self.risk.dynamic_leverage(self.current_volatility)
+
+                # Only deploy if confidence > 80%
+                if xrp_conf > btc_conf and xrp_conf > self.LEVERAGE_CONFIDENCE_THRESHOLD and xrp_dip:
                     target_asset = 'XRP'
                     price = prices.get('XRP', 2.0) if prices else 2.0
-                elif btc_signal.get('leverage_ok', False):
-                    target_asset = 'BTC'
-                    price = prices.get('BTC', 90000.0) if prices else 90000.0
-                else:
-                    return result
+                    collateral = self.risk.dynamic_position_size(usdt_available, self.current_volatility, xrp_conf)
+                    success = self.kraken.open_long(target_asset, collateral, price, leverage=dynamic_lev)
+                    result['executed'] = success
+                    result['leverage_used'] = True
+                    result['leverage'] = dynamic_lev
+                    result['deployed_to'] = target_asset
 
-                collateral = usdt_available * self.max_leverage_risk
-                success = self.kraken.open_long(target_asset, collateral, price)
-                result['executed'] = success
-                result['leverage_used'] = True
-                result['deployed_to'] = target_asset
+                elif btc_conf > self.LEVERAGE_CONFIDENCE_THRESHOLD and btc_dip:
+                    # Use Bitrue 3x ETF for BTC
+                    price = prices.get('BTC', 90000.0) if prices else 90000.0
+                    collateral = self.risk.dynamic_position_size(usdt_available, self.current_volatility, btc_conf)
+                    success = self.bitrue.buy_etf('BTC3L', collateral, price)
+                    result['executed'] = success
+                    result['leverage_used'] = True
+                    result['leverage'] = 3
+                    result['etf'] = 'BTC3L'
+                    result['deployed_to'] = 'BTC'
+                else:
+                    print(f"DEFENSIVE: No high-conviction deploy signal (XRP: {xrp_conf:.2f}, BTC: {btc_conf:.2f})")
 
         return result
 
