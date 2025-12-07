@@ -1,4 +1,12 @@
 import argparse
+import warnings
+import os
+
+# Suppress ROCm/HIP warnings for cleaner output
+warnings.filterwarnings('ignore', message='.*expandable_segments.*')
+warnings.filterwarnings('ignore', message='.*hipBLASLt.*')
+warnings.filterwarnings('ignore', category=UserWarning, module='torch')
+
 from data_fetcher import DataFetcher
 from portfolio import Portfolio
 from backtester import Backtester

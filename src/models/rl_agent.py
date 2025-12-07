@@ -1,6 +1,14 @@
 import gymnasium as gym
 from gymnasium import spaces
 import numpy as np
+import warnings
+import os
+
+# Suppress ROCm/HIP warnings for cleaner output
+os.environ['HIP_VISIBLE_DEVICES'] = ''  # Force CPU for RL (PPO+MLP runs faster on CPU)
+warnings.filterwarnings('ignore', message='.*expandable_segments.*')
+warnings.filterwarnings('ignore', message='.*hipBLASLt.*')
+
 from stable_baselines3 import PPO
 import sys
 sys.path.insert(0, '..')
@@ -114,8 +122,13 @@ class TradingEnv(gym.Env):
         return self._get_obs(), reward, done, truncated, {}
 
 
-def train_rl_agent(data_dict, timesteps=100000):
-    """Train PPO agent on trading environment"""
+def train_rl_agent(data_dict, timesteps=100000, device="cpu"):
+    """
+    Train PPO agent on trading environment.
+
+    Note: PPO with MLP policy runs faster on CPU than GPU.
+    Use device="cuda" only for CNN policies or very large batch sizes.
+    """
     env = TradingEnv(data_dict)
     model = PPO(
         "MlpPolicy",
@@ -127,15 +140,15 @@ def train_rl_agent(data_dict, timesteps=100000):
         batch_size=64,
         n_epochs=10,
         gamma=0.99,
-        device="cuda"  # Use ROCm GPU
+        device=device  # CPU is faster for MLP policies
     )
-    print(f"Training PPO agent for {timesteps} timesteps...")
+    print(f"Training PPO agent for {timesteps} timesteps on {device.upper()}...")
     model.learn(total_timesteps=timesteps)
     model.save("models/rl_ppo_agent")
     print("Model saved to models/rl_ppo_agent")
     return model
 
 
-def load_rl_agent(path="models/rl_ppo_agent"):
+def load_rl_agent(path="models/rl_ppo_agent", device="cpu"):
     """Load trained RL agent"""
-    return PPO.load(path)
+    return PPO.load(path, device=device)
