@@ -6,3 +6,4 @@ config/api_keys.yaml
 *.pkl
 *.h5
 /models/
+tensorboard/
