@@ -7,7 +7,6 @@ class DataFetcher:
     def __init__(self):
         self.exchanges = {
             'kraken': ccxt.kraken(),
-            'blofin': ccxt.blofin(),
             'bitrue': ccxt.bitrue()
         }
 
@@ -32,3 +31,14 @@ class DataFetcher:
             except:
                 pass
         return prices
+
+    def fetch_rlusd_pairs(self):
+        """Fetch RLUSD-specific trading pairs from Kraken"""
+        symbols = ['XRP/RLUSD', 'RLUSD/USDT', 'BTC/RLUSD', 'RLUSD/USD']
+        data = {}
+        for sym in symbols:
+            df = self.fetch_ohlcv('kraken', sym, '1h', 2000)
+            if not df.empty:
+                data[sym] = df
+                print(f"Fetched {sym}: {len(df)} candles")
+        return data

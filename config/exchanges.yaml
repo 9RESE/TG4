@@ -8,10 +8,6 @@ exchanges:
     enabled: true
     api_key: "YOUR_KRAKEN_KEY"    # leave blank for paper
     secret: "YOUR_KRAKEN_SECRET"
-  blofin:
-    enabled: true
-    api_key: ""
-    secret: ""
   bitrue:
     enabled: true
     api_key: ""

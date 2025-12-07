@@ -15,7 +15,8 @@ def load_config():
 
 def main():
     parser = argparse.ArgumentParser(description="TG4 Local AI Crypto Trader")
-    parser.add_argument('--mode', choices=['fetch', 'backtest', 'paper'], default='fetch')
+    parser.add_argument('--mode', choices=['fetch', 'backtest', 'paper', 'train-rl'], default='fetch')
+    parser.add_argument('--timesteps', type=int, default=100000, help='RL training timesteps')
     args = parser.parse_args()
 
     config = load_config()
@@ -32,6 +33,12 @@ def main():
             prices = fetcher.get_best_price(symbol)
             if prices:
                 print(f"{symbol}: {prices}")
+
+        # Also fetch RLUSD pairs
+        print("\nFetching RLUSD pairs...")
+        rlusd_data = fetcher.fetch_rlusd_pairs()
+        for sym, df in rlusd_data.items():
+            print(f"{sym}: {len(df)} candles, latest close: {df['close'].iloc[-1]:.4f}")
 
     elif args.mode == 'backtest':
         symbols = ['XRP/USDT', 'XRP/RLUSD', 'BTC/USDT']
@@ -66,11 +73,41 @@ def main():
             pf = bt.run_with_lstm_signals('XRP/USDT', signals)
             print_backtest_results(pf, 'XRP/USDT')
 
+    elif args.mode == 'train-rl':
+        from models.rl_agent import train_rl_agent
+
+        print("\n[RL TRAINING MODE]")
+        print(f"Training for {args.timesteps} timesteps...")
+
+        # Fetch data for RL training
+        symbols = ['XRP/USDT', 'BTC/USDT']
+        data = {}
+        for sym in symbols:
+            print(f"Fetching {sym}...")
+            df = fetcher.fetch_ohlcv('kraken', sym, '1h', 2000)
+            if not df.empty:
+                data[sym] = df
+
+        if data:
+            model = train_rl_agent(data, timesteps=args.timesteps)
+            print("RL training complete!")
+        else:
+            print("No data available for training")
+
     elif args.mode == 'paper':
         risk = RiskManager()
         arb = StableArb()
         print("\n[PAPER TRADING MODE] Starting live monitoring...")
         print("Press Ctrl+C to stop\n")
+
+        # Try to load RL model if available
+        rl_model = None
+        try:
+            from models.rl_agent import load_rl_agent
+            rl_model = load_rl_agent()
+            print("RL model loaded for signal generation")
+        except:
+            print("No RL model found, using rule-based signals only")
 
         loop_count = 0
         while True:
