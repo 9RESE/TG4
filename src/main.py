@@ -3,8 +3,11 @@ from data_fetcher import DataFetcher
 from portfolio import Portfolio
 from backtester import Backtester
 from strategies.ripple_momentum_lstm import generate_ripple_signals
+from strategies.stablecoin_arb import StableArb
+from strategies.rebalancer import rebalance
+from risk_manager import RiskManager
 import yaml
-import matplotlib.pyplot as plt
+import time
 
 def load_config():
     with open('config/exchanges.yaml') as f:
@@ -62,6 +65,53 @@ def main():
             bt = Backtester(data)
             pf = bt.run_with_lstm_signals('XRP/USDT', signals)
             print_backtest_results(pf, 'XRP/USDT')
+
+    elif args.mode == 'paper':
+        risk = RiskManager()
+        arb = StableArb()
+        print("\n[PAPER TRADING MODE] Starting live monitoring...")
+        print("Press Ctrl+C to stop\n")
+
+        loop_count = 0
+        while True:
+            try:
+                loop_count += 1
+                print(f"\n--- Loop {loop_count} @ {time.strftime('%H:%M:%S')} ---")
+
+                # Fetch current prices
+                prices = {}
+                for sym in ['XRP/USDT', 'BTC/USDT']:
+                    p = fetcher.get_best_price(sym)
+                    if p:
+                        # Use first exchange price as reference
+                        prices[sym.split('/')[0]] = list(p.values())[0]
+                        print(f"{sym}: {p}")
+
+                # Add stablecoin prices (assumed 1:1)
+                prices['USDT'] = 1.0
+                prices['USDC'] = 1.0
+                prices['RLUSD'] = 1.0
+
+                # Record portfolio snapshot
+                portfolio.record_snapshot(prices)
+                print(f"Portfolio Value: ${portfolio.get_total_usd(prices):.2f}")
+
+                # Check for arb opportunities
+                opps = arb.find_opportunities()
+                if opps:
+                    print(f"ARB OPPORTUNITIES: {opps}")
+
+                # Rebalance check (every 60 loops = ~1 hour)
+                if loop_count % 60 == 0:
+                    print("\n[REBALANCE CHECK]")
+                    rebalance(portfolio, prices)
+
+                time.sleep(60)  # 1min loop
+
+            except KeyboardInterrupt:
+                print("\n\nStopping paper trading...")
+                print(f"Final {portfolio}")
+                break
 
 if __name__ == "__main__":
     main()

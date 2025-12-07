@@ -25,3 +25,26 @@ class Portfolio:
 
     def __str__(self):
         return f"Portfolio: { {k: round(v, 4) for k, v in self.balances.items()} }"
+
+    def open_margin_position(self, asset: str, amount: float, leverage: float, price: float, direction: str):
+        cost = amount * price / leverage
+        if self.balances.get('USDT', 0) < cost:
+            return False
+        self.update('USDT', -cost)
+        self.balances[f"{asset}_{direction}"] = amount * leverage  # exposure
+        self.balances[f"{asset}_entry"] = price
+        self.balances[f"{asset}_lev"] = leverage
+        return True
+
+    def close_margin_position(self, asset: str, price: float, direction: str):
+        exposure = self.balances.get(f"{asset}_{direction}", 0)
+        if exposure == 0:
+            return
+        entry = self.balances.get(f"{asset}_entry", price)
+        if direction == 'long':
+            pnl = (price - entry) * exposure
+        else:
+            pnl = (entry - price) * exposure
+        self.update('USDT', pnl)
+        for k in [f"{asset}_{direction}", f"{asset}_entry", f"{asset}_lev"]:
+            self.balances[k] = 0

@@ -12,3 +12,4 @@ seaborn
 torch==2.5.1+rocm6.2
 torchvision==0.20.1+rocm6.2
 torchaudio==2.5.1+rocm6.2
+stable-baselines3
