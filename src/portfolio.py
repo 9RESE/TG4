@@ -5,7 +5,7 @@ from typing import Dict
 class Portfolio:
     """
     Portfolio manager for BTC, XRP, USDT holdings.
-    Phase 7: Simplified to 3 assets with margin position tracking.
+    Phase 12: Added real USDT yield accrual from Kraken/Bitrue lending.
     """
 
     def __init__(self, starting_balances: Dict[str, float]):
@@ -19,6 +19,10 @@ class Portfolio:
 
         # Margin positions: {asset: {'size': x, 'entry': y, 'leverage': z, 'direction': 'long/short'}}
         self.margin_positions = {}
+
+        # Phase 12: USDT yield tracking
+        self.total_yield_earned = 0.0
+        self.yield_history = []
 
     def update(self, asset: str, amount: float):
         """Update spot balance for an asset"""
@@ -159,3 +163,44 @@ class Portfolio:
                 liquidated.append(asset)
 
         return liquidated
+
+    # ========== Phase 12: Real USDT Yield Accrual ==========
+
+    def apply_usdt_yield(self, apy: float = 0.06, hours: int = 1):
+        """
+        Phase 12: Apply realistic USDT yield from Kraken/Bitrue lending.
+        Realistic rates: 4-8% APY flexible lending.
+
+        Args:
+            apy: Annual percentage yield (0.06 = 6% APY, realistic Kraken/Bitrue rate)
+            hours: Number of hours since last yield application
+
+        Returns:
+            float: Yield earned this period
+        """
+        if 'USDT' not in self.balances or self.balances['USDT'] < 100:
+            return 0.0
+
+        # Calculate hourly yield: APY / 365 / 24
+        hourly_rate = apy / 365 / 24
+        yield_earned = self.balances['USDT'] * hourly_rate * hours
+
+        # Apply yield
+        self.update('USDT', yield_earned)
+        self.total_yield_earned += yield_earned
+        self.yield_history.append({
+            'timestamp': pd.Timestamp.now(),
+            'yield': yield_earned,
+            'balance': self.balances['USDT'],
+            'apy': apy
+        })
+
+        return yield_earned
+
+    def get_yield_stats(self) -> Dict:
+        """Get yield statistics."""
+        return {
+            'total_yield_earned': self.total_yield_earned,
+            'yield_transactions': len(self.yield_history),
+            'avg_yield_per_tx': self.total_yield_earned / max(len(self.yield_history), 1)
+        }

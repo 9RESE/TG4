@@ -1,6 +1,6 @@
 """
 RL Orchestrator - Master controller for RL-driven trading decisions
-Phase 11: Bear Profit Tuning - Lower Short Thresholds + Mean Reversion + USDT Yield
+Phase 12: Bear Profit Flip - Paired Shorts + Real Yield + Live Prep
 """
 import numpy as np
 from models.rl_agent import TradingEnv, load_rl_agent
@@ -16,12 +16,13 @@ from risk_manager import RiskManager
 
 class RLOrchestrator:
     """
-    Phase 11: Orchestrates RL agent with tuned bear market shorting.
-    - Defensive in high-vol (park USDT + earn yield) OR deploy selective shorts
+    Phase 12: Orchestrates RL agent with paired bear mode for profit flip.
+    - Paired bear mode: Grind-down = park + yield, Overbought rip = short
+    - Real USDT yield accrual (6% APY from Kraken/Bitrue lending)
     - Aggressive offense in greed regime (low ATR + RSI oversold)
     - LSTM dip detector must align for leverage execution
     - Up to 10x Kraken / 3x Bitrue ETFs on confirmed dips
-    - Phase 11: Earlier overbought entry (RSI>65, ATR>4%) + VWAP mean reversion filter
+    - Phase 12: Yield compounding + selective shorts for flat/positive bears
     """
 
     # Confidence threshold for leverage trades
@@ -31,11 +32,16 @@ class RLOrchestrator:
     OFFENSIVE_CONFIDENCE_THRESHOLD = 0.85  # Higher bar for offense
     GREED_VOL_THRESHOLD = 0.02  # ATR% below this = greed regime
 
-    # Phase 11: Tuned bear mode thresholds (lowered for earlier entry)
-    BEAR_CONFIDENCE_THRESHOLD = 0.80  # Lowered from 0.82 for earlier shorts
-    BEAR_VOL_THRESHOLD = 0.04  # Lowered from 0.05 - ATR% above this = bear regime
-    RSI_OVERBOUGHT = 65  # Lowered from 70 - earlier overbought detection
-    RSI_SHORT_EXIT = 40  # Auto-exit shorts when RSI drops below this (mean reversion complete)
+    # Phase 12: Paired bear mode thresholds
+    BEAR_CONFIDENCE_THRESHOLD = 0.78  # Lowered from 0.80 for more shorts
+    BEAR_VOL_THRESHOLD = 0.04  # ATR% above this = bear regime
+    RSI_OVERBOUGHT = 65  # Overbought detection for shorts
+    RSI_SHORT_EXIT = 40  # Auto-exit shorts when RSI drops below this
+    RSI_RIP_THRESHOLD = 72  # Phase 12: Overbought rip threshold (short aggressively)
+
+    # Phase 12: Real USDT yield settings (Kraken/Bitrue lending rates)
+    USDT_YIELD_APY = 0.06  # 6% APY realistic rate
+    YIELD_HOURS_PER_STEP = 4  # Apply yield every 4 hours in backtest
 
     def __init__(self, portfolio: Portfolio, data_dict: dict):
         self.portfolio = portfolio
@@ -275,11 +281,28 @@ class RLOrchestrator:
             btc_dip_signal.get('confidence', 0) > self.BEAR_CONFIDENCE_THRESHOLD
         )
 
-        # Update mode
-        if xrp_bear or btc_bear:
+        # Phase 12: Detect overbought rip vs grind-down bear
+        xrp_rip = xrp_rsi > self.RSI_RIP_THRESHOLD  # Aggressive short on rip
+        btc_rip = btc_rsi > self.RSI_RIP_THRESHOLD
+        is_overbought_rip = (xrp_rip or btc_rip) and is_bear_regime
+
+        # Update mode with paired bear logic
+        if is_overbought_rip:
             self.mode = 'bear'
             result['mode'] = 'bear'
-            print(f"BEAR PROFIT MODE: Overbought deviation (ATR: {self.current_volatility*100:.2f}%, XRP RSI: {xrp_rsi:.1f}, BTC RSI: {btc_rsi:.1f}, VWAP: XRP={xrp_above_vwap}, BTC={btc_above_vwap})")
+            result['bear_type'] = 'rip_short'  # Phase 12: Aggressive short on rip
+            print(f"BEAR RIP MODE: Overbought rip detected - SHORT AGGRESSIVELY (ATR: {self.current_volatility*100:.2f}%, XRP RSI: {xrp_rsi:.1f}, BTC RSI: {btc_rsi:.1f})")
+        elif xrp_bear or btc_bear:
+            self.mode = 'bear'
+            result['mode'] = 'bear'
+            result['bear_type'] = 'selective_short'
+            print(f"BEAR SELECTIVE: Overbought deviation (ATR: {self.current_volatility*100:.2f}%, XRP RSI: {xrp_rsi:.1f}, BTC RSI: {btc_rsi:.1f}, VWAP: XRP={xrp_above_vwap}, BTC={btc_above_vwap})")
+        elif is_bear_regime and not (xrp_bear or btc_bear):
+            # Phase 12: Grind-down bear = park + yield
+            self.mode = 'defensive'
+            result['mode'] = 'defensive'
+            result['bear_type'] = 'grind_down'
+            print(f"GRIND-DOWN BEAR: Max USDT park + yield (ATR: {self.current_volatility*100:.2f}%)")
         elif xrp_offensive or btc_offensive:
             self.mode = 'offensive'
             result['mode'] = 'offensive'
@@ -288,14 +311,28 @@ class RLOrchestrator:
             self.mode = 'defensive'
             result['mode'] = 'defensive'
 
-        # Phase 11: Bear mode - deploy selective shorts with tuned sizing
+        # Phase 12: Apply real USDT yield when in defensive/park mode
+        if self.mode == 'defensive' and usdt_available > 100:
+            yield_earned = self.portfolio.apply_usdt_yield(
+                apy=self.USDT_YIELD_APY,
+                hours=self.YIELD_HOURS_PER_STEP
+            )
+            if yield_earned > 0:
+                result['yield_earned'] = yield_earned
+
+        # Phase 12: Bear mode - paired shorts (rip = aggressive, selective = conservative)
         if self.mode == 'bear' and usdt_available > 100:
             short_leverage = self.risk.dynamic_leverage(self.current_volatility)
             short_leverage = min(short_leverage, 5)  # Cap shorts at 5x
 
-            if xrp_bear and self.short_positions['XRP'] is None:
+            # Phase 12: Higher risk for rip shorts, lower for selective
+            is_rip = result.get('bear_type') == 'rip_short'
+            xrp_risk = 0.08 if is_rip else 0.05  # 8% for rips, 5% for selective
+            btc_risk = 0.12 if is_rip else 0.08  # 12% for rips, 8% for selective
+
+            if (xrp_bear or xrp_rip) and self.short_positions['XRP'] is None:
                 price = prices.get('XRP', 2.0) if prices else 2.0
-                collateral = usdt_available * 0.06  # Phase 11: 6% for shorts (from 8%)
+                collateral = usdt_available * xrp_risk
                 success = self.kraken.open_short('XRP', collateral, price, leverage=short_leverage)
                 if success:
                     self.short_positions['XRP'] = {'entry': price, 'collateral': collateral}
@@ -304,13 +341,13 @@ class RLOrchestrator:
                     result['leverage'] = short_leverage
                     result['short'] = 'XRP'
                     result['collateral'] = collateral
-                    print(f"BEAR PROFIT MODE: Short deployed on overbought deviation - {short_leverage}x XRP @ ${price:.4f}")
+                    short_type = "RIP SHORT" if is_rip else "SELECTIVE SHORT"
+                    print(f"BEAR {short_type}: {short_leverage}x XRP @ ${price:.4f} (risk: {xrp_risk*100:.0f}%)")
                     return result
 
-            elif btc_bear and self.short_positions['BTC'] is None:
+            elif (btc_bear or btc_rip) and self.short_positions['BTC'] is None:
                 price = prices.get('BTC', 90000.0) if prices else 90000.0
-                # Use Bitrue 3x short ETF for BTC
-                collateral = usdt_available * 0.10  # 10% for BTC shorts
+                collateral = usdt_available * btc_risk
                 success = self.bitrue.buy_etf('BTC3S', collateral, price)
                 if success:
                     self.short_positions['BTC'] = {'entry': price, 'collateral': collateral}
@@ -320,7 +357,8 @@ class RLOrchestrator:
                     result['etf'] = 'BTC3S'
                     result['short'] = 'BTC'
                     result['collateral'] = collateral
-                    print(f"BEAR MODE: Deployed 3x BTC3S ETF @ ${price:.2f}")
+                    short_type = "RIP SHORT" if is_rip else "SELECTIVE SHORT"
+                    print(f"BEAR {short_type}: 3x BTC3S ETF @ ${price:.2f} (risk: {btc_risk*100:.0f}%)")
                     return result
 
         # Phase 8: Check if we should park USDT (defensive mode)

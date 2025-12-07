@@ -17,16 +17,17 @@ from portfolio import Portfolio
 class TradingEnv(gym.Env):
     """
     Custom Trading Environment for RL agent.
-    Phase 11: Bear Profit Tuning + Mean Reversion + USDT Yield.
+    Phase 12: Bear Profit Flip - Paired Shorts + Real Yield + Live Prep.
     Goals: Accumulate BTC (45%), XRP (35%), USDT (20% as collateral)
     Features:
     - Vol penalty discourages leverage in choppy markets
     - Rebound bonus rewards correctly timed dip-buys
     - RSI-based offense triggers in greed regime
     - SHORT actions for bear market profit capture
-    - Phase 11: Lowered short thresholds (RSI >65, ATR >4%)
-    - Phase 11: USDT yield simulation (~5-8% APY while parked)
-    - Phase 11: Stronger short rewards (5x multiplier on profitable shorts)
+    - Phase 12: Paired bear mode (rip_short vs grind_down)
+    - Phase 12: Real USDT yield (6% APY from Kraken/Bitrue lending)
+    - Phase 12: Short precision rewards (6.0x for whipsaw-free shorts)
+    - Phase 12: 2x yield bonus during defensive parking
     - Decay penalty prevents holding shorts too long
     """
 
@@ -76,9 +77,15 @@ class TradingEnv(gym.Env):
         self.rsi_oversold = 30  # RSI below this = oversold dip
         self.rsi_overbought = 65  # Phase 11: Lowered from 70 - earlier overbought detection
         self.rsi_short_exit = 40  # Phase 11: Auto-exit shorts when RSI drops below this
+        self.rsi_rip_threshold = 72  # Phase 12: Overbought rip threshold (aggressive short)
 
-        # Phase 11: USDT yield simulation (5-8% APY)
-        self.usdt_yield_per_step = 0.0001  # ~5-8% APY when parked in defensive mode
+        # Phase 12: Real USDT yield (6% APY from Kraken/Bitrue lending)
+        self.usdt_yield_apy = 0.06  # 6% APY realistic rate
+        self.usdt_yield_per_step = self.usdt_yield_apy / 365 / 24 * 4  # ~4 hours per step
+
+        # Phase 12: Short precision tracking (reward whipsaw-free shorts)
+        self.short_peak_price = {'BTC': 0.0, 'XRP': 0.0}  # Track highest price during short
+        self.short_whipsaw_threshold = 0.05  # 5% bounce = whipsaw
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
@@ -90,6 +97,8 @@ class TradingEnv(gym.Env):
         self.short_positions = {'BTC': 0.0, 'XRP': 0.0}
         self.short_entries = {'BTC': 0.0, 'XRP': 0.0}
         self.short_open_step = {'BTC': 0, 'XRP': 0}
+        # Phase 12: Reset short precision tracking
+        self.short_peak_price = {'BTC': 0.0, 'XRP': 0.0}
         self.current_volatility = 0.0
         self.current_rsi = {'XRP': 50.0, 'BTC': 50.0}
         return self._get_obs(), {}
@@ -321,12 +330,18 @@ class TradingEnv(gym.Env):
         if self.current_volatility > self.vol_high_threshold and usdt_weight >= 0.20:
             usdt_bonus += 0.2  # Extra bonus for parking during chop
 
-        # Phase 11: USDT yield simulation (~5-8% APY while parked in defensive mode)
+        # Phase 12: Real USDT yield (6% APY from Kraken/Bitrue lending)
         usdt_yield = 0.0
+        usdt_yield_factor = 0.0
         usdt_balance = self.portfolio.balances.get('USDT', 0)
         is_defensive = self.current_volatility > self.vol_high_threshold or usdt_weight >= 0.20
         if usdt_balance > 100 and is_defensive:
-            usdt_yield = self.usdt_yield_per_step * usdt_balance  # Simulate yield on parked USDT
+            # Apply real yield to balance
+            yield_earned = self.usdt_yield_per_step * usdt_balance
+            self.portfolio.update('USDT', yield_earned)
+            usdt_yield = yield_earned
+            # Phase 12: 2x yield factor for reward (double down on parking earnings)
+            usdt_yield_factor = yield_earned * 2.0
 
         # Margin P&L from leveraged positions (with actual entry tracking)
         margin_pnl = 0.0
@@ -366,60 +381,82 @@ class TradingEnv(gym.Env):
         if action == 8 and self.current_volatility < self.vol_low_threshold:
             rebound_bonus += 4.0  # Reward deploying leverage in calm dips
 
-        # Phase 11: Bear market short rewards (stronger multipliers)
+        # Phase 12: Bear market short rewards with precision tracking
         short_bonus = 0.0
         short_decay = 0.0
+        short_precision_bonus = 0.0
         action_is_short = action in [9, 10]  # Short BTC or XRP
 
-        # Calculate short P&L
+        # Calculate short P&L with whipsaw detection
         short_pnl = 0.0
         for asset in ['BTC', 'XRP']:
             if self.short_positions[asset] > 0:
                 current_price = prices.get(asset, 1.0)
                 entry_price = self.short_entries[asset]
                 size = self.short_positions[asset]
+
+                # Phase 12: Track peak price for whipsaw detection
+                if current_price > self.short_peak_price[asset]:
+                    self.short_peak_price[asset] = current_price
+
                 # Short profits when price drops
                 pnl_pct = (entry_price - current_price) / entry_price if entry_price > 0 else 0
                 raw_short_pnl = pnl_pct * size
 
-                # Phase 11: Stronger short rewards (5.0x multiplier on profitable shorts)
+                # Phase 12: Check for whipsaw (price bounced > 5% above entry)
+                bounce_pct = (self.short_peak_price[asset] - entry_price) / entry_price if entry_price > 0 else 0
+                is_whipsaw_free = bounce_pct < self.short_whipsaw_threshold
+
+                # Phase 12: 6.0x multiplier for whipsaw-free profitable shorts
                 if raw_short_pnl > 0:
-                    short_pnl += 5.0 * abs(raw_short_pnl)  # Strong downside capture reward
+                    if is_whipsaw_free:
+                        short_pnl += 6.0 * abs(raw_short_pnl)  # Phase 12: Precision short reward
+                        short_precision_bonus += 2.0  # Extra bonus for clean shorts
+                    else:
+                        short_pnl += 4.0 * abs(raw_short_pnl)  # Still reward, but less
                 else:
                     short_pnl += raw_short_pnl * 0.1  # Scaled loss
 
-                # Decay penalty for holding shorts too long
+                # Phase 12: Lower decay penalty (encourage timely exits, not panic)
                 duration = self.current_step - self.short_open_step[asset]
                 if duration > self.max_short_duration:
-                    short_decay += 0.5  # Penalty forces timely exits
+                    short_decay += 0.3  # Phase 12: Reduced from 0.5
 
                 # Phase 11: Auto-exit bonus when RSI drops below exit threshold (mean reversion)
                 asset_rsi = self.current_rsi.get(asset, 50)
                 if asset_rsi < self.rsi_short_exit and action == 11:
                     short_bonus += 2.0  # Reward mean reversion exit
 
-        # High vol + RSI overbought + short action = bear confirmation bonus
+        # Phase 12: Paired bear mode - rip shorts vs selective shorts
         if action_is_short:
             asset = 'BTC' if action == 9 else 'XRP'
             asset_rsi = self.current_rsi.get(asset, 50)
 
-            # Phase 11: Lowered thresholds - bear signal: ATR >4% + RSI >65
-            if self.current_volatility > self.vol_high_threshold and asset_rsi > self.rsi_overbought:
-                short_bonus += 5.0 * self.short_leverage  # Phase 11: Amplified to 5x
+            # Phase 12: Overbought rip = aggressive short (RSI > 72)
+            if self.current_volatility > self.vol_high_threshold and asset_rsi > self.rsi_rip_threshold:
+                short_bonus += 6.0 * self.short_leverage  # Phase 12: Rip short bonus
+                # Reset peak price tracking for new short
+                self.short_peak_price[asset] = 0.0
+
+            # Phase 12: Standard bear signal: ATR >4% + RSI >65
+            elif self.current_volatility > self.vol_high_threshold and asset_rsi > self.rsi_overbought:
+                short_bonus += 4.0 * self.short_leverage  # Phase 12: Selective short
 
             # Moderate bear signal: high vol only
             elif self.current_volatility > self.vol_high_threshold:
-                short_bonus += 3.0  # Phase 11: Increased from 2.0
+                short_bonus += 2.0  # Reduced for low-confidence shorts
 
         # Reward closing shorts with profit
         if action == 11:  # Close shorts
             if short_pnl > 0:
-                short_bonus += 5.0  # Phase 11: Increased from 3.0 for profitable exit
+                short_bonus += 6.0  # Phase 12: Increased for profitable exit
+                # Reset peak tracking
+                self.short_peak_price = {'BTC': 0.0, 'XRP': 0.0}
 
-        # Combined reward: base + alignment + USDT safety + yield + margin + rebound + shorts - penalties
-        # Phase 11: Added usdt_yield to reward defensive USDT parking
-        reward = (base_reward + 3.0 * alignment_score + usdt_bonus + usdt_yield + margin_pnl +
-                  rebound_bonus + short_bonus + short_pnl - vol_penalty - short_decay)
+        # Phase 12: Combined reward with yield factor and precision bonus
+        # base + alignment + USDT safety + yield factor + margin + rebound + shorts + precision - penalties
+        reward = (base_reward + 3.0 * alignment_score + usdt_bonus + usdt_yield_factor + margin_pnl +
+                  rebound_bonus + short_bonus + short_pnl + short_precision_bonus - vol_penalty - short_decay)
 
         done = self.current_step >= self.max_steps
         truncated = False
