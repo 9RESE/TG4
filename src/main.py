@@ -14,6 +14,8 @@ from strategies.ripple_momentum_lstm import generate_ripple_signals
 from strategies.stablecoin_arb import StableArb
 from strategies.rebalancer import rebalance
 from risk_manager import RiskManager
+from executor import Executor
+from ensemble import Ensemble
 import yaml
 import time
 
@@ -103,59 +105,100 @@ def main():
             print("No data available for training")
 
     elif args.mode == 'paper':
-        risk = RiskManager()
-        arb = StableArb()
         print("\n[PAPER TRADING MODE] Starting live monitoring...")
         print("Press Ctrl+C to stop\n")
 
-        # Try to load RL model if available
-        rl_model = None
-        try:
-            from models.rl_agent import load_rl_agent
-            rl_model = load_rl_agent()
-            print("RL model loaded for signal generation")
-        except:
-            print("No RL model found, using rule-based signals only")
+        # Initialize execution engine
+        executor = Executor(portfolio)
+
+        # Fetch initial data for ensemble
+        print("Fetching initial market data...")
+        symbols = ['XRP/USDT', 'BTC/USDT']
+        data = {}
+        for sym in symbols:
+            df = fetcher.fetch_ohlcv('kraken', sym, '1h', 500)
+            if not df.empty:
+                data[sym] = df
+                print(f"  {sym}: {len(df)} candles")
+
+        # Initialize ensemble strategy
+        ensemble = Ensemble(data, portfolio)
 
         loop_count = 0
+        last_data_refresh = time.time()
+
         while True:
             try:
                 loop_count += 1
-                print(f"\n--- Loop {loop_count} @ {time.strftime('%H:%M:%S')} ---")
+                print(f"\n{'='*60}")
+                print(f"Loop {loop_count} @ {time.strftime('%Y-%m-%d %H:%M:%S')}")
+                print(f"{'='*60}")
 
                 # Fetch current prices
-                prices = {}
+                prices = {'USDT': 1.0, 'USDC': 1.0, 'RLUSD': 1.0}
                 for sym in ['XRP/USDT', 'BTC/USDT']:
                     p = fetcher.get_best_price(sym)
                     if p:
-                        # Use first exchange price as reference
-                        prices[sym.split('/')[0]] = list(p.values())[0]
-                        print(f"{sym}: {p}")
-
-                # Add stablecoin prices (assumed 1:1)
-                prices['USDT'] = 1.0
-                prices['USDC'] = 1.0
-                prices['RLUSD'] = 1.0
+                        base = sym.split('/')[0]
+                        prices[base] = list(p.values())[0]
+                        print(f"{sym}: ${prices[base]:.4f}")
 
                 # Record portfolio snapshot
                 portfolio.record_snapshot(prices)
-                print(f"Portfolio Value: ${portfolio.get_total_usd(prices):.2f}")
+                total_value = portfolio.get_total_usd(prices)
+                print(f"\nPortfolio Value: ${total_value:.2f}")
+                print(f"Holdings: {portfolio}")
 
-                # Check for arb opportunities
-                opps = arb.find_opportunities()
-                if opps:
-                    print(f"ARB OPPORTUNITIES: {opps}")
+                # Refresh data every 30 minutes
+                if time.time() - last_data_refresh > 1800:
+                    print("\n[Refreshing market data...]")
+                    for sym in symbols:
+                        df = fetcher.fetch_ohlcv('kraken', sym, '1h', 500)
+                        if not df.empty:
+                            data[sym] = df
+                    ensemble.update_data(data)
+                    last_data_refresh = time.time()
 
-                # Rebalance check (every 60 loops = ~1 hour)
-                if loop_count % 60 == 0:
+                # Get ensemble signal
+                signal = ensemble.get_signal('XRP/USDT')
+                print(f"\nEnsemble Signal: {signal['action']} (confidence: {signal['confidence']:.2f})")
+                print(f"  LSTM: {signal['signals']['lstm']:.2f}")
+                print(f"  Arb:  {signal['signals']['arb']:.2f}")
+                print(f"  Rebal: {signal['signals']['rebalance']:.2f}")
+
+                # Execute based on signal
+                if signal['action'] == 'long_xrp' and signal['confidence'] > 0.5:
+                    xrp_price = prices.get('XRP', 2.0)
+                    usdt_available = portfolio.balances.get('USDT', 0)
+                    if usdt_available > 50:  # Min $50 trade
+                        trade_size = min(usdt_available * 0.1, 100) / xrp_price  # 10% or max $100
+                        executor.place_paper_order('XRP/USDT', 'buy', trade_size, leverage=2.0)
+
+                elif signal['action'] == 'arb_rlusd' and signal['arb_opportunities']:
+                    best_arb = signal['arb_opportunities'][0]
+                    print(f"\n[ARB OPPORTUNITY] {best_arb}")
+
+                # Rebalance check (every 12 loops = ~1 hour with 5min loop)
+                if loop_count % 12 == 0:
                     print("\n[REBALANCE CHECK]")
                     rebalance(portfolio, prices)
 
-                time.sleep(60)  # 1min loop
+                # Trade history
+                if executor.trade_log:
+                    print(f"\nRecent trades: {len(executor.trade_log)}")
+
+                time.sleep(300)  # 5min loop for live trading
 
             except KeyboardInterrupt:
-                print("\n\nStopping paper trading...")
+                print("\n\n" + "="*60)
+                print("Stopping paper trading...")
+                print("="*60)
                 print(f"Final {portfolio}")
+                print(f"Total trades executed: {len(executor.trade_log)}")
+                if executor.trade_log:
+                    print("\nTrade History:")
+                    for trade in executor.trade_log[-10:]:  # Last 10 trades
+                        print(f"  {trade['timestamp']}: {trade['side'].upper()} {trade['amount']:.4f} {trade['symbol']} @ {trade['price']:.4f}")
                 break
 
 if __name__ == "__main__":
