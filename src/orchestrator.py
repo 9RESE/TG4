@@ -1,6 +1,6 @@
 """
 RL Orchestrator - Master controller for RL-driven trading decisions
-Phase 8: Defensive Leverage + Volatility Filters + Selective Execution
+Phase 9: Rebound Capture + Selective Offense + Live Paper Deployment
 """
 import numpy as np
 from models.rl_agent import TradingEnv, load_rl_agent
@@ -9,19 +9,25 @@ from portfolio import Portfolio
 from exchanges.kraken_margin import KrakenMargin
 from exchanges.bitrue_etf import BitrueETF
 from strategies.ripple_momentum_lstm import generate_xrp_signals, generate_btc_signals
+from strategies.dip_buy_lstm import generate_dip_signals
 from risk_manager import RiskManager
 
 
 class RLOrchestrator:
     """
-    Phase 8: Orchestrates RL agent decisions with volatility-aware leverage.
-    - Smart, selective leverage (Kraken 10x only when probability >80%)
-    - Bitrue 3x ETFs for asymmetric upside
-    - USDT parking during high-fear periods
+    Phase 9: Orchestrates RL agent with asymmetric offense.
+    - Defensive in high-vol (park USDT)
+    - Aggressive offense in greed regime (low ATR + RSI oversold)
+    - LSTM dip detector must align for leverage execution
+    - Up to 10x Kraken / 3x Bitrue ETFs on confirmed dips
     """
 
     # Confidence threshold for leverage trades
     LEVERAGE_CONFIDENCE_THRESHOLD = 0.80
+
+    # Phase 9: Offensive thresholds
+    OFFENSIVE_CONFIDENCE_THRESHOLD = 0.85  # Higher bar for offense
+    GREED_VOL_THRESHOLD = 0.02  # ATR% below this = greed regime
 
     def __init__(self, portfolio: Portfolio, data_dict: dict):
         self.portfolio = portfolio
@@ -38,6 +44,12 @@ class RLOrchestrator:
         # Current volatility state
         self.current_volatility = 0.05  # Default moderate
         self.current_atr = {}  # Per-asset ATR tracking
+
+        # Phase 9: RSI tracking
+        self.current_rsi = {'XRP': 50.0, 'BTC': 50.0}
+
+        # Phase 9: Trading mode
+        self.mode = 'defensive'  # 'defensive' or 'offensive'
 
         # Try to load trained RL model
         try:
@@ -66,9 +78,33 @@ class RLOrchestrator:
             8: ('USDT', 'deploy'),  # Deploy USDT to margin
         }
 
-        # Risk parameters (Phase 8: reduced from 20% to 10% max)
-        self.max_leverage_risk = 0.10  # Max 10% of USDT for margin
+        # Risk parameters (Phase 9: increased for offense)
+        self.max_leverage_risk = 0.15  # Max 15% of USDT for margin (up from 10%)
         self.spot_trade_size = 0.10    # 10% of USDT per spot trade
+
+    def calculate_rsi(self, symbol: str = 'XRP/USDT') -> float:
+        """Calculate RSI for a symbol."""
+        if symbol not in self.data:
+            return 50.0
+
+        df = self.data[symbol]
+        if len(df) < 15:
+            return 50.0
+
+        close = df['close'].values
+        deltas = np.diff(close[-15:])
+        gains = np.where(deltas > 0, deltas, 0)
+        losses = np.where(deltas < 0, -deltas, 0)
+
+        avg_gain = np.mean(gains) if len(gains) > 0 else 0
+        avg_loss = np.mean(losses) if len(losses) > 0 else 0.001
+
+        rs = avg_gain / avg_loss
+        rsi = 100 - (100 / (1 + rs))
+
+        asset = symbol.split('/')[0]
+        self.current_rsi[asset] = rsi
+        return rsi
 
     def update_volatility(self, symbol: str = 'XRP/USDT'):
         """Update current volatility from market data."""
@@ -128,11 +164,12 @@ class RLOrchestrator:
 
     def decide_and_execute(self, prices: dict = None):
         """
-        Phase 8: Get RL model prediction and execute with volatility-aware leverage.
+        Phase 9: Get RL model prediction and execute with asymmetric offense.
 
-        - Only leverage when confidence > 80% AND volatility permits
-        - Use Bitrue 3x ETFs for asymmetric upside on BTC
-        - Park USDT during high-fear periods
+        - Defensive in high-vol (park USDT)
+        - Aggressive offense in greed regime (low ATR <2% + RSI oversold)
+        - LSTM dip detector must align for leverage execution
+        - Up to 10x Kraken / 3x Bitrue ETFs on confirmed dips
 
         Args:
             prices: Current prices dict. If None, uses env's internal prices.
@@ -148,9 +185,11 @@ class RLOrchestrator:
         if obs is None:
             return {'action': 'error', 'reason': 'Could not get observation'}
 
-        # Update volatility from market data
+        # Update volatility and RSI from market data
         self.update_volatility('XRP/USDT')
         self.update_volatility('BTC/USDT')
+        xrp_rsi = self.calculate_rsi('XRP/USDT')
+        btc_rsi = self.calculate_rsi('BTC/USDT')
 
         # Get model prediction
         action, _ = self.model.predict(obs, deterministic=True)
@@ -166,14 +205,46 @@ class RLOrchestrator:
             'executed': False,
             'leverage_used': False,
             'volatility': self.current_volatility,
-            'market_state': self.risk.get_market_state()
+            'market_state': self.risk.get_market_state(),
+            'mode': self.mode,
+            'rsi': self.current_rsi.copy()
         }
 
-        # Get momentum signals for leverage decisions
+        # Get LSTM dip signals for leverage decisions
+        xrp_dip_signal = generate_dip_signals(self.data, 'XRP/USDT')
+        btc_dip_signal = generate_dip_signals(self.data, 'BTC/USDT')
+
+        # Get momentum signals
         xrp_signal = generate_xrp_signals(self.data) if 'XRP/USDT' in self.data else {'leverage_ok': False, 'confidence': 0}
         btc_signal = generate_btc_signals(self.data) if 'BTC/USDT' in self.data else {'leverage_ok': False, 'confidence': 0}
 
         usdt_available = self.portfolio.balances.get('USDT', 0)
+
+        # Phase 9: Determine trading mode (defensive vs offensive)
+        is_greed_regime = self.current_volatility < self.GREED_VOL_THRESHOLD
+        xrp_oversold = xrp_rsi < 30
+        btc_oversold = btc_rsi < 30
+
+        # Check for offensive trigger: low ATR + LSTM dip signal + high confidence
+        xrp_offensive = (
+            is_greed_regime and
+            xrp_dip_signal.get('is_dip', False) and
+            xrp_dip_signal.get('confidence', 0) > self.OFFENSIVE_CONFIDENCE_THRESHOLD
+        )
+        btc_offensive = (
+            is_greed_regime and
+            btc_dip_signal.get('is_dip', False) and
+            btc_dip_signal.get('confidence', 0) > self.OFFENSIVE_CONFIDENCE_THRESHOLD
+        )
+
+        # Update mode
+        if xrp_offensive or btc_offensive:
+            self.mode = 'offensive'
+            result['mode'] = 'offensive'
+            print(f"OFFENSIVE MODE: Greed regime detected (ATR: {self.current_volatility*100:.2f}%, XRP RSI: {xrp_rsi:.1f}, BTC RSI: {btc_rsi:.1f})")
+        else:
+            self.mode = 'defensive'
+            result['mode'] = 'defensive'
 
         # Phase 8: Check if we should park USDT (defensive mode)
         if self.risk.should_park_usdt(self.current_volatility):
@@ -184,6 +255,38 @@ class RLOrchestrator:
                 action_type = 'park'
                 result['action_type'] = 'park'
                 result['override_reason'] = 'high_volatility'
+
+        # Phase 9: Offensive override - deploy leverage on confirmed dips
+        elif self.mode == 'offensive' and action_type in ['buy', 'deploy']:
+            # Aggressive leverage deployment in greed regime
+            dynamic_lev = self.risk.dynamic_leverage(self.current_volatility)
+
+            if xrp_offensive and usdt_available > 100:
+                price = prices.get('XRP', 2.0) if prices else 2.0
+                collateral = usdt_available * self.max_leverage_risk
+                success = self.kraken.open_long('XRP', collateral, price, leverage=dynamic_lev)
+                if success:
+                    result['executed'] = True
+                    result['leverage_used'] = True
+                    result['leverage'] = dynamic_lev
+                    result['collateral'] = collateral
+                    result['offensive_trigger'] = 'xrp_dip'
+                    print(f"OFFENSIVE: Deploying {dynamic_lev}x leverage on XRP dip (conf: {xrp_dip_signal.get('confidence', 0):.2f})")
+                    return result
+
+            elif btc_offensive and usdt_available > 100:
+                price = prices.get('BTC', 90000.0) if prices else 90000.0
+                collateral = usdt_available * self.max_leverage_risk
+                success = self.bitrue.buy_etf('BTC3L', collateral, price)
+                if success:
+                    result['executed'] = True
+                    result['leverage_used'] = True
+                    result['leverage'] = 3
+                    result['etf'] = 'BTC3L'
+                    result['collateral'] = collateral
+                    result['offensive_trigger'] = 'btc_dip'
+                    print(f"OFFENSIVE: Deploying 3x BTC3L ETF on dip (conf: {btc_dip_signal.get('confidence', 0):.2f})")
+                    return result
 
         # Execute based on action
         if action_type == 'buy' and asset in ['BTC', 'XRP']:

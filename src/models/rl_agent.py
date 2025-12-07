@@ -17,9 +17,12 @@ from portfolio import Portfolio
 class TradingEnv(gym.Env):
     """
     Custom Trading Environment for RL agent.
-    Phase 8: Defensive leverage with volatility penalty.
+    Phase 9: Rebound capture + selective offense.
     Goals: Accumulate BTC (45%), XRP (35%), USDT (20% as collateral)
-    Features: Vol penalty discourages leverage in choppy markets.
+    Features:
+    - Vol penalty discourages leverage in choppy markets
+    - Rebound bonus rewards correctly timed dip-buys
+    - RSI-based offense triggers in greed regime
     """
 
     def __init__(self, data_dict, initial_balance=None):
@@ -34,9 +37,9 @@ class TradingEnv(gym.Env):
         # Actions: 0-2 BTC (buy/hold/sell), 3-5 XRP, 6-8 USDT (park/hold/deploy)
         self.action_space = spaces.Discrete(9)
 
-        # Phase 8: Extended observations with volatility features
-        # 4 features per symbol + 3 portfolio + 2 volatility features
-        n_features = len(self.symbols) * 4 + 3 + 2
+        # Phase 9: Extended observations with volatility + RSI features
+        # 4 features per symbol + 3 portfolio + 2 volatility + 2 RSI features
+        n_features = len(self.symbols) * 4 + 3 + 4
         self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(n_features,), dtype=np.float32)
 
         self.current_step = 0
@@ -51,6 +54,11 @@ class TradingEnv(gym.Env):
         # Phase 8: Volatility tracking
         self.current_volatility = 0.0
         self.vol_high_threshold = 0.05  # ATR% above this = high vol
+        self.vol_low_threshold = 0.02   # ATR% below this = greed/calm
+
+        # Phase 9: RSI tracking for rebound detection
+        self.current_rsi = {'XRP': 50.0, 'BTC': 50.0}
+        self.rsi_oversold = 30  # RSI below this = oversold dip
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
@@ -59,7 +67,24 @@ class TradingEnv(gym.Env):
         self.margin_positions = {'BTC': 0.0, 'XRP': 0.0}
         self.margin_entries = {'BTC': 0.0, 'XRP': 0.0}
         self.current_volatility = 0.0
+        self.current_rsi = {'XRP': 50.0, 'BTC': 50.0}
         return self._get_obs(), {}
+
+    def _calculate_rsi(self, close_prices, period=14):
+        """Calculate RSI indicator."""
+        if len(close_prices) < period + 1:
+            return 50.0
+
+        deltas = np.diff(close_prices[-period-1:])
+        gains = np.where(deltas > 0, deltas, 0)
+        losses = np.where(deltas < 0, -deltas, 0)
+
+        avg_gain = np.mean(gains) if len(gains) > 0 else 0
+        avg_loss = np.mean(losses) if len(losses) > 0 else 0.001
+
+        rs = avg_gain / avg_loss
+        rsi = 100 - (100 / (1 + rs))
+        return rsi
 
     def _calculate_atr_pct(self, df, period=14):
         """Calculate ATR as percentage of price."""
@@ -120,6 +145,16 @@ class TradingEnv(gym.Env):
         self.current_volatility = avg_volatility
         obs.append(avg_volatility)  # Current volatility
         obs.append(1.0 if avg_volatility > self.vol_high_threshold else 0.0)  # High vol flag
+
+        # Phase 9: Add RSI features for rebound detection
+        for sym in self.symbols:
+            df = self.data[sym]
+            if self.current_step < len(df):
+                close_prices = df['close'].iloc[:self.current_step+1].values
+                rsi = self._calculate_rsi(close_prices)
+                asset = sym.split('/')[0]
+                self.current_rsi[asset] = rsi
+                obs.append(rsi / 100.0)  # Normalized RSI (0-1)
 
         return np.array(obs, dtype=np.float32)
 
@@ -228,8 +263,29 @@ class TradingEnv(gym.Env):
             # Penalize holding leveraged positions during high volatility
             vol_penalty = self.current_volatility * 2.0
 
-        # Combined reward: base + strong alignment + USDT safety + margin - vol penalty
-        reward = base_reward + 3.0 * alignment_score + usdt_bonus + margin_pnl - vol_penalty
+        # Phase 9: Rebound bonus - reward correctly timed dip-buys
+        rebound_bonus = 0.0
+        action_is_buy = (action % 3 == 0) and (action // 3 < 2)  # BTC or XRP buy
+
+        # Low volatility + buy = greed regime offense (massive bonus)
+        if self.current_volatility < self.vol_low_threshold and action_is_buy:
+            rebound_bonus += 5.0  # Massive bonus for correctly timed offense
+
+        # RSI oversold + buy = dip confirmation synergy
+        if action_is_buy:
+            asset = 'BTC' if action < 3 else 'XRP'
+            asset_rsi = self.current_rsi.get(asset, 50)
+            if asset_rsi < self.rsi_oversold:
+                rebound_bonus += 3.0  # LSTM dip confirmation synergy
+            elif asset_rsi < 40:  # Moderately oversold
+                rebound_bonus += 1.0
+
+        # Deploy action (8) during low vol = aggressive offense bonus
+        if action == 8 and self.current_volatility < self.vol_low_threshold:
+            rebound_bonus += 4.0  # Reward deploying leverage in calm dips
+
+        # Combined reward: base + alignment + USDT safety + margin + rebound - vol penalty
+        reward = base_reward + 3.0 * alignment_score + usdt_bonus + margin_pnl + rebound_bonus - vol_penalty
 
         done = self.current_step >= self.max_steps
         truncated = False
