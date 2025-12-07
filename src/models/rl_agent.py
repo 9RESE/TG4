@@ -24,8 +24,10 @@ class TradingEnv(gym.Env):
         self.symbols = list(data_dict.keys())
         self.initial_balance = initial_balance or {'USDT': 1000.0, 'XRP': 500.0}
 
-        # Actions: 0=hold, 1=buy_small, 2=buy_large, 3=sell_small, 4=sell_large for each asset
-        # Simplified: 9 actions (3 assets x 3 actions: buy/hold/sell)
+        # Target allocation weights - heavily biased toward accumulation goals
+        self.targets = {'BTC': 0.4, 'XRP': 0.3, 'RLUSD': 0.2, 'USDT': 0.05, 'USDC': 0.05}
+
+        # Actions: 0-2 BTC (buy/hold/sell), 3-5 XRP, 6-8 RLUSD
         self.action_space = spaces.Discrete(9)
 
         # Observations: prices, volumes, portfolio weights, momentum indicators
@@ -104,17 +106,32 @@ class TradingEnv(gym.Env):
 
         self.current_step += 1
 
-        # Calculate reward (focus on accumulation + total value)
+        # Calculate reward with heavy bias toward target allocation
         new_value = self.portfolio.get_total_usd(prices)
-        value_reward = (new_value - prev_value) / prev_value if prev_value > 0 else 0
+        total = max(new_value, 1.0)
 
-        # Bonus for holding target assets (BTC, XRP, RLUSD)
-        accumulation_bonus = 0
+        # Base reward: portfolio return
+        base_reward = (new_value / 1000.0) - 1.0
+
+        # Alignment reward: how close are we to target allocation?
+        # Higher reward for matching target weights
+        alignment_score = 0.0
+        for asset, target_weight in self.targets.items():
+            asset_value = self.portfolio.balances.get(asset, 0) * prices.get(asset, 1.0)
+            current_weight = asset_value / total
+            # Score based on how close to target (max 1.0 per asset if at target)
+            alignment_score += min(current_weight, target_weight)
+
+        # Accumulation bonus: extra reward for holding BTC/XRP/RLUSD above initial
+        accumulation_bonus = 0.0
         for asset in ['BTC', 'XRP', 'RLUSD']:
-            if self.portfolio.balances.get(asset, 0) > self.initial_balance.get(asset, 0):
-                accumulation_bonus += 0.001
+            current = self.portfolio.balances.get(asset, 0)
+            initial = self.initial_balance.get(asset, 0)
+            if current > initial:
+                accumulation_bonus += 0.005 * (current - initial) / max(initial, 1)
 
-        reward = value_reward + accumulation_bonus
+        # Combined reward: base return + heavy alignment bias + accumulation
+        reward = base_reward + 2.0 * alignment_score + accumulation_bonus
 
         done = self.current_step >= self.max_steps
         truncated = False

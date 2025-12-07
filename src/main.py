@@ -16,6 +16,7 @@ from strategies.rebalancer import rebalance
 from risk_manager import RiskManager
 from executor import Executor
 from ensemble import Ensemble
+from orchestrator import RLOrchestrator
 import yaml
 import time
 
@@ -113,7 +114,7 @@ def main():
 
         # Fetch initial data for ensemble
         print("Fetching initial market data...")
-        symbols = ['XRP/USDT', 'BTC/USDT']
+        symbols = ['XRP/USDT', 'BTC/USDT', 'RLUSD/USDT']
         data = {}
         for sym in symbols:
             df = fetcher.fetch_ohlcv('kraken', sym, '1h', 500)
@@ -123,6 +124,16 @@ def main():
 
         # Initialize ensemble strategy
         ensemble = Ensemble(data, portfolio)
+
+        # Initialize RL Orchestrator (uses trained model if available)
+        orchestrator = RLOrchestrator(portfolio, data)
+        rl_enabled = orchestrator.enabled
+        if rl_enabled:
+            print("\n[RL ORCHESTRATOR] Enabled - using trained PPO model")
+            print(f"  Target allocation: {orchestrator.get_target_allocation()}")
+        else:
+            print("\n[RL ORCHESTRATOR] Disabled - no trained model found")
+            print("  Run 'python main.py --mode train-rl --timesteps 500000' to train")
 
         loop_count = 0
         last_data_refresh = time.time()
@@ -136,7 +147,7 @@ def main():
 
                 # Fetch current prices
                 prices = {'USDT': 1.0, 'USDC': 1.0, 'RLUSD': 1.0}
-                for sym in ['XRP/USDT', 'BTC/USDT']:
+                for sym in ['XRP/USDT', 'BTC/USDT', 'RLUSD/USDT']:
                     p = fetcher.get_best_price(sym)
                     if p:
                         base = sym.split('/')[0]
@@ -148,6 +159,19 @@ def main():
                 total_value = portfolio.get_total_usd(prices)
                 print(f"\nPortfolio Value: ${total_value:.2f}")
                 print(f"Holdings: {portfolio}")
+
+                # Show allocation vs targets
+                if rl_enabled:
+                    current_alloc = orchestrator.get_current_allocation(prices)
+                    targets = orchestrator.get_target_allocation()
+                    alignment = orchestrator.get_alignment_score(prices)
+                    print(f"\nAllocation (target in brackets):")
+                    for asset in ['BTC', 'XRP', 'RLUSD', 'USDT']:
+                        curr = current_alloc.get(asset, 0) * 100
+                        tgt = targets.get(asset, 0) * 100
+                        status = "✓" if abs(curr - tgt) < 5 else "↓" if curr < tgt else "↑"
+                        print(f"  {asset}: {curr:.1f}% [{tgt:.0f}%] {status}")
+                    print(f"  Alignment Score: {alignment:.2f}/1.0")
 
                 # Refresh data every 30 minutes
                 if time.time() - last_data_refresh > 1800:
@@ -166,8 +190,17 @@ def main():
                 print(f"  Arb:  {signal['signals']['arb']:.2f}")
                 print(f"  Rebal: {signal['signals']['rebalance']:.2f}")
 
-                # Execute based on signal
-                if signal['action'] == 'long_xrp' and signal['confidence'] > 0.5:
+                # RL Orchestrator decision (if enabled and every other loop)
+                if rl_enabled and loop_count % 2 == 0:
+                    print(f"\n[RL DECISION]")
+                    rl_result = orchestrator.decide_and_execute(prices)
+                    print(f"  Action: {rl_result['asset']} {rl_result['action_type']}")
+                    if rl_result['executed']:
+                        print(f"  Executed: {rl_result.get('amount', 0):.4f} @ {rl_result.get('leverage', 1.0)}x")
+                    orchestrator.update_env_step()
+
+                # Ensemble-based execution (fallback or complement to RL)
+                elif signal['action'] == 'long_xrp' and signal['confidence'] > 0.5:
                     xrp_price = prices.get('XRP', 2.0)
                     usdt_available = portfolio.balances.get('USDT', 0)
                     if usdt_available > 50:  # Min $50 trade
@@ -199,6 +232,9 @@ def main():
                     print("\nTrade History:")
                     for trade in executor.trade_log[-10:]:  # Last 10 trades
                         print(f"  {trade['timestamp']}: {trade['side'].upper()} {trade['amount']:.4f} {trade['symbol']} @ {trade['price']:.4f}")
+                if rl_enabled:
+                    final_alignment = orchestrator.get_alignment_score(prices)
+                    print(f"\nFinal RL Alignment Score: {final_alignment:.2f}/1.0")
                 break
 
 if __name__ == "__main__":
