@@ -1,11 +1,12 @@
 import pandas as pd
 from typing import Dict
+from yield_manager import YieldManager
 
 
 class Portfolio:
     """
     Portfolio manager for BTC, XRP, USDT holdings.
-    Phase 12: Added real USDT yield accrual from Kraken/Bitrue lending.
+    Phase 13: Integrated YieldManager for real rate simulation.
     """
 
     def __init__(self, starting_balances: Dict[str, float]):
@@ -20,7 +21,8 @@ class Portfolio:
         # Margin positions: {asset: {'size': x, 'entry': y, 'leverage': z, 'direction': 'long/short'}}
         self.margin_positions = {}
 
-        # Phase 12: USDT yield tracking
+        # Phase 13: YieldManager integration
+        self.yield_manager = YieldManager()
         self.total_yield_earned = 0.0
         self.yield_history = []
 
@@ -164,15 +166,13 @@ class Portfolio:
 
         return liquidated
 
-    # ========== Phase 12: Real USDT Yield Accrual ==========
+    # ========== Phase 13: YieldManager Integration ==========
 
-    def apply_usdt_yield(self, apy: float = 0.06, hours: int = 1):
+    def apply_usdt_yield(self, hours: float = 4):
         """
-        Phase 12: Apply realistic USDT yield from Kraken/Bitrue lending.
-        Realistic rates: 4-8% APY flexible lending.
+        Phase 13: Apply USDT yield using YieldManager (6.5% avg APY).
 
         Args:
-            apy: Annual percentage yield (0.06 = 6% APY, realistic Kraken/Bitrue rate)
             hours: Number of hours since last yield application
 
         Returns:
@@ -181,9 +181,8 @@ class Portfolio:
         if 'USDT' not in self.balances or self.balances['USDT'] < 100:
             return 0.0
 
-        # Calculate hourly yield: APY / 365 / 24
-        hourly_rate = apy / 365 / 24
-        yield_earned = self.balances['USDT'] * hourly_rate * hours
+        # Use YieldManager for accurate rate simulation
+        yield_earned = self.yield_manager.accrue(self.balances['USDT'], hours)
 
         # Apply yield
         self.update('USDT', yield_earned)
@@ -192,15 +191,26 @@ class Portfolio:
             'timestamp': pd.Timestamp.now(),
             'yield': yield_earned,
             'balance': self.balances['USDT'],
-            'apy': apy
+            'apy': self.yield_manager.avg_rate
         })
 
         return yield_earned
 
     def get_yield_stats(self) -> Dict:
-        """Get yield statistics."""
+        """Get yield statistics including YieldManager stats."""
+        manager_stats = self.yield_manager.get_stats()
         return {
             'total_yield_earned': self.total_yield_earned,
             'yield_transactions': len(self.yield_history),
-            'avg_yield_per_tx': self.total_yield_earned / max(len(self.yield_history), 1)
+            'avg_yield_per_tx': self.total_yield_earned / max(len(self.yield_history), 1),
+            'kraken_rate': manager_stats['kraken_rate'],
+            'bitrue_rate': manager_stats['bitrue_rate'],
+            'avg_rate': manager_stats['avg_rate']
         }
+
+    def accrue_yield_now(self, hours: float = 4):
+        """
+        Phase 13: Convenience method to accrue yield in loops.
+        Call this every iteration to compound yield.
+        """
+        return self.apply_usdt_yield(hours)

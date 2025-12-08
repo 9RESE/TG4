@@ -1,6 +1,6 @@
 """
 RL Orchestrator - Master controller for RL-driven trading decisions
-Phase 12: Bear Profit Flip - Paired Shorts + Real Yield + Live Prep
+Phase 13: Yield-Max + Opportunistic Shorts + Real Rate Pull + Live Launch
 """
 import numpy as np
 from models.rl_agent import TradingEnv, load_rl_agent
@@ -16,13 +16,14 @@ from risk_manager import RiskManager
 
 class RLOrchestrator:
     """
-    Phase 12: Orchestrates RL agent with paired bear mode for profit flip.
-    - Paired bear mode: Grind-down = park + yield, Overbought rip = short
-    - Real USDT yield accrual (6% APY from Kraken/Bitrue lending)
+    Phase 13: Yield-Max + Opportunistic Shorts + Real Rate Pull.
+    - Amplified yield via YieldManager (6.5% avg APY Kraken/Bitrue)
+    - Opportunistic shorts on rare rips (RSI >70 in grind-downs)
+    - Higher precision short rewards for downside capture
     - Aggressive offense in greed regime (low ATR + RSI oversold)
     - LSTM dip detector must align for leverage execution
     - Up to 10x Kraken / 3x Bitrue ETFs on confirmed dips
-    - Phase 12: Yield compounding + selective shorts for flat/positive bears
+    - Phase 13: Target -4% or better via yield + selective short PNL
     """
 
     # Confidence threshold for leverage trades
@@ -32,15 +33,16 @@ class RLOrchestrator:
     OFFENSIVE_CONFIDENCE_THRESHOLD = 0.85  # Higher bar for offense
     GREED_VOL_THRESHOLD = 0.02  # ATR% below this = greed regime
 
-    # Phase 12: Paired bear mode thresholds
-    BEAR_CONFIDENCE_THRESHOLD = 0.78  # Lowered from 0.80 for more shorts
+    # Phase 13: Opportunistic short thresholds
+    BEAR_CONFIDENCE_THRESHOLD = 0.75  # Lowered for opportunistic shorts
     BEAR_VOL_THRESHOLD = 0.04  # ATR% above this = bear regime
     RSI_OVERBOUGHT = 65  # Overbought detection for shorts
     RSI_SHORT_EXIT = 40  # Auto-exit shorts when RSI drops below this
     RSI_RIP_THRESHOLD = 72  # Phase 12: Overbought rip threshold (short aggressively)
+    RSI_OPPORTUNISTIC = 70  # Phase 13: Opportunistic short in grind-downs
+    OPPORTUNISTIC_VOL_THRESHOLD = 0.045  # ATR% for opportunistic shorts
 
-    # Phase 12: Real USDT yield settings (Kraken/Bitrue lending rates)
-    USDT_YIELD_APY = 0.06  # 6% APY realistic rate
+    # Phase 13: YieldManager integration (6.5% avg APY)
     YIELD_HOURS_PER_STEP = 4  # Apply yield every 4 hours in backtest
 
     def __init__(self, portfolio: Portfolio, data_dict: dict):
@@ -311,14 +313,51 @@ class RLOrchestrator:
             self.mode = 'defensive'
             result['mode'] = 'defensive'
 
-        # Phase 12: Apply real USDT yield when in defensive/park mode
+        # Phase 13: Apply real USDT yield using YieldManager when in defensive/park mode
         if self.mode == 'defensive' and usdt_available > 100:
-            yield_earned = self.portfolio.apply_usdt_yield(
-                apy=self.USDT_YIELD_APY,
-                hours=self.YIELD_HOURS_PER_STEP
-            )
+            yield_earned = self.portfolio.accrue_yield_now(hours=self.YIELD_HOURS_PER_STEP)
             if yield_earned > 0:
                 result['yield_earned'] = yield_earned
+
+        # Phase 13: Opportunistic shorts in grind-down mode (RSI >70 spike)
+        if (result.get('bear_type') == 'grind_down' and
+            usdt_available > 100 and
+            self.current_volatility > self.OPPORTUNISTIC_VOL_THRESHOLD):
+
+            # Check for RSI >70 opportunistic spike
+            xrp_opportunistic = xrp_rsi > self.RSI_OPPORTUNISTIC and xrp_above_vwap
+            btc_opportunistic = btc_rsi > self.RSI_OPPORTUNISTIC and btc_above_vwap
+
+            if xrp_opportunistic and self.short_positions['XRP'] is None:
+                # Conservative 4x opportunistic short
+                price = prices.get('XRP', 2.0) if prices else 2.0
+                collateral = usdt_available * 0.04  # 4% risk for opportunistic
+                success = self.kraken.open_short('XRP', collateral, price, leverage=4)
+                if success:
+                    self.short_positions['XRP'] = {'entry': price, 'collateral': collateral, 'leverage': 4}
+                    result['executed'] = True
+                    result['leverage_used'] = True
+                    result['leverage'] = 4
+                    result['short'] = 'XRP'
+                    result['bear_type'] = 'opportunistic_short'
+                    print(f"OPPORTUNISTIC SHORT: 4x XRP @ ${price:.4f} (RSI: {xrp_rsi:.1f}, ATR: {self.current_volatility*100:.2f}%)")
+                    return result
+
+            elif btc_opportunistic and self.short_positions['BTC'] is None:
+                # Use Bitrue 3x ETF for opportunistic BTC short
+                price = prices.get('BTC', 90000.0) if prices else 90000.0
+                collateral = usdt_available * 0.04  # 4% risk
+                success = self.bitrue.buy_etf('BTC3S', collateral, price)
+                if success:
+                    self.short_positions['BTC'] = {'entry': price, 'collateral': collateral, 'leverage': 3}
+                    result['executed'] = True
+                    result['leverage_used'] = True
+                    result['leverage'] = 3
+                    result['etf'] = 'BTC3S'
+                    result['short'] = 'BTC'
+                    result['bear_type'] = 'opportunistic_short'
+                    print(f"OPPORTUNISTIC SHORT: 3x BTC3S @ ${price:.2f} (RSI: {btc_rsi:.1f}, ATR: {self.current_volatility*100:.2f}%)")
+                    return result
 
         # Phase 12: Bear mode - paired shorts (rip = aggressive, selective = conservative)
         if self.mode == 'bear' and usdt_available > 100:

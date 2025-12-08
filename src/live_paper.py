@@ -1,7 +1,11 @@
 """
-Phase 9: Live Paper Trading Loop
-Production deployment with CSV logging and equity tracking.
-Runs every 15 minutes, logs trades and portfolio state.
+Phase 13: Live Paper Trading Loop
+Yield-Max + Opportunistic Shorts + Real Rate Pull + Live Launch.
+Runs every 10 minutes, logs trades, yield, and portfolio state.
+Features:
+- Real USDT yield logging (6.5% avg APY)
+- Opportunistic short tracking
+- Enhanced equity curve with yield metrics
 """
 import os
 import sys
@@ -69,14 +73,14 @@ class LivePaperTrader:
                     'rsi_xrp', 'rsi_btc', 'portfolio_value', 'pnl'
                 ])
 
-        # Equity curve
+        # Equity curve - Phase 13: Added yield tracking
         if not self.equity_file.exists():
             with open(self.equity_file, 'w', newline='') as f:
                 writer = csv.writer(f)
                 writer.writerow([
                     'timestamp', 'portfolio_value', 'usdt', 'xrp', 'btc',
                     'xrp_price', 'btc_price', 'mode', 'volatility',
-                    'margin_exposure', 'etf_exposure'
+                    'margin_exposure', 'etf_exposure', 'yield_earned', 'total_yield'
                 ])
 
     def _handle_shutdown(self, signum, frame):
@@ -135,7 +139,7 @@ class LivePaperTrader:
             ])
 
     def log_equity(self, prices: dict, result: dict = None):
-        """Log portfolio state to equity_curve.csv."""
+        """Log portfolio state to equity_curve.csv. Phase 13: Added yield tracking."""
         timestamp = datetime.now().isoformat()
         portfolio_value = self.portfolio.get_total_usd(prices)
 
@@ -146,6 +150,10 @@ class LivePaperTrader:
             for pos in self.orchestrator.kraken.positions.values():
                 margin_exposure += pos.get('size', 0) * prices.get('XRP', 2.0)
             etf_exposure = sum(self.orchestrator.bitrue.etf_holdings.values())
+
+        # Phase 13: Get yield stats
+        yield_earned = result.get('yield_earned', 0) if result else 0
+        total_yield = self.portfolio.total_yield_earned if hasattr(self.portfolio, 'total_yield_earned') else 0
 
         with open(self.equity_file, 'a', newline='') as f:
             writer = csv.writer(f)
@@ -160,7 +168,9 @@ class LivePaperTrader:
                 result.get('mode', 'unknown') if result else 'init',
                 result.get('volatility', 0) if result else 0,
                 margin_exposure,
-                etf_exposure
+                etf_exposure,
+                yield_earned,
+                total_yield
             ])
 
     def run_cycle(self) -> dict:
@@ -226,22 +236,23 @@ class LivePaperTrader:
             self.log_equity(prices)
             return {'action': 'observe', 'reason': 'model_not_loaded'}
 
-    def run(self, interval_minutes: int = 15, max_cycles: int = None):
+    def run(self, interval_minutes: int = 10, max_cycles: int = None):
         """
         Run the live paper trading loop.
 
         Args:
-            interval_minutes: Minutes between cycles (default 15)
+            interval_minutes: Minutes between cycles (default 10)
             max_cycles: Maximum cycles to run (None = infinite)
         """
         self.running = True
         interval_seconds = interval_minutes * 60
 
         print(f"\n{'#'*60}")
-        print(f"# PHASE 9: LIVE PAPER TRADING")
+        print(f"# PHASE 13: YIELD-MAX LIVE PAPER TRADING")
         print(f"# Interval: {interval_minutes} minutes")
         print(f"# Max cycles: {max_cycles or 'infinite'}")
         print(f"# Logs: {self.log_dir}")
+        print(f"# Yield APY: 6.5% avg (Kraken 6% + Bitrue 7%)")
         print(f"{'#'*60}")
 
         # Initial data fetch and equity log
@@ -276,7 +287,7 @@ class LivePaperTrader:
         self._print_summary()
 
     def _print_summary(self):
-        """Print trading session summary."""
+        """Print trading session summary. Phase 13: Added yield summary."""
         print(f"\n{'='*60}")
         print("SESSION SUMMARY")
         print(f"{'='*60}")
@@ -297,6 +308,12 @@ class LivePaperTrader:
                     print(f"Total P&L:     ${pnl:+.2f} ({roi:+.1f}%)")
                     print(f"Max value:     ${df['portfolio_value'].max():.2f}")
                     print(f"Min value:     ${df['portfolio_value'].min():.2f}")
+
+                    # Phase 13: Yield summary
+                    if 'total_yield' in df.columns:
+                        total_yield = df['total_yield'].iloc[-1]
+                        print(f"\n--- YIELD STATS ---")
+                        print(f"Total yield:   ${total_yield:.4f}")
             except Exception as e:
                 print(f"Could not load summary: {e}")
 
@@ -315,9 +332,9 @@ def main():
     """Main entry point for live paper trading."""
     import argparse
 
-    parser = argparse.ArgumentParser(description='Phase 9: Live Paper Trading')
-    parser.add_argument('--interval', type=int, default=15,
-                        help='Minutes between cycles (default: 15)')
+    parser = argparse.ArgumentParser(description='Phase 13: Yield-Max Live Paper Trading')
+    parser.add_argument('--interval', type=int, default=10,
+                        help='Minutes between cycles (default: 10)')
     parser.add_argument('--cycles', type=int, default=None,
                         help='Max cycles (default: infinite)')
     parser.add_argument('--usdt', type=float, default=1000.0,
