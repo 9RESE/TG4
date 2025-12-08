@@ -1,12 +1,15 @@
 """
-Ensemble Backtest - Phase 19
+Ensemble Backtest - Phase 20
 Backtest full ensemble on broader date range.
 
-Phase 19 Features:
+Phase 20 Features:
+- 5 strategies: MeanReversion, PairTrading, Defensive, MATrendFollow, XRPBTCLeadLag
 - Early trail stops (+1.5% activation, 1.2% trail) - tighter for shallow chop
 - Partial profit-taking (50% at +3% unrealized)
 - Dynamic yield from config (7% APY realistic Dec 2025)
 - Dynamic sizing based on ADX regime detection
+- MA Trend: 9-period SMA trend following with 2-candle confirmation
+- Lead-Lag: Correlation-aware BTC/XRP following
 """
 import sys
 import os
@@ -39,7 +42,7 @@ def run_ensemble_backtest(start_date: str = '2025-12-01', end_date: str = '2025-
         end_date: End date in YYYY-MM-DD format
     """
     print("=" * 70)
-    print("ENSEMBLE BACKTEST - Phase 19")
+    print("ENSEMBLE BACKTEST - Phase 20")
     print(f"Period: {start_date} to {end_date}")
     print("=" * 70)
 
@@ -274,7 +277,9 @@ def run_ensemble_backtest(start_date: str = '2025-12-01', end_date: str = '2025-
             'timestamp': ts,
             'mean_reversion': ensemble.weights['mean_reversion'],
             'pair_trading': ensemble.weights['pair_trading'],
-            'defensive': ensemble.weights['defensive']
+            'defensive': ensemble.weights['defensive'],
+            'ma_trend': ensemble.weights.get('ma_trend', 0),
+            'leadlag': ensemble.weights.get('leadlag', 0)
         })
 
         # Track signals
@@ -332,9 +337,9 @@ def run_ensemble_backtest(start_date: str = '2025-12-01', end_date: str = '2025-
     regime_df = pd.DataFrame(regime_history)
     regime_counts = regime_df['regime'].value_counts()
 
-    # Weight stats
+    # Weight stats - Phase 20: 5 strategies
     weight_df = pd.DataFrame(weight_history)
-    avg_weights = weight_df[['mean_reversion', 'pair_trading', 'defensive']].mean()
+    avg_weights = weight_df[['mean_reversion', 'pair_trading', 'defensive', 'ma_trend', 'leadlag']].mean()
 
     # Signal breakdown
     signal_df = pd.DataFrame(signal_history)
@@ -414,8 +419,8 @@ def run_ensemble_backtest(start_date: str = '2025-12-01', end_date: str = '2025-
 
 if __name__ == '__main__':
     import argparse
-    parser = argparse.ArgumentParser(description='Ensemble Backtest - Phase 19')
-    parser.add_argument('--start', default='2025-11-25', help='Start date YYYY-MM-DD')
+    parser = argparse.ArgumentParser(description='Ensemble Backtest - Phase 20')
+    parser.add_argument('--start', default='2025-12-08', help='Start date YYYY-MM-DD')
     parser.add_argument('--end', default='2025-12-08', help='End date YYYY-MM-DD')
     args = parser.parse_args()
 

@@ -1,16 +1,18 @@
 """
 RL Orchestrator - Master controller for RL-driven trading decisions
-Phase 16: RL Ensemble Orchestrator + Dynamic Strategy Weighting
+Phase 20: RL Ensemble Orchestrator + Dynamic Strategy Weighting
 
 This file contains:
 1. RLOrchestrator - The original live trading controller (unchanged)
 2. StrategyRouter - Modular strategy router using BaseStrategy interface
-3. EnsembleOrchestrator - RL-driven multi-strategy weighting (NEW Phase 16)
+3. EnsembleOrchestrator - RL-driven multi-strategy weighting
 
-The EnsembleOrchestrator dynamically weights:
+Phase 20 Strategies:
 - MeanReversionVWAP: High weight in chop ($2.00-2.20 range)
 - XRPBTCPairTrading: Activate on XRP news / BTC weakness divergence
 - DefensiveYield: Max weight during high ATR + fear
+- MATrendFollow: 9-period SMA trend following (NEW Phase 20)
+- XRPBTCLeadLag: Correlation-aware BTC/XRP following (NEW Phase 20)
 
 Target: Unbeatable multi-strategy orchestration with accumulation bias.
 """
@@ -988,12 +990,14 @@ class StrategyRouter:
 
 class EnsembleOrchestrator:
     """
-    Phase 16: RL Ensemble Orchestrator with Dynamic Strategy Weighting.
+    Phase 20: RL Ensemble Orchestrator with Dynamic Strategy Weighting.
 
     Uses a trained RL agent to dynamically weight signals from multiple strategies:
     - MeanReversionVWAP: Dominates in XRP $2.00-2.20 chop (high weight in tight range)
     - XRPBTCPairTrading: Activates on XRP/BTC divergence (news, alt-season)
     - DefensiveYield: Max weight during high ATR + fear (grind-down protection)
+    - MATrendFollow: 9-period SMA trend following (NEW Phase 20)
+    - XRPBTCLeadLag: Correlation-aware BTC/XRP following (NEW Phase 20)
 
     The RL agent learns optimal weights based on:
     - Regime features: ATR, correlation, RSI, VWAP deviation
@@ -1017,6 +1021,8 @@ class EnsembleOrchestrator:
         from strategies.mean_reversion_vwap import MeanReversionVWAP
         from strategies.xrp_btc_pair_trading import XRPBTCPairTrading
         from strategies.defensive_yield import DefensiveYield
+        from strategies.ma_trend_follow import MATrendFollow
+        from strategies.xrp_btc_leadlag import XRPBTCLeadLag
         from strategies.strategy_factory import StrategyFactory
 
         self.portfolio = portfolio
@@ -1033,15 +1039,27 @@ class EnsembleOrchestrator:
         # Load strategy factory for configs
         self.factory = StrategyFactory(config_path)
 
-        # Initialize all three strategies using factory's config
+        # Initialize all strategies using factory's config
         mr_config = self.factory.config.get('strategies', {}).get('mean_reversion_vwap', {})
         pt_config = self.factory.config.get('strategies', {}).get('xrp_btc_pair_trading', {})
         dy_config = self.factory.config.get('strategies', {}).get('defensive_yield', {})
 
+        # Phase 20: New strategy configs
+        ma_config = self.factory.config.get('strategies', {}).get('ma_trend_follow', {
+            'ma_period': 9, 'confirm': 2, 'exit_opposite': True,
+            'symbols': ['BTC/USDT', 'XRP/USDT']
+        })
+        ll_config = self.factory.config.get('strategies', {}).get('xrp_btc_leadlag', {
+            'corr_high': 0.8, 'corr_low': 0.6, 'lookback': 50,
+            'btc_lead_bars': 3, 'min_btc_move': 0.01
+        })
+
         self.strategies = {
             'mean_reversion': MeanReversionVWAP(mr_config),
             'pair_trading': XRPBTCPairTrading(pt_config),
-            'defensive': DefensiveYield(dy_config)
+            'defensive': DefensiveYield(dy_config),
+            'ma_trend': MATrendFollow(ma_config),
+            'leadlag': XRPBTCLeadLag(ll_config)
         }
 
         # Initialize strategies with portfolio and exchanges
@@ -1061,10 +1079,13 @@ class EnsembleOrchestrator:
         self.current_rsi = {'XRP': 50.0, 'BTC': 50.0}
 
         # Strategy weights (RL agent updates these)
+        # Phase 20: 5 strategies now
         self.weights = {
-            'mean_reversion': 0.4,
-            'pair_trading': 0.2,
-            'defensive': 0.4
+            'mean_reversion': 0.25,
+            'pair_trading': 0.15,
+            'defensive': 0.25,
+            'ma_trend': 0.20,
+            'leadlag': 0.15
         }
 
         # Performance tracking
@@ -1233,10 +1254,10 @@ class EnsembleOrchestrator:
             features.get('zscore_pair', 0)
         ])
 
-        # Strategy signals (9: 3 strategies x 3 features each)
-        for name in ['mean_reversion', 'pair_trading', 'defensive']:
+        # Strategy signals (15: 5 strategies x 3 features each) - Phase 20
+        for name in ['mean_reversion', 'pair_trading', 'defensive', 'ma_trend', 'leadlag']:
             signal = signals.get(name, {})
-            action_map = {'hold': 0, 'buy': 1, 'sell': -1,
+            action_map = {'hold': 0, 'buy': 1, 'sell': -1, 'short': -1,
                           'short_xrp_long_btc': -0.5, 'long_xrp_short_btc': 0.5,
                           'close': 0, 'close_pair': 0}
             action_val = action_map.get(signal.get('action', 'hold'), 0)
@@ -1245,9 +1266,9 @@ class EnsembleOrchestrator:
 
             obs.extend([action_val, confidence, leverage])
 
-        # Current weights (3)
-        for name in ['mean_reversion', 'pair_trading', 'defensive']:
-            obs.append(self.weights.get(name, 0.33))
+        # Current weights (5) - Phase 20
+        for name in ['mean_reversion', 'pair_trading', 'defensive', 'ma_trend', 'leadlag']:
+            obs.append(self.weights.get(name, 0.20))
 
         # Portfolio state (3)
         prices = self._current_prices()
@@ -1275,14 +1296,24 @@ class EnsembleOrchestrator:
 
         try:
             action, _ = self.rl_agent.predict(obs, deterministic=True)
-            # Check if action is array-like with 3 elements (continuous) or scalar (discrete)
+            # Check if action is array-like with 5 elements (continuous) or scalar (discrete)
             action_arr = np.atleast_1d(action)
-            if action_arr.shape[0] == 3:
-                # Continuous: 3D softmax weights
+            if action_arr.shape[0] == 5:
+                # Continuous: 5D softmax weights - Phase 20
                 weights = np.exp(action_arr) / np.sum(np.exp(action_arr))
                 self.weights['mean_reversion'] = float(weights[0])
                 self.weights['pair_trading'] = float(weights[1])
                 self.weights['defensive'] = float(weights[2])
+                self.weights['ma_trend'] = float(weights[3])
+                self.weights['leadlag'] = float(weights[4])
+            elif action_arr.shape[0] == 3:
+                # Legacy 3D model - distribute to 5 strategies
+                weights = np.exp(action_arr) / np.sum(np.exp(action_arr))
+                self.weights['mean_reversion'] = float(weights[0]) * 0.8
+                self.weights['pair_trading'] = float(weights[1]) * 0.8
+                self.weights['defensive'] = float(weights[2]) * 0.8
+                self.weights['ma_trend'] = float(weights[0]) * 0.1 + float(weights[1]) * 0.1
+                self.weights['leadlag'] = float(weights[1]) * 0.1 + float(weights[2]) * 0.1
             else:
                 # Discrete action: map to weight presets
                 self._apply_weight_preset(int(action_arr[0]))
@@ -1291,29 +1322,33 @@ class EnsembleOrchestrator:
             self._update_weights_rule_based()
 
     def _apply_weight_preset(self, action_id: int):
-        """Apply weight preset from discrete action."""
+        """Apply weight preset from discrete action. Phase 20: 5 strategies."""
         presets = {
-            0: {'mean_reversion': 0.7, 'pair_trading': 0.1, 'defensive': 0.2},  # Chop focus
-            1: {'mean_reversion': 0.2, 'pair_trading': 0.6, 'defensive': 0.2},  # Divergence focus
-            2: {'mean_reversion': 0.1, 'pair_trading': 0.1, 'defensive': 0.8},  # Fear/defensive
-            3: {'mean_reversion': 0.4, 'pair_trading': 0.3, 'defensive': 0.3},  # Balanced
-            4: {'mean_reversion': 0.5, 'pair_trading': 0.4, 'defensive': 0.1},  # Aggressive
+            0: {'mean_reversion': 0.5, 'pair_trading': 0.05, 'defensive': 0.15, 'ma_trend': 0.20, 'leadlag': 0.10},  # Chop focus
+            1: {'mean_reversion': 0.15, 'pair_trading': 0.4, 'defensive': 0.10, 'ma_trend': 0.15, 'leadlag': 0.20},  # Divergence focus
+            2: {'mean_reversion': 0.10, 'pair_trading': 0.05, 'defensive': 0.60, 'ma_trend': 0.15, 'leadlag': 0.10},  # Fear/defensive
+            3: {'mean_reversion': 0.25, 'pair_trading': 0.15, 'defensive': 0.25, 'ma_trend': 0.20, 'leadlag': 0.15},  # Balanced
+            4: {'mean_reversion': 0.20, 'pair_trading': 0.20, 'defensive': 0.05, 'ma_trend': 0.30, 'leadlag': 0.25},  # Aggressive/trend
+            5: {'mean_reversion': 0.15, 'pair_trading': 0.10, 'defensive': 0.15, 'ma_trend': 0.35, 'leadlag': 0.25},  # MA trend focus
         }
-        preset = presets.get(action_id % 5, presets[3])
+        preset = presets.get(action_id % 6, presets[3])
         self.weights.update(preset)
 
     def _update_weights_rule_based(self):
-        """Rule-based weight updates when RL agent unavailable."""
+        """Rule-based weight updates when RL agent unavailable. Phase 20: 5 strategies."""
         regime = self.current_regime
 
         if regime == 'chop':
-            self.weights = {'mean_reversion': 0.7, 'pair_trading': 0.1, 'defensive': 0.2}
+            # Mean reversion dominates, MA trend for breakouts
+            self.weights = {'mean_reversion': 0.5, 'pair_trading': 0.05, 'defensive': 0.15, 'ma_trend': 0.20, 'leadlag': 0.10}
         elif regime == 'divergence':
-            self.weights = {'mean_reversion': 0.2, 'pair_trading': 0.6, 'defensive': 0.2}
+            # Pair trading + leadlag for correlation plays
+            self.weights = {'mean_reversion': 0.15, 'pair_trading': 0.35, 'defensive': 0.10, 'ma_trend': 0.15, 'leadlag': 0.25}
         elif regime == 'fear':
-            self.weights = {'mean_reversion': 0.1, 'pair_trading': 0.1, 'defensive': 0.8}
-        else:
-            self.weights = {'mean_reversion': 0.4, 'pair_trading': 0.3, 'defensive': 0.3}
+            # Defensive + MA trend for exits
+            self.weights = {'mean_reversion': 0.10, 'pair_trading': 0.05, 'defensive': 0.55, 'ma_trend': 0.20, 'leadlag': 0.10}
+        else:  # neutral - trending conditions favor MA + leadlag
+            self.weights = {'mean_reversion': 0.20, 'pair_trading': 0.15, 'defensive': 0.15, 'ma_trend': 0.30, 'leadlag': 0.20}
 
     def _weighted_vote(self, signals: dict) -> dict:
         """Combine strategy signals using weighted voting with BTC momentum bias."""
