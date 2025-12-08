@@ -1,18 +1,27 @@
 """
 XRP/BTC Pair Trading Strategy
-Phase 15: Modular Strategy Factory
+Phase 15: Enhanced with statsmodels for proper cointegration
 
 Statistical arbitrage exploiting cointegration between XRP and BTC.
-Uses OLS regression to calculate hedge ratio and z-score for entry/exit.
+Uses OLS regression for dynamic hedge ratio and z-score for entry/exit.
+Optimized for Kraken XRP/BTC pair with 10x margin.
 
 Entry: Z-score > 2 (short XRP, long BTC) or Z-score < -2 (long XRP, short BTC)
-Exit: Z-score returns to 0 (mean reversion)
+Exit: Z-score crosses 0.5 (mean reversion) or |Z| > 3 (stop loss)
 
-Target: 10x leverage on Kraken for both legs.
+Target: Low-drawdown alpha with Sharpe > 1.5
 """
-import numpy as np
 import pandas as pd
+import numpy as np
 from typing import Dict, Any, Optional, Tuple
+
+try:
+    import statsmodels.api as sm
+    from statsmodels.tsa.stattools import coint, adfuller
+    STATSMODELS_AVAILABLE = True
+except ImportError:
+    STATSMODELS_AVAILABLE = False
+    print("Warning: statsmodels not installed. Using fallback OLS.")
 
 import sys
 import os
@@ -23,27 +32,22 @@ from strategies.base_strategy import BaseStrategy
 
 class XRPBTCPairTrading(BaseStrategy):
     """
-    Pair Trading Strategy using XRP and BTC cointegration.
+    Pair Trading Strategy using XRP and BTC cointegration with statsmodels.
 
     The strategy:
-    1. Calculates hedge ratio via OLS regression
+    1. Calculates hedge ratio via OLS regression (statsmodels)
     2. Computes spread: XRP - hedge_ratio * BTC
     3. Calculates z-score of spread
-    4. Trades mean reversion of spread
+    4. Trades mean reversion of spread with 10x leverage
 
     Entry:
-    - Z-score > 2: Short XRP, Long BTC (spread too high)
-    - Z-score < -2: Long XRP, Short BTC (spread too low)
+    - Z-score > entry_z: Short XRP, Long BTC (spread too high)
+    - Z-score < -entry_z: Long XRP, Short BTC (spread too low)
 
     Exit:
-    - Z-score crosses 0 (mean reverted)
-    - Stop at Z-score > 3 or < -3 (divergence)
+    - |Z-score| < exit_z (mean reverted)
+    - |Z-score| > 3 (stop - divergence)
     """
-
-    # Z-score thresholds
-    ZSCORE_ENTRY = 2.0
-    ZSCORE_EXIT = 0.0
-    ZSCORE_STOP = 3.0
 
     def __init__(self, config: Dict[str, Any]):
         super().__init__(config)
@@ -51,86 +55,91 @@ class XRPBTCPairTrading(BaseStrategy):
         self.name = 'xrp_btc_pair_trading'
         self.xrp_symbol = config.get('xrp_symbol', 'XRP/USDT')
         self.btc_symbol = config.get('btc_symbol', 'BTC/USDT')
+        self.lookback = config.get('lookback', 168)  # 1 week of 1h candles
+        self.entry_z = config.get('entry_z', 2.0)
+        self.exit_z = config.get('exit_z', 0.5)
+        self.stop_z = config.get('stop_z', 3.0)
         self.max_leverage = config.get('max_leverage', 10)
         self.position_size_pct = config.get('position_size_pct', 0.10)
-        self.lookback_period = config.get('lookback_period', 100)
 
         # State
         self.hedge_ratio = None
         self.spread_mean = None
         self.spread_std = None
         self.current_position = None  # 'long_xrp' or 'short_xrp' or None
+        self.last_zscore = 0.0
+        self.cointegration_pvalue = None
 
-    def _calculate_hedge_ratio(self, xrp_prices: np.ndarray, btc_prices: np.ndarray) -> float:
+    def update_hedge_ratio(self, data: Dict[str, pd.DataFrame]) -> bool:
         """
-        Calculate hedge ratio using OLS regression.
-        XRP = alpha + beta * BTC + epsilon
-        hedge_ratio = beta
+        Update hedge ratio using OLS regression from statsmodels.
+
+        Returns True if hedge ratio was successfully updated.
         """
-        if len(xrp_prices) < 20 or len(btc_prices) < 20:
-            return 0.0
+        if self.xrp_symbol not in data or self.btc_symbol not in data:
+            return False
 
-        # Simple OLS without statsmodels dependency
-        # beta = Cov(X, Y) / Var(X)
-        btc_mean = np.mean(btc_prices)
-        xrp_mean = np.mean(xrp_prices)
+        xrp_df = data[self.xrp_symbol]
+        btc_df = data[self.btc_symbol]
 
-        covariance = np.sum((btc_prices - btc_mean) * (xrp_prices - xrp_mean))
-        variance = np.sum((btc_prices - btc_mean) ** 2)
+        if len(xrp_df) < self.lookback or len(btc_df) < self.lookback:
+            return False
 
-        if variance == 0:
-            return 0.0
+        xrp_prices = xrp_df['close'].iloc[-self.lookback:].values
+        btc_prices = btc_df['close'].iloc[-self.lookback:].values
 
-        beta = covariance / variance
-        return beta
+        if STATSMODELS_AVAILABLE:
+            # Use statsmodels OLS for proper regression
+            btc_with_const = sm.add_constant(btc_prices)
+            model = sm.OLS(xrp_prices, btc_with_const).fit()
+            self.hedge_ratio = model.params[1]  # Beta coefficient
 
-    def _calculate_spread(self, xrp_prices: np.ndarray, btc_prices: np.ndarray) -> np.ndarray:
-        """Calculate spread: XRP - hedge_ratio * BTC"""
-        if self.hedge_ratio is None or self.hedge_ratio == 0:
-            self.hedge_ratio = self._calculate_hedge_ratio(xrp_prices, btc_prices)
+            # Optional: Test cointegration
+            try:
+                _, pvalue, _ = coint(xrp_prices, btc_prices)
+                self.cointegration_pvalue = pvalue
+            except Exception:
+                self.cointegration_pvalue = None
+        else:
+            # Fallback: Simple OLS without statsmodels
+            btc_mean = np.mean(btc_prices)
+            xrp_mean = np.mean(xrp_prices)
+            covariance = np.sum((btc_prices - btc_mean) * (xrp_prices - xrp_mean))
+            variance = np.sum((btc_prices - btc_mean) ** 2)
+            self.hedge_ratio = covariance / variance if variance > 0 else 0
 
-        if self.hedge_ratio == 0:
-            return np.zeros(len(xrp_prices))
+        return self.hedge_ratio is not None and self.hedge_ratio != 0
 
-        spread = xrp_prices - self.hedge_ratio * btc_prices
-        return spread
+    def _calculate_spread_zscore(self, data: Dict[str, pd.DataFrame]) -> Tuple[float, float]:
+        """
+        Calculate current spread and z-score.
 
-    def _calculate_zscore(self, spread: np.ndarray, period: int = 20) -> float:
-        """Calculate z-score of current spread."""
-        if len(spread) < period:
-            return 0.0
+        Returns (spread, zscore)
+        """
+        xrp_df = data[self.xrp_symbol]
+        btc_df = data[self.btc_symbol]
 
-        recent_spread = spread[-period:]
-        self.spread_mean = np.mean(recent_spread)
-        self.spread_std = np.std(recent_spread)
+        # Current prices
+        xrp_price = xrp_df['close'].iloc[-1]
+        btc_price = btc_df['close'].iloc[-1]
+
+        # Current spread
+        current_spread = xrp_price - self.hedge_ratio * btc_price
+
+        # Historical spread for z-score
+        xrp_hist = xrp_df['close'].iloc[-self.lookback:].values
+        btc_hist = btc_df['close'].iloc[-self.lookback:].values
+        historical_spread = xrp_hist - self.hedge_ratio * btc_hist
+
+        self.spread_mean = np.mean(historical_spread)
+        self.spread_std = np.std(historical_spread)
 
         if self.spread_std == 0:
-            return 0.0
+            return current_spread, 0.0
 
-        current_spread = spread[-1]
         zscore = (current_spread - self.spread_mean) / self.spread_std
 
-        return zscore
-
-    def _check_cointegration(self, xrp_prices: np.ndarray, btc_prices: np.ndarray) -> Tuple[bool, float]:
-        """
-        Simple cointegration check using correlation of returns.
-        For production, use proper ADF test on residuals.
-        """
-        if len(xrp_prices) < 30:
-            return False, 0.0
-
-        # Calculate returns
-        xrp_returns = np.diff(xrp_prices) / xrp_prices[:-1]
-        btc_returns = np.diff(btc_prices) / btc_prices[:-1]
-
-        # Correlation of returns
-        correlation = np.corrcoef(xrp_returns, btc_returns)[0, 1]
-
-        # Simple heuristic: high correlation suggests cointegration potential
-        is_cointegrated = abs(correlation) > 0.5
-
-        return is_cointegrated, correlation
+        return current_spread, zscore
 
     def generate_signals(self, data: Dict[str, pd.DataFrame]) -> Dict[str, Any]:
         """
@@ -150,44 +159,37 @@ class XRPBTCPairTrading(BaseStrategy):
         xrp_df = data[self.xrp_symbol]
         btc_df = data[self.btc_symbol]
 
-        if len(xrp_df) < self.lookback_period or len(btc_df) < self.lookback_period:
+        if len(xrp_df) < self.lookback or len(btc_df) < self.lookback:
             return {
                 'action': 'hold',
                 'symbol': 'PAIR',
                 'size': 0.0,
                 'leverage': 1,
                 'confidence': 0.0,
-                'reason': 'Insufficient data for lookback'
+                'reason': f'Insufficient data for lookback ({self.lookback})'
             }
 
-        # Get price arrays (last lookback_period candles)
-        xrp_prices = xrp_df['close'].values[-self.lookback_period:]
-        btc_prices = btc_df['close'].values[-self.lookback_period:]
-
-        # Check cointegration
-        is_cointegrated, correlation = self._check_cointegration(xrp_prices, btc_prices)
-
-        if not is_cointegrated:
-            return {
-                'action': 'hold',
-                'symbol': 'PAIR',
-                'size': 0.0,
-                'leverage': 1,
-                'confidence': 0.0,
-                'reason': f'Weak cointegration (corr: {correlation:.2f})',
-                'indicators': {
-                    'correlation': correlation,
-                    'is_cointegrated': False
+        # Update hedge ratio if needed
+        if self.hedge_ratio is None:
+            if not self.update_hedge_ratio(data):
+                return {
+                    'action': 'hold',
+                    'symbol': 'PAIR',
+                    'size': 0.0,
+                    'leverage': 1,
+                    'confidence': 0.0,
+                    'reason': 'Could not calculate hedge ratio'
                 }
-            }
 
-        # Calculate hedge ratio and spread
-        self.hedge_ratio = self._calculate_hedge_ratio(xrp_prices, btc_prices)
-        spread = self._calculate_spread(xrp_prices, btc_prices)
-        zscore = self._calculate_zscore(spread)
+        # Calculate spread and z-score
+        spread, zscore = self._calculate_spread_zscore(data)
+        self.last_zscore = zscore
 
-        current_xrp_price = xrp_df['close'].iloc[-1]
-        current_btc_price = btc_df['close'].iloc[-1]
+        xrp_price = xrp_df['close'].iloc[-1]
+        btc_price = btc_df['close'].iloc[-1]
+
+        # Check cointegration strength (if available)
+        coint_ok = self.cointegration_pvalue is None or self.cointegration_pvalue < 0.05
 
         # Default signal
         signal = {
@@ -196,43 +198,41 @@ class XRPBTCPairTrading(BaseStrategy):
             'size': 0.0,
             'leverage': 1,
             'confidence': 0.0,
-            'reason': f'Z-score {zscore:.2f} within range',
+            'reason': f'Z-score {zscore:.2f} within range [{-self.entry_z:.1f}, {self.entry_z:.1f}]',
             'indicators': {
                 'hedge_ratio': self.hedge_ratio,
                 'zscore': zscore,
-                'spread': spread[-1] if len(spread) > 0 else 0,
+                'spread': spread,
                 'spread_mean': self.spread_mean,
                 'spread_std': self.spread_std,
-                'correlation': correlation,
-                'xrp_price': current_xrp_price,
-                'btc_price': current_btc_price
+                'xrp_price': xrp_price,
+                'btc_price': btc_price,
+                'cointegration_pvalue': self.cointegration_pvalue,
+                'current_position': self.current_position
             }
         }
 
-        # Check for stop loss (divergence)
-        if self.current_position and abs(zscore) > self.ZSCORE_STOP:
+        # STOP LOSS: Close on extreme divergence
+        if self.current_position and abs(zscore) > self.stop_z:
             signal = {
-                'action': 'close',
+                'action': 'close_pair',
                 'symbol': 'PAIR',
                 'size': self.position_size_pct,
                 'leverage': 1,
                 'confidence': 0.9,
-                'reason': f'STOP: Z-score {zscore:.2f} exceeds {self.ZSCORE_STOP}',
+                'reason': f'STOP: Z-score {zscore:.2f} exceeds {self.stop_z}',
                 'indicators': signal['indicators'],
                 'close_position': self.current_position
             }
             self.current_position = None
             return signal
 
-        # Check for exit (mean reversion complete)
+        # EXIT: Mean reversion complete
         if self.current_position:
-            should_exit = (
-                (self.current_position == 'long_xrp' and zscore > self.ZSCORE_EXIT) or
-                (self.current_position == 'short_xrp' and zscore < self.ZSCORE_EXIT)
-            )
+            should_exit = abs(zscore) < self.exit_z
             if should_exit:
                 signal = {
-                    'action': 'close',
+                    'action': 'close_pair',
                     'symbol': 'PAIR',
                     'size': self.position_size_pct,
                     'leverage': 1,
@@ -244,40 +244,40 @@ class XRPBTCPairTrading(BaseStrategy):
                 self.current_position = None
                 return signal
 
-        # Entry signals (only if no current position)
-        if self.current_position is None:
-            # Z-score > 2: Spread too high, short XRP / long BTC
-            if zscore > self.ZSCORE_ENTRY:
-                confidence = min(0.5 + (zscore - self.ZSCORE_ENTRY) * 0.2, 0.95)
+        # ENTRY signals (only if no current position and cointegration is ok)
+        if self.current_position is None and coint_ok:
+            # Z-score > entry_z: Spread too high, short XRP / long BTC
+            if zscore > self.entry_z:
+                confidence = min(0.5 + (zscore - self.entry_z) * 0.15, 0.95)
                 signal = {
                     'action': 'short_xrp_long_btc',
                     'symbol': 'PAIR',
                     'size': self.position_size_pct,
                     'leverage': self.max_leverage,
                     'confidence': confidence,
-                    'reason': f'ENTRY: Z-score {zscore:.2f} > {self.ZSCORE_ENTRY} - Short XRP, Long BTC',
+                    'reason': f'ENTRY: Z-score {zscore:.2f} > {self.entry_z} - Short XRP, Long BTC',
                     'indicators': signal['indicators'],
                     'legs': [
                         {'symbol': self.xrp_symbol, 'side': 'short', 'size': self.position_size_pct},
-                        {'symbol': self.btc_symbol, 'side': 'long', 'size': self.position_size_pct * self.hedge_ratio}
+                        {'symbol': self.btc_symbol, 'side': 'long', 'size': self.position_size_pct * abs(self.hedge_ratio)}
                     ]
                 }
                 self.current_position = 'short_xrp'
 
-            # Z-score < -2: Spread too low, long XRP / short BTC
-            elif zscore < -self.ZSCORE_ENTRY:
-                confidence = min(0.5 + (abs(zscore) - self.ZSCORE_ENTRY) * 0.2, 0.95)
+            # Z-score < -entry_z: Spread too low, long XRP / short BTC
+            elif zscore < -self.entry_z:
+                confidence = min(0.5 + (abs(zscore) - self.entry_z) * 0.15, 0.95)
                 signal = {
                     'action': 'long_xrp_short_btc',
                     'symbol': 'PAIR',
                     'size': self.position_size_pct,
                     'leverage': self.max_leverage,
                     'confidence': confidence,
-                    'reason': f'ENTRY: Z-score {zscore:.2f} < -{self.ZSCORE_ENTRY} - Long XRP, Short BTC',
+                    'reason': f'ENTRY: Z-score {zscore:.2f} < -{self.entry_z} - Long XRP, Short BTC',
                     'indicators': signal['indicators'],
                     'legs': [
                         {'symbol': self.xrp_symbol, 'side': 'long', 'size': self.position_size_pct},
-                        {'symbol': self.btc_symbol, 'side': 'short', 'size': self.position_size_pct * self.hedge_ratio}
+                        {'symbol': self.btc_symbol, 'side': 'short', 'size': self.position_size_pct * abs(self.hedge_ratio)}
                     ]
                 }
                 self.current_position = 'long_xrp'
@@ -292,13 +292,7 @@ class XRPBTCPairTrading(BaseStrategy):
         if data is None:
             return True
 
-        if self.xrp_symbol in data and self.btc_symbol in data:
-            xrp_prices = data[self.xrp_symbol]['close'].values
-            btc_prices = data[self.btc_symbol]['close'].values
-            self.hedge_ratio = self._calculate_hedge_ratio(xrp_prices, btc_prices)
-            return True
-
-        return False
+        return self.update_hedge_ratio(data)
 
     def get_status(self) -> Dict[str, Any]:
         """Get strategy status."""
@@ -308,11 +302,14 @@ class XRPBTCPairTrading(BaseStrategy):
             'btc_symbol': self.btc_symbol,
             'hedge_ratio': self.hedge_ratio,
             'current_position': self.current_position,
-            'lookback_period': self.lookback_period,
+            'last_zscore': self.last_zscore,
+            'cointegration_pvalue': self.cointegration_pvalue,
+            'lookback': self.lookback,
+            'statsmodels_available': STATSMODELS_AVAILABLE,
             'thresholds': {
-                'entry': self.ZSCORE_ENTRY,
-                'exit': self.ZSCORE_EXIT,
-                'stop': self.ZSCORE_STOP
+                'entry_z': self.entry_z,
+                'exit_z': self.exit_z,
+                'stop_z': self.stop_z
             }
         })
         return base_status

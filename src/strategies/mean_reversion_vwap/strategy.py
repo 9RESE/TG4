@@ -1,16 +1,27 @@
 """
 Mean Reversion VWAP Strategy
-Phase 15: Modular Strategy Factory
+Phase 15: Enhanced with ta library for proper VWAP/RSI
 
 Trades mean reversion around VWAP using RSI as confirmation.
+Optimized for XRP/USDT chop in $2.00-2.10 range (Dec 2025).
+
 - Long: RSI < 30 AND price > 0.5% below VWAP
 - Short: RSI > 70 AND price > 0.5% above VWAP
+- 5x leverage on Kraken for XRP
 
-Target: XRP/USDT with 5x leverage on Kraken.
+Target: Capture 5-15% in choppy conditions.
 """
-import numpy as np
 import pandas as pd
+import numpy as np
 from typing import Dict, Any, Optional
+
+try:
+    import ta.volume as vol
+    import ta.momentum as mom
+    TA_AVAILABLE = True
+except ImportError:
+    TA_AVAILABLE = False
+    print("Warning: ta library not installed. Using fallback calculations.")
 
 import sys
 import os
@@ -21,91 +32,71 @@ from strategies.base_strategy import BaseStrategy
 
 class MeanReversionVWAP(BaseStrategy):
     """
-    Mean Reversion Strategy using VWAP and RSI.
+    Mean Reversion Strategy using VWAP and RSI from ta library.
 
     Entry Conditions:
-    - LONG: RSI < 30 (oversold) AND price < VWAP * 0.995 (0.5% below)
-    - SHORT: RSI > 70 (overbought) AND price > VWAP * 1.005 (0.5% above)
+    - LONG: RSI < 30 (oversold) AND price < VWAP * (1 - dev_threshold)
+    - SHORT: RSI > 70 (overbought) AND price > VWAP * (1 + dev_threshold)
 
     Exit Conditions:
     - Price reverts to VWAP (take profit)
-    - RSI crosses 50 (mean reversion complete)
-    - Stop loss at 2% adverse move
+    - Stop loss at 5% adverse move
     """
-
-    # Thresholds
-    RSI_OVERSOLD = 30
-    RSI_OVERBOUGHT = 70
-    RSI_NEUTRAL = 50
-    VWAP_DEVIATION_LONG = 0.995   # 0.5% below VWAP
-    VWAP_DEVIATION_SHORT = 1.005  # 0.5% above VWAP
 
     def __init__(self, config: Dict[str, Any]):
         super().__init__(config)
 
         self.name = 'mean_reversion_vwap'
         self.symbol = config.get('symbol', 'XRP/USDT')
+        self.vwap_window = config.get('vwap_window', 14)
+        self.rsi_window = config.get('rsi_window', 14)
+        self.dev_threshold = config.get('dev_threshold', 0.005)  # 0.5%
         self.max_leverage = config.get('max_leverage', 5)
-        self.position_size_pct = config.get('position_size_pct', 0.10)
-        self.vwap_period = config.get('vwap_period', 20)
-        self.rsi_period = config.get('rsi_period', 14)
+        self.long_size = config.get('long_size', 0.12)
+        self.short_size = config.get('short_size', 0.10)
 
-    def _calculate_vwap(self, df: pd.DataFrame, period: int = 20) -> float:
-        """Calculate Volume Weighted Average Price."""
-        if len(df) < period:
-            return 0.0
+    def _calculate_vwap_ta(self, df: pd.DataFrame) -> pd.Series:
+        """Calculate VWAP using ta library."""
+        if TA_AVAILABLE and len(df) >= self.vwap_window:
+            vwap_indicator = vol.VolumeWeightedAveragePrice(
+                high=df['high'],
+                low=df['low'],
+                close=df['close'],
+                volume=df['volume'],
+                window=self.vwap_window
+            )
+            return vwap_indicator.volume_weighted_average_price()
+        else:
+            # Fallback calculation
+            return self._calculate_vwap_fallback(df)
 
-        recent = df.tail(period)
-        typical_price = (recent['high'] + recent['low'] + recent['close']) / 3
-        volume = recent['volume']
-
-        if volume.sum() == 0:
-            return 0.0
-
-        vwap = (typical_price * volume).sum() / volume.sum()
+    def _calculate_vwap_fallback(self, df: pd.DataFrame) -> pd.Series:
+        """Fallback VWAP calculation without ta library."""
+        typical_price = (df['high'] + df['low'] + df['close']) / 3
+        vwap = (typical_price * df['volume']).rolling(self.vwap_window).sum() / \
+               df['volume'].rolling(self.vwap_window).sum()
         return vwap
 
-    def _calculate_rsi(self, df: pd.DataFrame, period: int = 14) -> float:
-        """Calculate Relative Strength Index."""
-        if len(df) < period + 1:
-            return 50.0
-
-        close = df['close'].values
-        deltas = np.diff(close[-(period + 1):])
-        gains = np.where(deltas > 0, deltas, 0)
-        losses = np.where(deltas < 0, -deltas, 0)
-
-        avg_gain = np.mean(gains) if len(gains) > 0 else 0
-        avg_loss = np.mean(losses) if len(losses) > 0 else 0.001
-
-        rs = avg_gain / avg_loss
-        rsi = 100 - (100 / (1 + rs))
-
-        return rsi
-
-    def _calculate_atr(self, df: pd.DataFrame, period: int = 14) -> float:
-        """Calculate Average True Range."""
-        if len(df) < period + 1:
-            return 0.0
-
-        high = df['high'].values
-        low = df['low'].values
-        close = df['close'].values
-
-        tr_list = []
-        for i in range(1, len(high)):
-            tr = max(
-                high[i] - low[i],
-                abs(high[i] - close[i-1]),
-                abs(low[i] - close[i-1])
+    def _calculate_rsi_ta(self, df: pd.DataFrame) -> pd.Series:
+        """Calculate RSI using ta library."""
+        if TA_AVAILABLE and len(df) >= self.rsi_window:
+            rsi_indicator = mom.RSIIndicator(
+                close=df['close'],
+                window=self.rsi_window
             )
-            tr_list.append(tr)
+            return rsi_indicator.rsi()
+        else:
+            # Fallback calculation
+            return self._calculate_rsi_fallback(df)
 
-        if len(tr_list) < period:
-            return 0.0
-
-        atr = np.mean(tr_list[-period:])
-        return atr
+    def _calculate_rsi_fallback(self, df: pd.DataFrame) -> pd.Series:
+        """Fallback RSI calculation without ta library."""
+        delta = df['close'].diff()
+        gain = (delta.where(delta > 0, 0)).rolling(window=self.rsi_window).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(window=self.rsi_window).mean()
+        rs = gain / loss.replace(0, 0.001)
+        rsi = 100 - (100 / (1 + rs))
+        return rsi
 
     def generate_signals(self, data: Dict[str, pd.DataFrame]) -> Dict[str, Any]:
         """
@@ -121,28 +112,44 @@ class MeanReversionVWAP(BaseStrategy):
                 'reason': f'{self.symbol} not in data'
             }
 
-        df = data[self.symbol]
-        if len(df) < max(self.vwap_period, self.rsi_period) + 1:
+        df = data[self.symbol].copy()
+        min_periods = max(self.vwap_window, self.rsi_window) + 5
+
+        if len(df) < min_periods:
             return {
                 'action': 'hold',
                 'symbol': self.symbol,
                 'size': 0.0,
                 'leverage': 1,
                 'confidence': 0.0,
-                'reason': 'Insufficient data'
+                'reason': f'Insufficient data ({len(df)} < {min_periods})'
             }
 
-        # Calculate indicators
-        vwap = self._calculate_vwap(df, self.vwap_period)
-        rsi = self._calculate_rsi(df, self.rsi_period)
-        current_price = df['close'].iloc[-1]
-        atr = self._calculate_atr(df)
+        # Calculate indicators using ta library
+        df['vwap'] = self._calculate_vwap_ta(df)
+        df['rsi'] = self._calculate_rsi_ta(df)
 
-        # Calculate price deviation from VWAP
-        if vwap > 0:
-            price_to_vwap = current_price / vwap
-        else:
-            price_to_vwap = 1.0
+        latest = df.iloc[-1]
+        prev = df.iloc[-2] if len(df) > 1 else latest
+
+        current_price = latest['close']
+        vwap = latest['vwap']
+        rsi = latest['rsi']
+
+        # Handle NaN
+        if pd.isna(vwap) or pd.isna(rsi):
+            return {
+                'action': 'hold',
+                'symbol': self.symbol,
+                'size': 0.0,
+                'leverage': 1,
+                'confidence': 0.0,
+                'reason': 'Indicators not ready (NaN)',
+                'indicators': {'vwap': vwap, 'rsi': rsi, 'price': current_price}
+            }
+
+        # Calculate deviation from VWAP
+        vwap_deviation = (current_price - vwap) / vwap if vwap > 0 else 0
 
         # Default signal
         signal = {
@@ -156,45 +163,47 @@ class MeanReversionVWAP(BaseStrategy):
                 'vwap': vwap,
                 'rsi': rsi,
                 'price': current_price,
-                'price_to_vwap': price_to_vwap,
-                'atr': atr
+                'vwap_deviation': vwap_deviation,
+                'prev_rsi': prev['rsi'] if not pd.isna(prev['rsi']) else 50
             }
         }
 
-        # Long signal: RSI oversold AND price below VWAP
-        if rsi < self.RSI_OVERSOLD and price_to_vwap < self.VWAP_DEVIATION_LONG:
-            # Confidence based on how extreme the conditions are
-            rsi_score = (self.RSI_OVERSOLD - rsi) / self.RSI_OVERSOLD  # 0-1
-            vwap_score = (self.VWAP_DEVIATION_LONG - price_to_vwap) * 100  # deviation %
-            confidence = min(0.5 + rsi_score * 0.3 + vwap_score * 0.2, 1.0)
+        # Long signal: RSI oversold AND price below VWAP by threshold
+        if rsi < 30 and current_price < vwap * (1 - self.dev_threshold):
+            # Confidence based on extremity
+            rsi_score = (30 - rsi) / 30
+            dev_score = min(abs(vwap_deviation) / self.dev_threshold, 2) / 2
+            confidence = min(0.5 + rsi_score * 0.3 + dev_score * 0.2, 0.95)
 
             signal = {
                 'action': 'buy',
                 'symbol': self.symbol,
-                'size': self.position_size_pct,
+                'asset': 'XRP',
+                'size': self.long_size,
                 'leverage': self.max_leverage,
                 'confidence': confidence,
-                'reason': f'Long: RSI {rsi:.1f} < {self.RSI_OVERSOLD}, price {(price_to_vwap-1)*100:.2f}% vs VWAP',
+                'reason': f'Long: RSI {rsi:.1f} < 30, price {vwap_deviation*100:.2f}% below VWAP',
                 'indicators': signal['indicators'],
-                'stop_loss': current_price * 0.98,  # 2% stop
+                'stop_loss': current_price * 0.95,  # 5% stop
                 'take_profit': vwap  # Target VWAP
             }
 
-        # Short signal: RSI overbought AND price above VWAP
-        elif rsi > self.RSI_OVERBOUGHT and price_to_vwap > self.VWAP_DEVIATION_SHORT:
-            rsi_score = (rsi - self.RSI_OVERBOUGHT) / (100 - self.RSI_OVERBOUGHT)
-            vwap_score = (price_to_vwap - self.VWAP_DEVIATION_SHORT) * 100
-            confidence = min(0.5 + rsi_score * 0.3 + vwap_score * 0.2, 1.0)
+        # Short signal: RSI overbought AND price above VWAP by threshold
+        elif rsi > 70 and current_price > vwap * (1 + self.dev_threshold):
+            rsi_score = (rsi - 70) / 30
+            dev_score = min(abs(vwap_deviation) / self.dev_threshold, 2) / 2
+            confidence = min(0.5 + rsi_score * 0.3 + dev_score * 0.2, 0.95)
 
             signal = {
-                'action': 'sell',  # Short
+                'action': 'sell',
                 'symbol': self.symbol,
-                'size': self.position_size_pct * 0.8,  # Slightly smaller shorts
+                'asset': 'XRP',
+                'size': self.short_size,
                 'leverage': self.max_leverage,
                 'confidence': confidence,
-                'reason': f'Short: RSI {rsi:.1f} > {self.RSI_OVERBOUGHT}, price +{(price_to_vwap-1)*100:.2f}% vs VWAP',
+                'reason': f'Short: RSI {rsi:.1f} > 70, price +{vwap_deviation*100:.2f}% above VWAP',
                 'indicators': signal['indicators'],
-                'stop_loss': current_price * 1.02,  # 2% stop
+                'stop_loss': current_price * 1.05,  # 5% stop
                 'take_profit': vwap  # Target VWAP
             }
 
@@ -209,13 +218,9 @@ class MeanReversionVWAP(BaseStrategy):
         base_status = super().get_status()
         base_status.update({
             'symbol': self.symbol,
-            'vwap_period': self.vwap_period,
-            'rsi_period': self.rsi_period,
-            'thresholds': {
-                'rsi_oversold': self.RSI_OVERSOLD,
-                'rsi_overbought': self.RSI_OVERBOUGHT,
-                'vwap_long': self.VWAP_DEVIATION_LONG,
-                'vwap_short': self.VWAP_DEVIATION_SHORT
-            }
+            'vwap_window': self.vwap_window,
+            'rsi_window': self.rsi_window,
+            'dev_threshold': self.dev_threshold,
+            'ta_available': TA_AVAILABLE
         })
         return base_status
