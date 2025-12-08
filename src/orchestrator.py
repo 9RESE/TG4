@@ -1060,7 +1060,7 @@ class EnsembleOrchestrator:
         # Phase 21: Scalper config
         sc_config = self.factory.config.get('strategies', {}).get('intraday_scalper', {
             'bb_period': 20, 'bb_std': 2.0, 'rsi_period': 14,
-            'daily_vol_pct': 3.0, 'rsi_oversold': 30, 'rsi_overbought': 70,
+            'daily_vol_pct': 1.0, 'rsi_oversold': 30, 'rsi_overbought': 70,
             'scalp_target_pct': 0.01, 'scalp_stop_pct': 0.005,
             'symbols': ['BTC/USDT', 'XRP/USDT']
         })

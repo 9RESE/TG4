@@ -30,7 +30,7 @@ class IntraDayScalper(BaseStrategy):
         self.bb_period = config.get('bb_period', 20)
         self.bb_std = config.get('bb_std', 2.0)
         self.rsi_period = config.get('rsi_period', 14)
-        self.vol_threshold = config.get('daily_vol_pct', 3.0)  # ATR >3% activates
+        self.vol_threshold = config.get('daily_vol_pct', 1.0)  # ATR >1% activates (hourly timeframe)
         self.rsi_oversold = config.get('rsi_oversold', 30)
         self.rsi_overbought = config.get('rsi_overbought', 70)
         self.scalp_target_pct = config.get('scalp_target_pct', 0.01)  # 1% quick target

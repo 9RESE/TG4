@@ -106,7 +106,7 @@ class EnsembleEnv(gym.Env):
 
         # Regime tracking
         self.current_regime = 'neutral'
-        self.current_volatility = 0.03
+        self.current_volatility = 0.01  # Hourly ATR threshold
         self.current_correlation = 0.8
         self.current_rsi = {'XRP': 50.0, 'BTC': 50.0}
 
@@ -378,7 +378,7 @@ class EnsembleEnv(gym.Env):
         # Phase 21: Scalper signals (BB squeeze + high volatility)
         if 'XRP/USDT' in self.data:
             xrp_df = self.data['XRP/USDT']
-            if self.current_step >= 25 and self.current_volatility > 0.03:  # ATR >3% activates
+            if self.current_step >= 25 and self.current_volatility > 0.01:  # ATR >1% activates (hourly)
                 close_prices = xrp_df['close'].iloc[:self.current_step+1].values
                 # Simplified Bollinger Bands
                 if len(close_prices) >= 20:
@@ -498,7 +498,7 @@ class EnsembleEnv(gym.Env):
         obs.append(self.current_volatility)
 
         # Scalp active flag (1.0 if high vol + scalper has signal)
-        scalper_active = 1.0 if (self.current_volatility > 0.03 and
+        scalper_active = 1.0 if (self.current_volatility > 0.01 and
                                   signals.get('scalper', {}).get('action', 'hold') != 'hold') else 0.0
         obs.append(scalper_active)
 
@@ -629,7 +629,7 @@ class EnsembleEnv(gym.Env):
 
         # Phase 21: Scalp bonus for high volatility captures
         scalp_bonus = 0.0
-        if self.current_volatility > 0.03 and self.weights.get('scalper', 0) > 0.3:
+        if self.current_volatility > 0.01 and self.weights.get('scalper', 0) > 0.3:
             scalp_signal = self.strategy_signals.get('scalper', {})
             if scalp_signal.get('action', 'hold') != 'hold':
                 scalp_bonus = 1.5  # Reward scalper activation during high vol
