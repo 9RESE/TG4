@@ -1033,10 +1033,10 @@ class EnsembleOrchestrator:
         # Load strategy factory for configs
         self.factory = StrategyFactory(config_path)
 
-        # Initialize all three strategies
-        mr_config = self.factory.get_strategy_config('mean_reversion_vwap') or {}
-        pt_config = self.factory.get_strategy_config('xrp_btc_pair_trading') or {}
-        dy_config = self.factory.get_strategy_config('defensive_yield') or {}
+        # Initialize all three strategies using factory's config
+        mr_config = self.factory.config.get('strategies', {}).get('mean_reversion_vwap', {})
+        pt_config = self.factory.config.get('strategies', {}).get('xrp_btc_pair_trading', {})
+        dy_config = self.factory.config.get('strategies', {}).get('defensive_yield', {})
 
         self.strategies = {
             'mean_reversion': MeanReversionVWAP(mr_config),
@@ -1275,16 +1275,17 @@ class EnsembleOrchestrator:
 
         try:
             action, _ = self.rl_agent.predict(obs, deterministic=True)
-            # Action is 3D softmax weights (from EnsembleEnv)
-            if hasattr(action, '__len__') and len(action) == 3:
-                # Ensure weights sum to 1
-                weights = np.exp(action) / np.sum(np.exp(action))
+            # Check if action is array-like with 3 elements (continuous) or scalar (discrete)
+            action_arr = np.atleast_1d(action)
+            if action_arr.shape[0] == 3:
+                # Continuous: 3D softmax weights
+                weights = np.exp(action_arr) / np.sum(np.exp(action_arr))
                 self.weights['mean_reversion'] = float(weights[0])
                 self.weights['pair_trading'] = float(weights[1])
                 self.weights['defensive'] = float(weights[2])
             else:
                 # Discrete action: map to weight presets
-                self._apply_weight_preset(int(action))
+                self._apply_weight_preset(int(action_arr[0]))
         except Exception as e:
             print(f"EnsembleOrchestrator: RL prediction error - {e}")
             self._update_weights_rule_based()
@@ -1315,9 +1316,17 @@ class EnsembleOrchestrator:
             self.weights = {'mean_reversion': 0.4, 'pair_trading': 0.3, 'defensive': 0.3}
 
     def _weighted_vote(self, signals: dict) -> dict:
-        """Combine strategy signals using weighted voting."""
+        """Combine strategy signals using weighted voting with BTC momentum bias."""
         # Score each possible action
         action_scores = {}
+
+        # Phase 17: BTC momentum bias - slight overweight in neutral/grind-up regimes
+        btc_rsi = self.current_rsi.get('BTC', 50)
+        btc_momentum_bias = 0.0
+        if self.current_regime == 'neutral' and btc_rsi > 55:
+            btc_momentum_bias = 0.1  # 10% boost to buy actions when BTC strong
+        elif self.current_regime == 'neutral' and btc_rsi < 45:
+            btc_momentum_bias = -0.05  # Slight penalty when BTC weak
 
         for name, signal in signals.items():
             weight = self.weights.get(name, 0.33)
@@ -1326,6 +1335,10 @@ class EnsembleOrchestrator:
 
             # Weight contribution = strategy weight * signal confidence
             contribution = weight * confidence
+
+            # Phase 17: Apply BTC momentum bias to buy signals
+            if action == 'buy' and btc_momentum_bias != 0:
+                contribution *= (1 + btc_momentum_bias)
 
             if action not in action_scores:
                 action_scores[action] = {
@@ -1362,6 +1375,7 @@ class EnsembleOrchestrator:
             'contributing_strategies': [s[0] for s in winning_signals],
             'weights': self.weights.copy(),
             'regime': self.current_regime,
+            'btc_momentum_bias': btc_momentum_bias,
             'indicators': primary_signal.get('indicators', {})
         }
 
@@ -1437,9 +1451,11 @@ class EnsembleOrchestrator:
         asset = symbol.split('/')[0] if '/' in symbol else symbol
         usdt_available = self.portfolio.balances.get('USDT', 0)
 
-        # Confidence gate: Only execute if confidence > 0.5
-        if signal.get('confidence', 0) < 0.5 and action != 'hold':
-            result['reason'] = f"Low confidence ({signal.get('confidence', 0):.2f})"
+        # Phase 17: Regime-based confidence gate
+        # Lower threshold in chop regime for more Mean Reversion entries
+        confidence_threshold = 0.45 if self.current_regime == 'chop' else 0.5
+        if signal.get('confidence', 0) < confidence_threshold and action != 'hold':
+            result['reason'] = f"Low confidence ({signal.get('confidence', 0):.2f} < {confidence_threshold})"
             return result
 
         if action == 'hold':

@@ -1,8 +1,8 @@
 paper_trading: true
 starting_balance:
-  USDT: 1000.0
-  XRP: 500.0
-  BTC: 0.0  # Explicit
+  USDT: 2000.0
+  XRP: 0.0
+  BTC: 0.0  # Phase 17: Start 100% USDT for max yield + opportunistic entries
 
 targets:  # RL/rebalancer allocation targets
   BTC: 0.45

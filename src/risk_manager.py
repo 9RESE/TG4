@@ -1,10 +1,11 @@
 """
-Phase 11: Volatility-Aware Risk Manager
+Phase 18: Volatility-Aware Risk Manager
 Dynamic leverage scaling + fear/greed detection + short position guards
 Phase 11: Lowered short thresholds, 15% max exposure, RSI<40 auto-exit
+Phase 18: Trail stops on winners + regime-based dynamic sizing
 """
 import numpy as np
-from typing import Dict, Optional
+from typing import Dict, Optional, Tuple
 
 
 class RiskManager:
@@ -12,6 +13,7 @@ class RiskManager:
     Risk management with volatility-aware position sizing and leverage scaling.
     Defensive in high-vol periods, aggressive on calm dips.
     Phase 11: Tuned short thresholds, 15% max exposure, RSI<40 auto-exit.
+    Phase 18: Trail stops on winners + regime-based dynamic sizing.
     """
 
     def __init__(self, max_drawdown: float = 0.20, max_leverage: float = 10.0):
@@ -37,6 +39,14 @@ class RiskManager:
         self.short_rsi_exit = 40        # Phase 11: Auto-exit shorts when RSI < 40
         self.short_stop_loss = 0.08     # 8% loss triggers stop loss for shorts
         self.short_take_profit = 0.15   # 15% gain triggers take profit for shorts
+
+        # Phase 18: Trail stop parameters
+        self.trail_activation_pct = 0.02  # Activate trail after +2% unrealized
+        self.trail_distance_pct = 0.015   # 1.5% trail from peak
+        self.trail_floor_pct = 0.95       # Floor at 5% loss from entry
+
+        # Phase 18: ADX trending threshold
+        self.adx_trending_threshold = 25  # ADX > 25 = trending market
 
     def dynamic_leverage(self, volatility: float, base_max: int = 10) -> int:
         """
@@ -364,3 +374,211 @@ class RiskManager:
             'max_exposure': self.max_short_exposure,
             'market_state': 'bear' if can_short else self.market_state
         }
+
+    # ========== Phase 18: Trail Stops + Dynamic Sizing ==========
+
+    def trail_stop(self, entry_price: float, current_price: float,
+                   peak_price: float, trail_pct: float = None) -> Optional[float]:
+        """
+        Phase 18: Calculate trailing stop price for winning position.
+        Activates after +2% unrealized profit, trails 1.5% from peak.
+
+        Args:
+            entry_price: Entry price of position
+            current_price: Current market price
+            peak_price: Highest price seen since entry
+            trail_pct: Trail distance (default 1.5%)
+
+        Returns:
+            float: Trail stop price, or None if trail not active
+        """
+        if trail_pct is None:
+            trail_pct = self.trail_distance_pct
+
+        # Calculate unrealized P&L
+        unrealized_pct = (current_price - entry_price) / entry_price
+
+        # Only activate trail after +2% unrealized
+        if unrealized_pct > self.trail_activation_pct:
+            # Trail stop = peak_price * (1 - trail_distance)
+            trail_stop_price = peak_price * (1 - trail_pct)
+            # Floor: never below entry * 0.95 (max 5% loss from entry)
+            floor_price = entry_price * self.trail_floor_pct
+            return max(trail_stop_price, floor_price)
+
+        return None
+
+    def should_trail_exit(self, entry_price: float, current_price: float,
+                          peak_price: float, side: str = 'long') -> Tuple[bool, str]:
+        """
+        Phase 18: Check if trail stop is hit.
+
+        Args:
+            entry_price: Entry price
+            current_price: Current price
+            peak_price: Peak price since entry (for longs) or trough (for shorts)
+            side: 'long' or 'short'
+
+        Returns:
+            Tuple[bool, str]: (should_exit, reason)
+        """
+        if side == 'long':
+            trail_stop_price = self.trail_stop(entry_price, current_price, peak_price)
+            if trail_stop_price is not None and current_price <= trail_stop_price:
+                profit_pct = (current_price - entry_price) / entry_price * 100
+                return True, f'trail_stop_hit (+{profit_pct:.1f}% locked)'
+        else:
+            # For shorts: profit when price goes down
+            # unrealized_pct = (entry_price - current_price) / entry_price
+            unrealized_pct = (entry_price - current_price) / entry_price
+            if unrealized_pct > self.trail_activation_pct:
+                # Trail from the trough (lowest price = best for shorts)
+                trail_stop_price = peak_price * (1 + self.trail_distance_pct)
+                if current_price >= trail_stop_price:
+                    profit_pct = (entry_price - current_price) / entry_price * 100
+                    return True, f'trail_stop_hit (+{profit_pct:.1f}% locked)'
+
+        return False, 'hold'
+
+    def calculate_adx(self, high: np.ndarray, low: np.ndarray,
+                      close: np.ndarray, period: int = 14) -> float:
+        """
+        Phase 18: Calculate ADX (Average Directional Index) for trend detection.
+        ADX > 25 indicates trending market, < 25 indicates choppy/ranging.
+
+        Args:
+            high: High prices array
+            low: Low prices array
+            close: Close prices array
+            period: ADX period
+
+        Returns:
+            float: ADX value (0-100)
+        """
+        if len(close) < period * 2:
+            return 20.0  # Default to non-trending
+
+        # Calculate +DM and -DM
+        high_diff = np.diff(high)
+        low_diff = np.diff(low)
+
+        plus_dm = np.where((high_diff > low_diff) & (high_diff > 0), high_diff, 0)
+        minus_dm = np.where((low_diff > high_diff) & (low_diff > 0), low_diff, 0)
+
+        # Calculate True Range
+        tr = np.maximum(
+            high[1:] - low[1:],
+            np.maximum(
+                np.abs(high[1:] - close[:-1]),
+                np.abs(low[1:] - close[:-1])
+            )
+        )
+
+        # Smooth with EMA
+        def ema(arr, span):
+            alpha = 2 / (span + 1)
+            result = np.zeros_like(arr)
+            result[0] = arr[0]
+            for i in range(1, len(arr)):
+                result[i] = alpha * arr[i] + (1 - alpha) * result[i-1]
+            return result
+
+        atr = ema(tr[-period*2:], period)
+        plus_di = 100 * ema(plus_dm[-period*2:], period) / np.maximum(atr, 0.0001)
+        minus_di = 100 * ema(minus_dm[-period*2:], period) / np.maximum(atr, 0.0001)
+
+        # Calculate DX and ADX
+        dx = 100 * np.abs(plus_di - minus_di) / np.maximum(plus_di + minus_di, 0.0001)
+        adx = ema(dx, period)
+
+        return float(adx[-1]) if len(adx) > 0 else 20.0
+
+    def detect_regime(self, high: np.ndarray, low: np.ndarray,
+                      close: np.ndarray) -> str:
+        """
+        Phase 18: Detect market regime using ADX and price action.
+
+        Args:
+            high: High prices
+            low: Low prices
+            close: Close prices
+
+        Returns:
+            str: 'chop', 'trending_up', 'trending_down', or 'neutral'
+        """
+        if len(close) < 30:
+            return 'neutral'
+
+        adx = self.calculate_adx(high, low, close)
+
+        # Price direction over last 14 candles
+        recent_change = (close[-1] - close[-14]) / close[-14]
+
+        if adx > self.adx_trending_threshold:
+            # Trending market
+            if recent_change > 0.02:  # +2% in 14 periods
+                return 'trending_up'
+            elif recent_change < -0.02:  # -2% in 14 periods
+                return 'trending_down'
+            else:
+                return 'neutral'
+        else:
+            # Low ADX = choppy/ranging
+            return 'chop'
+
+    def regime_dynamic_size(self, regime: str, base_size: float = 0.12) -> float:
+        """
+        Phase 18: Regime-based dynamic position sizing.
+        Risk more in chop (mean reversion works), less in trending down.
+
+        Args:
+            regime: Market regime ('chop', 'trending_up', 'trending_down', 'neutral')
+            base_size: Base position size as fraction (default 12%)
+
+        Returns:
+            float: Adjusted position size fraction
+        """
+        if regime == 'chop':
+            # High conviction in sideways - 18% risk (1.5x base)
+            return base_size * 1.5
+        elif regime == 'trending_up':
+            # Moderate in uptrend - 12% (1x base)
+            return base_size
+        elif regime == 'trending_down':
+            # Defensive in downtrend - 6% (0.5x base)
+            return base_size * 0.5
+        else:  # neutral
+            return base_size
+
+    def get_phase18_params(self, high: np.ndarray, low: np.ndarray,
+                           close: np.ndarray, entry_price: float = None,
+                           current_price: float = None,
+                           peak_price: float = None) -> Dict:
+        """
+        Phase 18: Get all Phase 18 risk parameters.
+
+        Returns:
+            dict: Complete Phase 18 parameter set
+        """
+        regime = self.detect_regime(high, low, close)
+        adx = self.calculate_adx(high, low, close)
+        dynamic_size = self.regime_dynamic_size(regime)
+
+        result = {
+            'regime': regime,
+            'adx': adx,
+            'is_trending': adx > self.adx_trending_threshold,
+            'dynamic_size': dynamic_size,
+            'trail_activation': self.trail_activation_pct,
+            'trail_distance': self.trail_distance_pct
+        }
+
+        # Add trail stop info if position exists
+        if entry_price and current_price and peak_price:
+            trail_stop_price = self.trail_stop(entry_price, current_price, peak_price)
+            should_exit, reason = self.should_trail_exit(entry_price, current_price, peak_price)
+            result['trail_stop_price'] = trail_stop_price
+            result['trail_exit'] = should_exit
+            result['trail_reason'] = reason
+
+        return result

@@ -18,34 +18,34 @@ strategies:
       - "Bear mode: Selective shorts on overbought rips"
       - "Auto-yield: 6.5% avg APY on parked USDT"
 
-  # Phase 16 TUNED - Ready for live testing
+  # Phase 17 TUNED - Balanced aggression
   mean_reversion_vwap:
     enabled: true
     symbol: "XRP/USDT"
 
-    # Phase 16 Tuning
-    dev_threshold: 0.003        # 0.3% (was 0.5%) - tighter for more trades
-    rsi_oversold: 32            # (was 30) - slightly relaxed
-    rsi_overbought: 68          # (was 70) - slightly relaxed
-    max_leverage: 7             # (was 5) - higher for amplified accumulation
-    stop_loss_pct: 0.04         # 4% (was 5%) - tighter for leverage
+    # Phase 17 Tuning - Balanced (slightly looser than Phase 16)
+    dev_threshold: 0.003        # 0.3% - keep tight for quality signals
+    rsi_oversold: 35            # (was 32) - slightly relaxed
+    rsi_overbought: 65          # (was 68) - slightly relaxed
+    max_leverage: 5             # 5x - conservative leverage
+    stop_loss_pct: 0.04         # 4% stop loss
 
     # Volume filter
     volume_filter: true
-    volume_mult: 1.5            # Require 1.5x avg volume
+    volume_mult: 1.3            # (was 1.5) Slightly relaxed
     volume_window: 20
 
     # Standard params
     vwap_window: 14
     rsi_window: 14
-    long_size: 0.12
-    short_size: 0.10
+    long_size: 0.10             # Conservative 10%
+    short_size: 0.08            # Conservative 8%
 
-    description: "VWAP + RSI mean reversion - Phase 16 tuned"
+    description: "VWAP + RSI mean reversion - Phase 17 balanced"
     notes:
-      - "Long: RSI < 32 AND price 0.3%+ below VWAP AND vol > 1.5x"
-      - "Short: RSI > 68 AND price 0.3%+ above VWAP AND vol > 1.5x"
-      - "Target: 5-15% monthly in XRP $2.00-2.20 chop"
+      - "Long: RSI < 35 AND price 0.3%+ below VWAP AND vol > 1.3x"
+      - "Short: RSI > 65 AND price 0.3%+ above VWAP AND vol > 1.3x"
+      - "Target: 3-8% monthly with controlled risk"
 
   # Phase 16 TUNED - Ready for live testing
   xrp_btc_pair_trading:
