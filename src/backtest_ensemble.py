@@ -1,11 +1,12 @@
 """
-Ensemble Backtest - Phase 18
+Ensemble Backtest - Phase 19
 Backtest full ensemble on broader date range.
 
-Phase 18 Features:
-- Trail stops on winners (+2% activation, 1.5% trail)
+Phase 19 Features:
+- Early trail stops (+1.5% activation, 1.2% trail) - tighter for shallow chop
+- Partial profit-taking (50% at +3% unrealized)
+- Dynamic yield from config (7% APY realistic Dec 2025)
 - Dynamic sizing based on ADX regime detection
-- Mean Reversion in chop, defensive in trending down
 """
 import sys
 import os
@@ -38,7 +39,7 @@ def run_ensemble_backtest(start_date: str = '2025-12-01', end_date: str = '2025-
         end_date: End date in YYYY-MM-DD format
     """
     print("=" * 70)
-    print("ENSEMBLE BACKTEST - Phase 18")
+    print("ENSEMBLE BACKTEST - Phase 19")
     print(f"Period: {start_date} to {end_date}")
     print("=" * 70)
 
@@ -105,14 +106,18 @@ def run_ensemble_backtest(start_date: str = '2025-12-01', end_date: str = '2025-
     weight_history = []
     signal_history = []
 
-    # Phase 18: Open position tracking for trail stops
-    open_positions = {}  # {symbol: {'entry_price': x, 'peak_price': x, 'size': x, 'side': 'long'/'short'}}
+    # Phase 19: Open position tracking for trail stops + partial takes
+    # {symbol: {'entry_price': x, 'peak_price': x, 'size': x, 'side': 'long'/'short', 'partial_taken': bool}}
+    open_positions = {}
     trail_exits = 0
+    partial_takes = 0
 
-    # Phase 17: USDT yield tracking
-    # ~6% APY = 0.06/8760 = ~0.0000068 per hour (hourly compounding)
-    USDT_HOURLY_YIELD_RATE = 0.06 / 8760  # 6% APY hourly
+    # Phase 19: Dynamic yield from config (7% APY realistic Dec 2025)
+    yield_config = config.get('yield', {})
+    USDT_APY = yield_config.get('usdt_apy', 0.07)
+    USDT_HOURLY_YIELD_RATE = USDT_APY / 8760  # Hourly rate
     total_yield_earned = 0.0
+    print(f"  Yield Rate: {USDT_APY*100:.1f}% APY ({yield_config.get('source', 'N/A')})")
 
     initial_value = portfolio.get_total_usd({'USDT': 1.0, 'XRP': 2.0, 'BTC': 100000})
 
@@ -148,33 +153,59 @@ def run_ensemble_backtest(start_date: str = '2025-12-01', end_date: str = '2025-
             # Detect regime for dynamic sizing
             detected_regime = risk_mgr.detect_regime(high, low, close)
 
-            # Check each open position for trail stop exit
+            # Phase 19: Check each open position for profit-locking (early trail + partial takes)
             positions_to_close = []
+            positions_to_partial = []
             for sym, pos in open_positions.items():
                 current_price = prices.get(sym.split('/')[0], pos['entry_price'])
 
-                # Update peak price for longs
+                # Update peak price
                 if pos['side'] == 'long':
                     pos['peak_price'] = max(pos['peak_price'], current_price)
-                    should_exit, reason = risk_mgr.should_trail_exit(
-                        pos['entry_price'], current_price, pos['peak_price'], 'long'
-                    )
                 else:
-                    # For shorts, track lowest price as peak (best unrealized P&L)
                     pos['peak_price'] = min(pos['peak_price'], current_price)
-                    should_exit, reason = risk_mgr.should_trail_exit(
-                        pos['entry_price'], current_price, pos['peak_price'], 'short'
-                    )
 
-                if should_exit:
-                    positions_to_close.append((sym, reason))
+                # Phase 19: Use combined profit-lock check
+                action, amount = risk_mgr.check_profit_lock(
+                    pos['entry_price'], current_price, pos['peak_price'],
+                    pos['side'], pos.get('partial_taken', False)
+                )
+
+                if action == 'trail_exit':
+                    positions_to_close.append((sym, 'early_trail_hit'))
+                elif action == 'partial_take':
+                    positions_to_partial.append((sym, amount))
+
+            # Execute partial takes (50% at +3%)
+            for sym, amount in positions_to_partial:
+                pos = open_positions[sym]
+                current_price = prices.get(sym.split('/')[0], pos['entry_price'])
+                if pos['side'] == 'long':
+                    pnl_pct = (current_price / pos['entry_price'] - 1) * 100
+                else:
+                    pnl_pct = (pos['entry_price'] / current_price - 1) * 100
+                pos['partial_taken'] = True
+                pos['size'] *= (1 - amount)  # Reduce position size
+                partial_takes += 1
+                trades.append({
+                    'timestamp': ts,
+                    'action': f'partial_take_{pos["side"]}',
+                    'symbol': sym,
+                    'leverage': pos.get('leverage', 1),
+                    'confidence': 1.0,
+                    'regime': ensemble.current_regime,
+                    'pnl_pct': pnl_pct,
+                    'reason': f'locked {amount*100:.0f}% at +{pnl_pct:.1f}%'
+                })
 
             # Close trail-stopped positions
             for sym, reason in positions_to_close:
                 pos = open_positions.pop(sym)
-                pnl_pct = (prices.get(sym.split('/')[0], pos['entry_price']) / pos['entry_price'] - 1) * 100
-                if pos['side'] == 'short':
-                    pnl_pct = -pnl_pct
+                current_price = prices.get(sym.split('/')[0], pos['entry_price'])
+                if pos['side'] == 'long':
+                    pnl_pct = (current_price / pos['entry_price'] - 1) * 100
+                else:
+                    pnl_pct = (pos['entry_price'] / current_price - 1) * 100
                 trail_exits += 1
                 trades.append({
                     'timestamp': ts,
@@ -202,7 +233,7 @@ def run_ensemble_backtest(start_date: str = '2025-12-01', end_date: str = '2025-
         # Execute signal (paper mode)
         result = ensemble.execute(signal, prices)
 
-        # Phase 18: Track new positions for trail stops
+        # Phase 19: Track new positions for trail stops + partial takes
         if result.get('executed') and signal.get('action') in ['buy', 'short']:
             sym = signal.get('symbol', 'XRP/USDT')
             asset = sym.split('/')[0]
@@ -212,10 +243,11 @@ def run_ensemble_backtest(start_date: str = '2025-12-01', end_date: str = '2025-
                 'peak_price': entry_price,
                 'size': signal.get('size', 0.1),
                 'side': 'long' if signal['action'] == 'buy' else 'short',
-                'leverage': signal.get('leverage', 1)
+                'leverage': signal.get('leverage', 1),
+                'partial_taken': False  # Phase 19: Track if partial take executed
             }
 
-        # Phase 17: Apply hourly USDT yield compounding
+        # Phase 19: Apply hourly USDT yield compounding (7% APY from config)
         usdt_balance = portfolio.balances.get('USDT', 0)
         hourly_yield = usdt_balance * USDT_HOURLY_YIELD_RATE
         portfolio.balances['USDT'] = usdt_balance + hourly_yield
@@ -320,7 +352,8 @@ def run_ensemble_backtest(start_date: str = '2025-12-01', end_date: str = '2025-
     print(f"  Max Drawdown:      {max_drawdown:.2f}%")
     print(f"  Total Trades:      {len(trades)}")
     print(f"  Trail Exits:       {trail_exits}")
-    print(f"  USDT Yield Earned: ${total_yield_earned:.2f} (6% APY hourly)")
+    print(f"  Partial Takes:     {partial_takes}")
+    print(f"  USDT Yield Earned: ${total_yield_earned:.2f} ({USDT_APY*100:.1f}% APY)")
 
     print(f"\n{'REGIME ANALYSIS':=^50}")
     for regime, count in regime_counts.items():
@@ -369,6 +402,7 @@ def run_ensemble_backtest(start_date: str = '2025-12-01', end_date: str = '2025-
         'max_drawdown': max_drawdown,
         'trades': len(trades),
         'trail_exits': trail_exits,
+        'partial_takes': partial_takes,
         'final_value': final_value,
         'usdt_yield_earned': total_yield_earned,
         'xrp_return': xrp_return,
@@ -380,9 +414,9 @@ def run_ensemble_backtest(start_date: str = '2025-12-01', end_date: str = '2025-
 
 if __name__ == '__main__':
     import argparse
-    parser = argparse.ArgumentParser(description='Ensemble Backtest - Phase 18')
+    parser = argparse.ArgumentParser(description='Ensemble Backtest - Phase 19')
     parser.add_argument('--start', default='2025-11-25', help='Start date YYYY-MM-DD')
-    parser.add_argument('--end', default='2025-12-07', help='End date YYYY-MM-DD')
+    parser.add_argument('--end', default='2025-12-08', help='End date YYYY-MM-DD')
     args = parser.parse_args()
 
     results = run_ensemble_backtest(args.start, args.end)

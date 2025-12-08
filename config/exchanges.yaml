@@ -16,6 +16,13 @@ leverage:
   bitrue:
     etf_leverage: 3  # 3x ETFs (XRP3L, BTC3L)
 
+# Phase 19: Dynamic yield rates (realistic Dec 2025 rates)
+yield:
+  usdt_apy: 0.07  # 7% blended avg (Kraken ~6%, Bitrue ~8%)
+  hourly_rate: 0.000007991  # 7% / 8760 hours
+  compounding: hourly
+  source: "Kraken Earn + Bitrue Flex"
+
 exchanges:
   kraken:
     enabled: true

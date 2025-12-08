@@ -1,8 +1,9 @@
 """
-Phase 18: Volatility-Aware Risk Manager
+Phase 19: Volatility-Aware Risk Manager
 Dynamic leverage scaling + fear/greed detection + short position guards
 Phase 11: Lowered short thresholds, 15% max exposure, RSI<40 auto-exit
 Phase 18: Trail stops on winners + regime-based dynamic sizing
+Phase 19: Early trail (+1.5% activation, 1.2% trail) + partial takes (50% at +3%)
 """
 import numpy as np
 from typing import Dict, Optional, Tuple
@@ -40,10 +41,14 @@ class RiskManager:
         self.short_stop_loss = 0.08     # 8% loss triggers stop loss for shorts
         self.short_take_profit = 0.15   # 15% gain triggers take profit for shorts
 
-        # Phase 18: Trail stop parameters
-        self.trail_activation_pct = 0.02  # Activate trail after +2% unrealized
-        self.trail_distance_pct = 0.015   # 1.5% trail from peak
-        self.trail_floor_pct = 0.95       # Floor at 5% loss from entry
+        # Phase 19: Early trail stop parameters (tightened for shallow chop)
+        self.trail_activation_pct = 0.015  # Activate trail after +1.5% unrealized (was 2%)
+        self.trail_distance_pct = 0.012    # 1.2% trail from peak (was 1.5%)
+        self.trail_floor_pct = 0.95        # Floor at 5% loss from entry
+
+        # Phase 19: Partial profit-taking
+        self.partial_take_threshold = 0.03  # Take partial at +3% unrealized
+        self.partial_take_pct = 0.50        # Take 50% of position
 
         # Phase 18: ADX trending threshold
         self.adx_trending_threshold = 25  # ADX > 25 = trending market
@@ -439,6 +444,83 @@ class RiskManager:
                     return True, f'trail_stop_hit (+{profit_pct:.1f}% locked)'
 
         return False, 'hold'
+
+    def early_trail(self, entry_price: float, current_price: float,
+                    peak_price: float) -> Optional[float]:
+        """
+        Phase 19: Early trail stop for shallow chop - tighter activation.
+        Activates at +1.5% unrealized, trails 1.2% from peak.
+
+        Args:
+            entry_price: Entry price
+            current_price: Current price
+            peak_price: Peak price since entry
+
+        Returns:
+            Optional[float]: Trail stop price if activated, None otherwise
+        """
+        unrealized_pct = (current_price - entry_price) / entry_price
+        if unrealized_pct > self.trail_activation_pct:  # +1.5%
+            return peak_price * (1 - self.trail_distance_pct)  # 1.2% trail
+        return None
+
+    def partial_take(self, unrealized_pnl_pct: float) -> Tuple[bool, float]:
+        """
+        Phase 19: Partial profit-taking at +3% unrealized.
+        Takes 50% of position to lock profits on shallow bounces.
+
+        Args:
+            unrealized_pnl_pct: Unrealized P&L as decimal (0.03 = 3%)
+
+        Returns:
+            Tuple[bool, float]: (should_take_partial, fraction_to_close)
+        """
+        if unrealized_pnl_pct > self.partial_take_threshold:
+            return True, self.partial_take_pct
+        return False, 0.0
+
+    def check_profit_lock(self, entry_price: float, current_price: float,
+                          peak_price: float, side: str = 'long',
+                          already_partial: bool = False) -> Tuple[str, float]:
+        """
+        Phase 19: Combined profit-locking logic - early trail + partial takes.
+
+        Args:
+            entry_price: Entry price
+            current_price: Current price
+            peak_price: Peak price since entry
+            side: 'long' or 'short'
+            already_partial: Whether partial take was already executed
+
+        Returns:
+            Tuple[str, float]: (action, amount)
+                action: 'hold', 'trail_exit', 'partial_take'
+                amount: fraction to close (0.0-1.0)
+        """
+        if side == 'long':
+            unrealized_pct = (current_price - entry_price) / entry_price
+        else:
+            unrealized_pct = (entry_price - current_price) / entry_price
+
+        # Check partial take first (only if not already done)
+        if not already_partial:
+            should_partial, partial_amt = self.partial_take(unrealized_pct)
+            if should_partial:
+                return 'partial_take', partial_amt
+
+        # Check early trail stop
+        if side == 'long':
+            trail_price = self.early_trail(entry_price, current_price, peak_price)
+            if trail_price is not None and current_price <= trail_price:
+                return 'trail_exit', 1.0
+        else:
+            # For shorts: check inverted trail
+            if unrealized_pct > self.trail_activation_pct:
+                trail_price = peak_price * (1 + self.trail_distance_pct)
+                if current_price >= trail_price:
+                    return 'trail_exit', 1.0
+
+        return 'hold', 0.0
 
     def calculate_adx(self, high: np.ndarray, low: np.ndarray,
                       close: np.ndarray, period: int = 14) -> float:
