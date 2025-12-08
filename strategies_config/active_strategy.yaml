@@ -1,0 +1,53 @@
+# Strategy Configuration
+# Phase 15: Modular Strategy Factory
+#
+# active: The strategy to use for live trading
+# strategies: Configuration for each available strategy
+
+active: defensive_yield  # KEEP THIS FOR LIVE - defensive_yield is battle-tested
+
+strategies:
+  # LIVE STRATEGY - Do not modify without thorough backtesting
+  defensive_yield:
+    enabled: true
+    max_leverage: 10
+    description: "RL-driven defensive strategy with yield accrual"
+    notes:
+      - "Defensive mode: Park USDT during high volatility (ATR > 4%)"
+      - "Offensive mode: Deploy leverage on confirmed dips"
+      - "Bear mode: Selective shorts on overbought rips"
+      - "Auto-yield: 6.5% avg APY on parked USDT"
+
+  # NEW STRATEGY - Requires backtesting before live use
+  mean_reversion_vwap:
+    enabled: true
+    symbol: "XRP/USDT"
+    max_leverage: 5
+    position_size_pct: 0.10
+    vwap_period: 20
+    rsi_period: 14
+    description: "VWAP + RSI mean reversion"
+    notes:
+      - "Long: RSI < 30 AND price > 0.5% below VWAP"
+      - "Short: RSI > 70 AND price > 0.5% above VWAP"
+      - "Target: VWAP reversion"
+
+  # NEW STRATEGY - Requires backtesting before live use
+  xrp_btc_pair_trading:
+    enabled: true
+    xrp_symbol: "XRP/USDT"
+    btc_symbol: "BTC/USDT"
+    max_leverage: 10
+    position_size_pct: 0.10
+    lookback_period: 100
+    description: "Statistical arbitrage using XRP/BTC cointegration"
+    notes:
+      - "Entry: Z-score > 2 or < -2"
+      - "Exit: Z-score reverts to 0"
+      - "Stop: Z-score > 3 or < -3"
+      - "Pairs trade: Long one, short the other"
+
+# Backtesting notes:
+# - Test new strategies in notebooks before enabling for live
+# - Compare Sharpe ratio, max drawdown, win rate
+# - Ensure strategies don't conflict (e.g., simultaneous opposing trades)

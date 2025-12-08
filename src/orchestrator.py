@@ -1,9 +1,13 @@
 """
 RL Orchestrator - Master controller for RL-driven trading decisions
-Phase 14: Live Launch + Dashboard + Final Opportunistic Tuning
-- Softened thresholds for Dec grind rips (RSI>68, ATR>4.2%)
-- Dashboard integration for live regime visualization
-- Auto-yield accrual with compounding
+Phase 15: Modular Strategy Factory + Strategy Router
+
+This file contains:
+1. RLOrchestrator - The original live trading controller (unchanged)
+2. StrategyRouter - New modular strategy router using BaseStrategy interface
+
+The RLOrchestrator is kept for backward compatibility with existing code.
+New strategies should use the StrategyRouter with BaseStrategy implementations.
 """
 import numpy as np
 from models.rl_agent import TradingEnv, load_rl_agent
@@ -755,4 +759,219 @@ class RLOrchestrator:
             'kraken': self.kraken.get_status(),
             'bitrue': self.bitrue.get_status(),
             'targets': self.get_target_allocation()
+        }
+
+
+# =============================================================================
+# Phase 15: Strategy Router - Modular Strategy Interface
+# =============================================================================
+
+class StrategyRouter:
+    """
+    Strategy Router - Routes trading decisions to the active strategy.
+
+    This is the new modular interface for strategy management.
+    It wraps the StrategyFactory and provides a unified execution interface.
+
+    Usage:
+        router = StrategyRouter(portfolio, data_dict)
+        signal = router.get_signal()
+        result = router.execute_signal(signal, prices)
+    """
+
+    def __init__(self, portfolio: Portfolio, data_dict: dict,
+                 strategy_name: str = None, config_path: str = None):
+        """
+        Initialize the strategy router.
+
+        Args:
+            portfolio: Portfolio object
+            data_dict: Market data dict
+            strategy_name: Override strategy name (optional)
+            config_path: Path to config YAML (optional)
+        """
+        from strategies.strategy_factory import StrategyFactory
+
+        self.portfolio = portfolio
+        self.data = data_dict
+        self.executor = Executor(portfolio)
+
+        # Initialize exchanges
+        self.kraken = KrakenMargin(portfolio, max_leverage=10.0)
+        self.bitrue = BitrueETF(portfolio)
+
+        # Load strategy factory
+        self.factory = StrategyFactory(config_path)
+
+        # Get active strategy
+        if strategy_name:
+            self.strategy = self.factory.get_strategy(strategy_name)
+        else:
+            self.strategy = self.factory.get_active_strategy()
+
+        if self.strategy:
+            self.strategy.initialize(portfolio, {
+                'kraken': self.kraken,
+                'bitrue': self.bitrue
+            })
+            print(f"StrategyRouter: Initialized with strategy '{self.strategy.name}'")
+        else:
+            print("StrategyRouter: WARNING - No active strategy loaded!")
+
+    def get_signal(self) -> dict:
+        """
+        Get trading signal from active strategy.
+
+        Returns:
+            dict: Signal with action, symbol, size, leverage, etc.
+        """
+        if not self.strategy:
+            return {'action': 'hold', 'reason': 'No strategy loaded'}
+
+        return self.strategy.generate_signals(self.data)
+
+    def execute_signal(self, signal: dict, prices: dict) -> dict:
+        """
+        Execute a trading signal.
+
+        Args:
+            signal: Signal dict from get_signal()
+            prices: Current prices dict
+
+        Returns:
+            dict: Execution result
+        """
+        result = {
+            'signal': signal,
+            'executed': False,
+            'details': {}
+        }
+
+        if not self.strategy or not self.strategy.validate_signal(signal):
+            result['reason'] = 'Invalid signal or no strategy'
+            return result
+
+        action = signal.get('action', 'hold')
+        symbol = signal.get('symbol', 'XRP/USDT')
+        size = signal.get('size', 0.0)
+        leverage = signal.get('leverage', 1)
+
+        # Get asset from symbol
+        asset = symbol.split('/')[0] if '/' in symbol else symbol
+        usdt_available = self.portfolio.balances.get('USDT', 0)
+
+        if action == 'hold':
+            result['executed'] = True
+            result['reason'] = 'Holding - no action needed'
+
+        elif action == 'buy':
+            if usdt_available > 50:
+                price = prices.get(asset, 1.0)
+                trade_value = usdt_available * size
+
+                if leverage > 1:
+                    # Leveraged trade
+                    if asset == 'XRP':
+                        success = self.kraken.open_long(asset, trade_value, price, leverage=leverage)
+                    else:
+                        # Use ETF for BTC
+                        etf = signal.get('use_etf', 'BTC3L')
+                        success = self.bitrue.buy_etf(etf, trade_value, price)
+
+                    result['executed'] = success
+                    result['leverage'] = leverage
+                else:
+                    # Spot trade
+                    amount = trade_value / price
+                    success = self.executor.place_paper_order(symbol, 'buy', amount)
+                    result['executed'] = success
+                    result['amount'] = amount
+
+        elif action in ['sell', 'short']:
+            if usdt_available > 50:
+                price = prices.get(asset, 1.0)
+                trade_value = usdt_available * size
+
+                if asset == 'XRP':
+                    success = self.kraken.open_short(asset, trade_value, price, leverage=leverage)
+                else:
+                    etf = signal.get('use_etf', 'BTC3S')
+                    success = self.bitrue.buy_etf(etf, trade_value, price)
+
+                result['executed'] = success
+                result['leverage'] = leverage
+
+        elif action in ['long_xrp_short_btc', 'short_xrp_long_btc']:
+            # Pair trade execution
+            legs = signal.get('legs', [])
+            for leg in legs:
+                leg_symbol = leg['symbol']
+                leg_asset = leg_symbol.split('/')[0]
+                leg_side = leg['side']
+                leg_size = leg['size']
+                leg_value = usdt_available * leg_size
+                leg_price = prices.get(leg_asset, 1.0)
+
+                if leg_side == 'long':
+                    if leg_asset == 'XRP':
+                        self.kraken.open_long(leg_asset, leg_value, leg_price, leverage=leverage)
+                    else:
+                        self.bitrue.buy_etf('BTC3L', leg_value, leg_price)
+                else:
+                    if leg_asset == 'XRP':
+                        self.kraken.open_short(leg_asset, leg_value, leg_price, leverage=leverage)
+                    else:
+                        self.bitrue.buy_etf('BTC3S', leg_value, leg_price)
+
+            result['executed'] = True
+            result['pair_trade'] = action
+
+        elif action == 'close':
+            # Close positions
+            close_position = signal.get('close_position')
+            if close_position:
+                for asset_name in ['XRP', 'BTC']:
+                    if asset_name in self.kraken.positions:
+                        price = prices.get(asset_name, 1.0)
+                        self.kraken.close_position(asset_name, price)
+
+                for etf in ['BTC3L', 'BTC3S']:
+                    if self.bitrue.etf_holdings.get(etf, 0) > 0:
+                        self.bitrue.sell_etf(etf, underlying_price=prices.get('BTC', 90000))
+
+            result['executed'] = True
+            result['closed'] = close_position
+
+        return result
+
+    def switch_strategy(self, strategy_name: str) -> bool:
+        """
+        Switch to a different strategy.
+
+        Args:
+            strategy_name: Name of strategy to switch to
+
+        Returns:
+            True if successful
+        """
+        new_strategy = self.factory.get_strategy(strategy_name)
+        if new_strategy:
+            new_strategy.initialize(self.portfolio, {
+                'kraken': self.kraken,
+                'bitrue': self.bitrue
+            })
+            self.strategy = new_strategy
+            self.factory.set_active_strategy(strategy_name)
+            print(f"StrategyRouter: Switched to strategy '{strategy_name}'")
+            return True
+        return False
+
+    def get_status(self) -> dict:
+        """Get router and strategy status."""
+        return {
+            'active_strategy': self.strategy.name if self.strategy else None,
+            'strategy_status': self.strategy.get_status() if self.strategy else {},
+            'available_strategies': self.factory.list_strategies(),
+            'kraken': self.kraken.get_status(),
+            'bitrue': self.bitrue.get_status()
         }
