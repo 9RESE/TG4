@@ -1,9 +1,10 @@
 """
-Phase 19: Volatility-Aware Risk Manager
+Phase 21: Volatility-Aware Risk Manager
 Dynamic leverage scaling + fear/greed detection + short position guards
 Phase 11: Lowered short thresholds, 15% max exposure, RSI<40 auto-exit
 Phase 18: Trail stops on winners + regime-based dynamic sizing
 Phase 19: Early trail (+1.5% activation, 1.2% trail) + partial takes (50% at +3%)
+Phase 21: Momentum partial at +4% for breakout trades
 """
 import numpy as np
 from typing import Dict, Optional, Tuple
@@ -49,6 +50,10 @@ class RiskManager:
         # Phase 19: Partial profit-taking
         self.partial_take_threshold = 0.03  # Take partial at +3% unrealized
         self.partial_take_pct = 0.50        # Take 50% of position
+
+        # Phase 21: Momentum partial at +4% for breakout trades
+        self.momentum_partial_threshold = 0.04  # Take partial at +4% for momentum
+        self.momentum_partial_pct = 0.50        # Take 50%
 
         # Phase 18: ADX trending threshold
         self.adx_trending_threshold = 25  # ADX > 25 = trending market
@@ -477,6 +482,24 @@ class RiskManager:
         """
         if unrealized_pnl_pct > self.partial_take_threshold:
             return True, self.partial_take_pct
+        return False, 0.0
+
+    def momentum_partial_take(self, unrealized_pnl_pct: float,
+                               is_breakout: bool = False) -> Tuple[bool, float]:
+        """
+        Phase 21: Momentum partial profit-taking at +4% for breakout trades.
+        Higher threshold for momentum plays to capture larger moves.
+
+        Args:
+            unrealized_pnl_pct: Unrealized P&L as decimal (0.04 = 4%)
+            is_breakout: Whether this is a breakout trade (use higher threshold)
+
+        Returns:
+            Tuple[bool, float]: (should_take_partial, fraction_to_close)
+        """
+        threshold = self.momentum_partial_threshold if is_breakout else self.partial_take_threshold
+        if unrealized_pnl_pct > threshold:
+            return True, self.momentum_partial_pct
         return False, 0.0
 
     def check_profit_lock(self, entry_price: float, current_price: float,

@@ -1,11 +1,12 @@
 """
-Phase 20: XRP/BTC Lead-Lag Strategy
+Phase 21: XRP/BTC Lead-Lag Strategy - BTC Breakout Boost
 Correlation-aware trading: follows BTC when highly correlated.
 
 Rules:
 - High correlation (>0.8): XRP follows BTC with lag → trade XRP in BTC direction
 - Low correlation (<0.6): Pair divergence → mean reversion or skip
 - BTC leads: if BTC moves first, position XRP same direction
+- Phase 21: BTC breakout (new high + volume) → immediate XRP long with 5-7x leverage
 """
 import sys
 import os
@@ -31,10 +32,16 @@ class XRPBTCLeadLag(BaseStrategy):
         self.btc_lead_bars = config.get('btc_lead_bars', 3)  # BTC leads by N bars
         self.min_btc_move = config.get('min_btc_move', 0.01)  # 1% BTC move threshold
 
+        # Phase 21: BTC breakout detection params
+        self.btc_high_lookback = config.get('btc_high_lookback', 24)  # 24h high break
+        self.breakout_vol_mult = config.get('breakout_vol_mult', 1.5)  # Volume spike multiplier
+        self.breakout_leverage = config.get('breakout_leverage', 7)  # Max leverage on breakout
+
         # Track state
         self.last_correlation = 0.0
         self.btc_trend = 'none'
         self.position_taken = False
+        self.last_btc_breakout = None  # Phase 21
 
     def _calculate_returns(self, df: pd.DataFrame) -> pd.Series:
         """Calculate log returns."""
@@ -97,6 +104,41 @@ class XRPBTCLeadLag(BaseStrategy):
 
         return None
 
+    def _detect_btc_breakout(self, btc_df: pd.DataFrame) -> dict:
+        """
+        Phase 21: Detect BTC breakout for immediate XRP long.
+        Breakout = BTC breaks recent high with volume spike.
+
+        Returns:
+            dict: {'is_breakout': bool, 'strength': float, 'leverage': int}
+        """
+        if len(btc_df) < self.btc_high_lookback + 1:
+            return {'is_breakout': False, 'strength': 0.0, 'leverage': 5}
+
+        current_price = btc_df['close'].iloc[-1]
+        current_vol = btc_df['volume'].iloc[-1]
+
+        # Recent 24h high
+        recent_high = btc_df['high'].iloc[-self.btc_high_lookback:-1].max()
+        avg_volume = btc_df['volume'].iloc[-self.btc_high_lookback:-1].mean()
+
+        # Check breakout conditions
+        price_break = current_price > recent_high
+        vol_ratio = current_vol / avg_volume if avg_volume > 0 else 1.0
+        volume_spike = vol_ratio > self.breakout_vol_mult
+
+        if price_break and volume_spike:
+            # Strong BTC breakout → high leverage XRP long
+            strength = vol_ratio * (current_price / recent_high - 1) * 100
+            leverage = self.breakout_leverage  # 7x
+            self.last_btc_breakout = {'price': current_price, 'vol_ratio': vol_ratio}
+            return {'is_breakout': True, 'strength': strength, 'leverage': leverage}
+        elif price_break:
+            # Weak breakout (no volume)
+            return {'is_breakout': True, 'strength': 0.2, 'leverage': 5}
+
+        return {'is_breakout': False, 'strength': 0.0, 'leverage': 5}
+
     def generate_signals(self, data: Dict[str, pd.DataFrame]) -> Dict[str, Any]:
         """
         Generate trading signals based on BTC/XRP correlation and lead-lag.
@@ -144,6 +186,21 @@ class XRPBTCLeadLag(BaseStrategy):
         # Detect BTC trend
         btc_trend = self._detect_btc_trend(btc_df)
         self.btc_trend = btc_trend
+
+        # Phase 21: Check for BTC breakout FIRST - immediate XRP long with high leverage
+        btc_breakout = self._detect_btc_breakout(btc_df)
+        if btc_breakout['is_breakout'] and corr > 0.7:  # Need reasonable correlation
+            confidence = 0.85 + btc_breakout['strength'] * 0.05
+            return {
+                'action': 'buy',
+                'symbol': xrp_key,
+                'size': self.position_size_pct * 1.2,  # Larger size on breakout
+                'leverage': min(self.max_leverage, btc_breakout['leverage']),
+                'confidence': min(confidence, 0.95),
+                'reason': f'BTC BREAKOUT: new high + vol {btc_breakout["strength"]:.1f}x → XRP follow (corr={corr:.2f})',
+                'strategy': 'leadlag',
+                'breakout': True
+            }
 
         # High correlation mode: follow BTC
         if corr > self.corr_high and btc_trend != 'none':

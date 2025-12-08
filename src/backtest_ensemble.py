@@ -1,15 +1,15 @@
 """
-Ensemble Backtest - Phase 20
+Ensemble Backtest - Phase 21
 Backtest full ensemble on broader date range.
 
-Phase 20 Features:
+Phase 21 Features:
 - 5 strategies: MeanReversion, PairTrading, Defensive, MATrendFollow, XRPBTCLeadLag
-- Early trail stops (+1.5% activation, 1.2% trail) - tighter for shallow chop
-- Partial profit-taking (50% at +3% unrealized)
-- Dynamic yield from config (7% APY realistic Dec 2025)
-- Dynamic sizing based on ADX regime detection
-- MA Trend: 9-period SMA trend following with 2-candle confirmation
-- Lead-Lag: Correlation-aware BTC/XRP following
+- MA Trend: 1-candle confirmation (faster breakout response)
+- Lead-Lag: BTC breakout boost → immediate XRP long with 5-7x leverage
+- Dynamic leverage ramp: 3x → 5-7x on breakout confirmation
+- Momentum partial at +4% (50% take) for breakout trades
+- Early trail stops (+1.5% activation, 1.2% trail)
+- Dynamic yield from config (7% APY)
 """
 import sys
 import os
@@ -42,7 +42,7 @@ def run_ensemble_backtest(start_date: str = '2025-12-01', end_date: str = '2025-
         end_date: End date in YYYY-MM-DD format
     """
     print("=" * 70)
-    print("ENSEMBLE BACKTEST - Phase 20")
+    print("ENSEMBLE BACKTEST - Phase 21")
     print(f"Period: {start_date} to {end_date}")
     print("=" * 70)
 
