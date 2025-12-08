@@ -1,13 +1,18 @@
 """
 RL Orchestrator - Master controller for RL-driven trading decisions
-Phase 15: Modular Strategy Factory + Strategy Router
+Phase 16: RL Ensemble Orchestrator + Dynamic Strategy Weighting
 
 This file contains:
 1. RLOrchestrator - The original live trading controller (unchanged)
-2. StrategyRouter - New modular strategy router using BaseStrategy interface
+2. StrategyRouter - Modular strategy router using BaseStrategy interface
+3. EnsembleOrchestrator - RL-driven multi-strategy weighting (NEW Phase 16)
 
-The RLOrchestrator is kept for backward compatibility with existing code.
-New strategies should use the StrategyRouter with BaseStrategy implementations.
+The EnsembleOrchestrator dynamically weights:
+- MeanReversionVWAP: High weight in chop ($2.00-2.20 range)
+- XRPBTCPairTrading: Activate on XRP news / BTC weakness divergence
+- DefensiveYield: Max weight during high ATR + fear
+
+Target: Unbeatable multi-strategy orchestration with accumulation bias.
 """
 import numpy as np
 from models.rl_agent import TradingEnv, load_rl_agent
@@ -975,3 +980,569 @@ class StrategyRouter:
             'kraken': self.kraken.get_status(),
             'bitrue': self.bitrue.get_status()
         }
+
+
+# =============================================================================
+# Phase 16: Ensemble Orchestrator - RL-Driven Multi-Strategy Weighting
+# =============================================================================
+
+class EnsembleOrchestrator:
+    """
+    Phase 16: RL Ensemble Orchestrator with Dynamic Strategy Weighting.
+
+    Uses a trained RL agent to dynamically weight signals from multiple strategies:
+    - MeanReversionVWAP: Dominates in XRP $2.00-2.20 chop (high weight in tight range)
+    - XRPBTCPairTrading: Activates on XRP/BTC divergence (news, alt-season)
+    - DefensiveYield: Max weight during high ATR + fear (grind-down protection)
+
+    The RL agent learns optimal weights based on:
+    - Regime features: ATR, correlation, RSI, VWAP deviation
+    - Strategy signals: Each strategy's action + confidence
+    - Reward: PNL + accumulation bias + yield bonus
+
+    Target: Unbeatable multi-strategy alpha with BTC/XRP/USDT accumulation bias.
+    """
+
+    def __init__(self, portfolio: Portfolio, data_dict: dict,
+                 config_path: str = None, model_path: str = None):
+        """
+        Initialize the Ensemble Orchestrator.
+
+        Args:
+            portfolio: Portfolio object
+            data_dict: Market data dict
+            config_path: Path to strategy config YAML
+            model_path: Path to trained ensemble RL model
+        """
+        from strategies.mean_reversion_vwap import MeanReversionVWAP
+        from strategies.xrp_btc_pair_trading import XRPBTCPairTrading
+        from strategies.defensive_yield import DefensiveYield
+        from strategies.strategy_factory import StrategyFactory
+
+        self.portfolio = portfolio
+        self.data = data_dict
+        self.executor = Executor(portfolio)
+
+        # Initialize exchanges
+        self.kraken = KrakenMargin(portfolio, max_leverage=10.0)
+        self.bitrue = BitrueETF(portfolio)
+
+        # Risk manager
+        self.risk = RiskManager(max_drawdown=0.20, max_leverage=10.0)
+
+        # Load strategy factory for configs
+        self.factory = StrategyFactory(config_path)
+
+        # Initialize all three strategies
+        mr_config = self.factory.get_strategy_config('mean_reversion_vwap') or {}
+        pt_config = self.factory.get_strategy_config('xrp_btc_pair_trading') or {}
+        dy_config = self.factory.get_strategy_config('defensive_yield') or {}
+
+        self.strategies = {
+            'mean_reversion': MeanReversionVWAP(mr_config),
+            'pair_trading': XRPBTCPairTrading(pt_config),
+            'defensive': DefensiveYield(dy_config)
+        }
+
+        # Initialize strategies with portfolio and exchanges
+        exchange_context = {'kraken': self.kraken, 'bitrue': self.bitrue}
+        for name, strategy in self.strategies.items():
+            strategy.initialize(portfolio, exchange_context)
+
+        # Load ensemble RL agent
+        self.model_path = model_path or "models/rl_ensemble_agent"
+        self.rl_agent = None
+        self._load_ensemble_agent()
+
+        # Regime tracking
+        self.current_regime = 'neutral'  # 'chop', 'divergence', 'fear', 'neutral'
+        self.current_volatility = 0.03
+        self.current_correlation = 0.8  # XRP/BTC correlation
+        self.current_rsi = {'XRP': 50.0, 'BTC': 50.0}
+
+        # Strategy weights (RL agent updates these)
+        self.weights = {
+            'mean_reversion': 0.4,
+            'pair_trading': 0.2,
+            'defensive': 0.4
+        }
+
+        # Performance tracking
+        self.strategy_pnl = {name: 0.0 for name in self.strategies}
+        self.total_signals = 0
+        self.executed_signals = 0
+
+        print(f"EnsembleOrchestrator: Initialized with {len(self.strategies)} strategies")
+
+    def _load_ensemble_agent(self):
+        """Load the trained ensemble RL agent."""
+        try:
+            from stable_baselines3 import PPO
+            import os
+            if os.path.exists(self.model_path + ".zip") or os.path.exists(self.model_path):
+                self.rl_agent = PPO.load(self.model_path, device="cuda")
+                print(f"EnsembleOrchestrator: Loaded ensemble agent from {self.model_path}")
+            else:
+                print(f"EnsembleOrchestrator: No ensemble agent found at {self.model_path}")
+                print("Using rule-based weights until agent is trained")
+        except Exception as e:
+            print(f"EnsembleOrchestrator: Could not load agent - {e}")
+            self.rl_agent = None
+
+    def _calculate_regime_features(self) -> dict:
+        """Calculate regime features for RL observation."""
+        features = {
+            'atr_xrp': 0.03,
+            'atr_btc': 0.02,
+            'correlation': 0.8,
+            'xrp_rsi': 50.0,
+            'btc_rsi': 50.0,
+            'vwap_dev_xrp': 0.0,
+            'zscore_pair': 0.0
+        }
+
+        if 'XRP/USDT' in self.data:
+            xrp_df = self.data['XRP/USDT']
+            if len(xrp_df) > 20:
+                # ATR
+                features['atr_xrp'] = self._calculate_atr_pct(xrp_df)
+                # RSI
+                features['xrp_rsi'] = self._calculate_rsi(xrp_df['close'].values)
+                self.current_rsi['XRP'] = features['xrp_rsi']
+                # VWAP deviation
+                features['vwap_dev_xrp'] = self._calculate_vwap_deviation(xrp_df)
+
+        if 'BTC/USDT' in self.data:
+            btc_df = self.data['BTC/USDT']
+            if len(btc_df) > 20:
+                features['atr_btc'] = self._calculate_atr_pct(btc_df)
+                features['btc_rsi'] = self._calculate_rsi(btc_df['close'].values)
+                self.current_rsi['BTC'] = features['btc_rsi']
+
+        # Correlation (if both available)
+        if 'XRP/USDT' in self.data and 'BTC/USDT' in self.data:
+            features['correlation'] = self._calculate_correlation()
+
+        # Update regime
+        self.current_volatility = max(features['atr_xrp'], features['atr_btc'])
+        self.current_correlation = features['correlation']
+
+        return features
+
+    def _calculate_atr_pct(self, df, period=14) -> float:
+        """Calculate ATR as percentage of price."""
+        if len(df) < period + 1:
+            return 0.03
+
+        high = df['high'].values
+        low = df['low'].values
+        close = df['close'].values
+
+        tr_list = []
+        for i in range(1, min(len(close), period + 1)):
+            tr = max(
+                high[-i] - low[-i],
+                abs(high[-i] - close[-i-1]) if i < len(close) else 0,
+                abs(low[-i] - close[-i-1]) if i < len(close) else 0
+            )
+            tr_list.append(tr)
+
+        atr = np.mean(tr_list) if tr_list else 0
+        current_price = close[-1] if len(close) > 0 else 1
+        return atr / current_price if current_price > 0 else 0.03
+
+    def _calculate_rsi(self, close_prices, period=14) -> float:
+        """Calculate RSI."""
+        if len(close_prices) < period + 1:
+            return 50.0
+
+        deltas = np.diff(close_prices[-period-1:])
+        gains = np.where(deltas > 0, deltas, 0)
+        losses = np.where(deltas < 0, -deltas, 0)
+
+        avg_gain = np.mean(gains) if len(gains) > 0 else 0
+        avg_loss = np.mean(losses) if len(losses) > 0 else 0.001
+
+        rs = avg_gain / avg_loss
+        return 100 - (100 / (1 + rs))
+
+    def _calculate_vwap_deviation(self, df) -> float:
+        """Calculate current price deviation from VWAP."""
+        if len(df) < 14:
+            return 0.0
+
+        typical_price = (df['high'] + df['low'] + df['close']) / 3
+        vwap = (typical_price * df['volume']).rolling(14).sum() / df['volume'].rolling(14).sum()
+
+        current_price = df['close'].iloc[-1]
+        current_vwap = vwap.iloc[-1]
+
+        if pd.isna(current_vwap) or current_vwap == 0:
+            return 0.0
+
+        return (current_price - current_vwap) / current_vwap
+
+    def _calculate_correlation(self, window=24) -> float:
+        """Calculate XRP/BTC rolling correlation."""
+        xrp_df = self.data['XRP/USDT']
+        btc_df = self.data['BTC/USDT']
+
+        min_len = min(len(xrp_df), len(btc_df))
+        if min_len < window:
+            return 0.8
+
+        xrp_returns = xrp_df['close'].pct_change().iloc[-window:]
+        btc_returns = btc_df['close'].pct_change().iloc[-window:]
+
+        corr = xrp_returns.corr(btc_returns)
+        return corr if not np.isnan(corr) else 0.8
+
+    def _determine_regime(self, features: dict) -> str:
+        """Determine current market regime."""
+        atr_avg = (features['atr_xrp'] + features['atr_btc']) / 2
+        correlation = features['correlation']
+        xrp_rsi = features['xrp_rsi']
+        vwap_dev = abs(features['vwap_dev_xrp'])
+
+        # High fear: High ATR + extreme RSI
+        if atr_avg > 0.04 and (xrp_rsi > 70 or xrp_rsi < 30):
+            return 'fear'
+
+        # Divergence: Low correlation between XRP and BTC
+        if correlation < 0.5:
+            return 'divergence'
+
+        # Chop: Low ATR + price near VWAP
+        if atr_avg < 0.025 and vwap_dev < 0.01:
+            return 'chop'
+
+        return 'neutral'
+
+    def _get_ensemble_observation(self, signals: dict, features: dict) -> np.ndarray:
+        """Build observation vector for RL agent."""
+        obs = []
+
+        # Regime features (7)
+        obs.extend([
+            features['atr_xrp'],
+            features['atr_btc'],
+            features['correlation'],
+            features['xrp_rsi'] / 100,
+            features['btc_rsi'] / 100,
+            features['vwap_dev_xrp'],
+            features.get('zscore_pair', 0)
+        ])
+
+        # Strategy signals (9: 3 strategies x 3 features each)
+        for name in ['mean_reversion', 'pair_trading', 'defensive']:
+            signal = signals.get(name, {})
+            action_map = {'hold': 0, 'buy': 1, 'sell': -1,
+                          'short_xrp_long_btc': -0.5, 'long_xrp_short_btc': 0.5,
+                          'close': 0, 'close_pair': 0}
+            action_val = action_map.get(signal.get('action', 'hold'), 0)
+            confidence = signal.get('confidence', 0)
+            leverage = signal.get('leverage', 1) / 10  # Normalize
+
+            obs.extend([action_val, confidence, leverage])
+
+        # Current weights (3)
+        for name in ['mean_reversion', 'pair_trading', 'defensive']:
+            obs.append(self.weights.get(name, 0.33))
+
+        # Portfolio state (3)
+        prices = self._current_prices()
+        total = max(self.portfolio.get_total_usd(prices), 1.0)
+        for asset in ['BTC', 'XRP', 'USDT']:
+            weight = self.portfolio.balances.get(asset, 0) * prices.get(asset, 1.0) / total
+            obs.append(weight)
+
+        return np.array(obs, dtype=np.float32)
+
+    def _current_prices(self) -> dict:
+        """Get current prices from data."""
+        prices = {'USDT': 1.0}
+        for sym in self.data:
+            df = self.data[sym]
+            if len(df) > 0:
+                base = sym.split('/')[0]
+                prices[base] = df['close'].iloc[-1]
+        return prices
+
+    def _update_weights_rl(self, obs: np.ndarray):
+        """Use RL agent to update strategy weights."""
+        if self.rl_agent is None:
+            return self._update_weights_rule_based()
+
+        try:
+            action, _ = self.rl_agent.predict(obs, deterministic=True)
+            # Action is 3D softmax weights (from EnsembleEnv)
+            if hasattr(action, '__len__') and len(action) == 3:
+                # Ensure weights sum to 1
+                weights = np.exp(action) / np.sum(np.exp(action))
+                self.weights['mean_reversion'] = float(weights[0])
+                self.weights['pair_trading'] = float(weights[1])
+                self.weights['defensive'] = float(weights[2])
+            else:
+                # Discrete action: map to weight presets
+                self._apply_weight_preset(int(action))
+        except Exception as e:
+            print(f"EnsembleOrchestrator: RL prediction error - {e}")
+            self._update_weights_rule_based()
+
+    def _apply_weight_preset(self, action_id: int):
+        """Apply weight preset from discrete action."""
+        presets = {
+            0: {'mean_reversion': 0.7, 'pair_trading': 0.1, 'defensive': 0.2},  # Chop focus
+            1: {'mean_reversion': 0.2, 'pair_trading': 0.6, 'defensive': 0.2},  # Divergence focus
+            2: {'mean_reversion': 0.1, 'pair_trading': 0.1, 'defensive': 0.8},  # Fear/defensive
+            3: {'mean_reversion': 0.4, 'pair_trading': 0.3, 'defensive': 0.3},  # Balanced
+            4: {'mean_reversion': 0.5, 'pair_trading': 0.4, 'defensive': 0.1},  # Aggressive
+        }
+        preset = presets.get(action_id % 5, presets[3])
+        self.weights.update(preset)
+
+    def _update_weights_rule_based(self):
+        """Rule-based weight updates when RL agent unavailable."""
+        regime = self.current_regime
+
+        if regime == 'chop':
+            self.weights = {'mean_reversion': 0.7, 'pair_trading': 0.1, 'defensive': 0.2}
+        elif regime == 'divergence':
+            self.weights = {'mean_reversion': 0.2, 'pair_trading': 0.6, 'defensive': 0.2}
+        elif regime == 'fear':
+            self.weights = {'mean_reversion': 0.1, 'pair_trading': 0.1, 'defensive': 0.8}
+        else:
+            self.weights = {'mean_reversion': 0.4, 'pair_trading': 0.3, 'defensive': 0.3}
+
+    def _weighted_vote(self, signals: dict) -> dict:
+        """Combine strategy signals using weighted voting."""
+        # Score each possible action
+        action_scores = {}
+
+        for name, signal in signals.items():
+            weight = self.weights.get(name, 0.33)
+            action = signal.get('action', 'hold')
+            confidence = signal.get('confidence', 0)
+
+            # Weight contribution = strategy weight * signal confidence
+            contribution = weight * confidence
+
+            if action not in action_scores:
+                action_scores[action] = {
+                    'score': 0,
+                    'signals': [],
+                    'total_confidence': 0
+                }
+
+            action_scores[action]['score'] += contribution
+            action_scores[action]['signals'].append((name, signal))
+            action_scores[action]['total_confidence'] += confidence
+
+        # Find winning action
+        if not action_scores:
+            return {'action': 'hold', 'confidence': 0, 'reason': 'No signals'}
+
+        best_action = max(action_scores.keys(), key=lambda a: action_scores[a]['score'])
+        best_info = action_scores[best_action]
+
+        # Build final signal from winning contributors
+        winning_signals = best_info['signals']
+        avg_confidence = best_info['score'] / len(winning_signals) if winning_signals else 0
+
+        # Get details from highest-confidence winning signal
+        primary_signal = max(winning_signals, key=lambda x: x[1].get('confidence', 0))[1]
+
+        final_signal = {
+            'action': best_action,
+            'confidence': avg_confidence,
+            'symbol': primary_signal.get('symbol', 'XRP/USDT'),
+            'size': primary_signal.get('size', 0.1),
+            'leverage': primary_signal.get('leverage', 1),
+            'reason': f"Ensemble: {best_action} (score: {best_info['score']:.2f})",
+            'contributing_strategies': [s[0] for s in winning_signals],
+            'weights': self.weights.copy(),
+            'regime': self.current_regime,
+            'indicators': primary_signal.get('indicators', {})
+        }
+
+        # Copy pair trading legs if applicable
+        if 'legs' in primary_signal:
+            final_signal['legs'] = primary_signal['legs']
+
+        return final_signal
+
+    def decide(self, prices: dict = None) -> dict:
+        """
+        Make ensemble trading decision.
+
+        1. Calculate regime features
+        2. Get signals from all strategies
+        3. Update weights via RL (or rule-based)
+        4. Weighted vote to select best action
+
+        Returns:
+            dict: Final trading signal with action, confidence, etc.
+        """
+        # Calculate regime features
+        features = self._calculate_regime_features()
+        self.current_regime = self._determine_regime(features)
+
+        # Get signals from all strategies
+        signals = {}
+        for name, strategy in self.strategies.items():
+            try:
+                signals[name] = strategy.generate_signals(self.data)
+            except Exception as e:
+                print(f"EnsembleOrchestrator: {name} signal error - {e}")
+                signals[name] = {'action': 'hold', 'confidence': 0}
+
+        # Get pair trading z-score for features
+        pt_signal = signals.get('pair_trading', {})
+        pt_indicators = pt_signal.get('indicators', {})
+        features['zscore_pair'] = pt_indicators.get('zscore', 0)
+
+        # Build RL observation and update weights
+        obs = self._get_ensemble_observation(signals, features)
+        self._update_weights_rl(obs)
+
+        # Weighted vote
+        final_signal = self._weighted_vote(signals)
+
+        self.total_signals += 1
+
+        return final_signal
+
+    def execute(self, signal: dict, prices: dict) -> dict:
+        """
+        Execute ensemble trading signal.
+
+        Args:
+            signal: Signal from decide()
+            prices: Current prices dict
+
+        Returns:
+            dict: Execution result
+        """
+        result = {
+            'signal': signal,
+            'executed': False,
+            'details': {}
+        }
+
+        action = signal.get('action', 'hold')
+        symbol = signal.get('symbol', 'XRP/USDT')
+        size = signal.get('size', 0.1)
+        leverage = signal.get('leverage', 1)
+
+        asset = symbol.split('/')[0] if '/' in symbol else symbol
+        usdt_available = self.portfolio.balances.get('USDT', 0)
+
+        # Confidence gate: Only execute if confidence > 0.5
+        if signal.get('confidence', 0) < 0.5 and action != 'hold':
+            result['reason'] = f"Low confidence ({signal.get('confidence', 0):.2f})"
+            return result
+
+        if action == 'hold':
+            result['executed'] = True
+            result['reason'] = 'Holding'
+
+        elif action == 'buy':
+            if usdt_available > 50:
+                price = prices.get(asset, 1.0)
+                trade_value = usdt_available * size
+
+                if leverage > 1 and asset == 'XRP':
+                    success = self.kraken.open_long(asset, trade_value, price, leverage=leverage)
+                    result['executed'] = success
+                    result['leverage'] = leverage
+                elif leverage > 1 and asset == 'BTC':
+                    success = self.bitrue.buy_etf('BTC3L', trade_value, price)
+                    result['executed'] = success
+                    result['etf'] = 'BTC3L'
+                else:
+                    amount = trade_value / price
+                    success = self.executor.place_paper_order(symbol, 'buy', amount)
+                    result['executed'] = success
+                    result['amount'] = amount
+
+                if result['executed']:
+                    self.executed_signals += 1
+
+        elif action in ['sell', 'short']:
+            if usdt_available > 50:
+                price = prices.get(asset, 1.0)
+                trade_value = usdt_available * size
+
+                if asset == 'XRP':
+                    success = self.kraken.open_short(asset, trade_value, price, leverage=leverage)
+                else:
+                    success = self.bitrue.buy_etf('BTC3S', trade_value, price)
+
+                result['executed'] = success
+                result['leverage'] = leverage
+
+                if result['executed']:
+                    self.executed_signals += 1
+
+        elif action in ['long_xrp_short_btc', 'short_xrp_long_btc']:
+            # Pair trade execution
+            legs = signal.get('legs', [])
+            for leg in legs:
+                leg_symbol = leg['symbol']
+                leg_asset = leg_symbol.split('/')[0]
+                leg_side = leg['side']
+                leg_size = leg['size']
+                leg_value = usdt_available * leg_size
+                leg_price = prices.get(leg_asset, 1.0)
+
+                if leg_side == 'long':
+                    if leg_asset == 'XRP':
+                        self.kraken.open_long(leg_asset, leg_value, leg_price, leverage=leverage)
+                    else:
+                        self.bitrue.buy_etf('BTC3L', leg_value, leg_price)
+                else:
+                    if leg_asset == 'XRP':
+                        self.kraken.open_short(leg_asset, leg_value, leg_price, leverage=leverage)
+                    else:
+                        self.bitrue.buy_etf('BTC3S', leg_value, leg_price)
+
+            result['executed'] = True
+            result['pair_trade'] = action
+            self.executed_signals += 1
+
+        elif action in ['close', 'close_pair']:
+            # Close all positions
+            for asset_name in ['XRP', 'BTC']:
+                if asset_name in self.kraken.positions:
+                    price = prices.get(asset_name, 1.0)
+                    self.kraken.close_position(asset_name, price)
+
+            for etf in ['BTC3L', 'BTC3S']:
+                if self.bitrue.etf_holdings.get(etf, 0) > 0:
+                    self.bitrue.sell_etf(etf, underlying_price=prices.get('BTC', 90000))
+
+            result['executed'] = True
+            result['closed'] = True
+
+        return result
+
+    def get_status(self) -> dict:
+        """Get ensemble orchestrator status."""
+        return {
+            'mode': 'ensemble',
+            'regime': self.current_regime,
+            'weights': self.weights,
+            'volatility': self.current_volatility,
+            'correlation': self.current_correlation,
+            'rsi': self.current_rsi,
+            'rl_agent_loaded': self.rl_agent is not None,
+            'total_signals': self.total_signals,
+            'executed_signals': self.executed_signals,
+            'strategies': {name: s.get_status() for name, s in self.strategies.items()},
+            'kraken': self.kraken.get_status(),
+            'bitrue': self.bitrue.get_status()
+        }
+
+
+# Import pandas for correlation calculation
+import pandas as pd

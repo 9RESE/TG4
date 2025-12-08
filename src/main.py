@@ -25,8 +25,8 @@ def load_config():
 
 
 def main():
-    parser = argparse.ArgumentParser(description="TG4 Local AI Crypto Trader - Phase 7")
-    parser.add_argument('--mode', choices=['fetch', 'backtest', 'paper', 'train-rl'], default='fetch')
+    parser = argparse.ArgumentParser(description="TG4 Local AI Crypto Trader - Phase 16")
+    parser.add_argument('--mode', choices=['fetch', 'backtest', 'paper', 'train-rl', 'train-ensemble', 'paper-ensemble'], default='fetch')
     parser.add_argument('--timesteps', type=int, default=100000, help='RL training timesteps')
     parser.add_argument('--device', type=str, default='cuda', help='Training device (cuda/cpu)')
     args = parser.parse_args()
@@ -36,7 +36,7 @@ def main():
     fetcher = DataFetcher()
 
     print("=" * 60)
-    print("TG4 Platform - Phase 7: USDT Focus + 10x Leverage")
+    print("TG4 Platform - Phase 16: RL Ensemble Orchestrator")
     print("=" * 60)
     print(f"Targets: BTC {config['targets']['BTC']*100:.0f}% | XRP {config['targets']['XRP']*100:.0f}% | USDT {config['targets']['USDT']*100:.0f}%")
     print(portfolio)
@@ -100,6 +100,122 @@ def main():
             print("Model saved to models/rl_ppo_agent.zip")
         else:
             print("No data available for training")
+
+    elif args.mode == 'train-ensemble':
+        from models.ensemble_env import train_ensemble_agent
+
+        print("\n[ENSEMBLE RL TRAINING MODE - Phase 16]")
+        print(f"Training ensemble agent for {args.timesteps} timesteps on {args.device.upper()}...")
+        print(f"Strategies: Mean Reversion VWAP + XRP/BTC Pair Trading + Defensive Yield")
+
+        # Fetch data for ensemble training
+        symbols = ['XRP/USDT', 'BTC/USDT']
+        data = {}
+        for sym in symbols:
+            print(f"Fetching {sym}...")
+            df = fetcher.fetch_ohlcv('kraken', sym, '1h', 2000)
+            if not df.empty:
+                data[sym] = df
+
+        if data:
+            model = train_ensemble_agent(data, timesteps=args.timesteps, device=args.device)
+            print("\nEnsemble RL training complete!")
+            print("Model saved to models/rl_ensemble_agent.zip")
+        else:
+            print("No data available for training")
+
+    elif args.mode == 'paper-ensemble':
+        from orchestrator import EnsembleOrchestrator
+
+        print("\n[ENSEMBLE PAPER TRADING MODE - Phase 16]")
+        print("Dynamic strategy weighting: Mean Reversion + Pair Trading + Defensive")
+        print("Press Ctrl+C to stop\n")
+
+        # Fetch initial data
+        print("Fetching initial market data...")
+        symbols = ['XRP/USDT', 'BTC/USDT']
+        data = {}
+        for sym in symbols:
+            df = fetcher.fetch_ohlcv('kraken', sym, '1h', 500)
+            if not df.empty:
+                data[sym] = df
+                print(f"  {sym}: {len(df)} candles")
+
+        # Initialize Ensemble Orchestrator
+        ensemble = EnsembleOrchestrator(portfolio, data)
+        print(f"\n[ENSEMBLE ORCHESTRATOR] Initialized")
+        print(f"  RL agent loaded: {ensemble.rl_agent is not None}")
+        print(f"  Current weights: {ensemble.weights}")
+
+        loop_count = 0
+        last_data_refresh = time.time()
+
+        while True:
+            try:
+                loop_count += 1
+                print(f"\n{'='*60}")
+                print(f"Loop {loop_count} @ {time.strftime('%Y-%m-%d %H:%M:%S')}")
+                print(f"{'='*60}")
+
+                # Fetch current prices
+                prices = {'USDT': 1.0}
+                for sym in ['XRP/USDT', 'BTC/USDT']:
+                    p = fetcher.get_best_price(sym)
+                    if p:
+                        base = sym.split('/')[0]
+                        prices[base] = list(p.values())[0]
+                        print(f"{sym}: ${prices[base]:.4f}")
+
+                # Record portfolio snapshot
+                portfolio.record_snapshot(prices)
+                total_value = portfolio.get_total_usd(prices)
+                print(f"\nPortfolio Value: ${total_value:.2f}")
+
+                # Get ensemble status
+                status = ensemble.get_status()
+                print(f"\n[ENSEMBLE STATUS]")
+                print(f"  Regime: {status['regime']}")
+                print(f"  Weights: MR={status['weights']['mean_reversion']:.2f}, PT={status['weights']['pair_trading']:.2f}, DEF={status['weights']['defensive']:.2f}")
+                print(f"  Volatility: {status['volatility']*100:.2f}%")
+                print(f"  Correlation: {status['correlation']:.2f}")
+
+                # Refresh data every 30 minutes
+                if time.time() - last_data_refresh > 1800:
+                    print("\n[Refreshing market data...]")
+                    for sym in symbols:
+                        df = fetcher.fetch_ohlcv('kraken', sym, '1h', 500)
+                        if not df.empty:
+                            data[sym] = df
+                            ensemble.data = data
+                    last_data_refresh = time.time()
+
+                # Get ensemble decision
+                signal = ensemble.decide(prices)
+                print(f"\n[ENSEMBLE DECISION]")
+                print(f"  Action: {signal['action']}")
+                print(f"  Confidence: {signal['confidence']:.2f}")
+                print(f"  Contributing: {signal.get('contributing_strategies', [])}")
+                print(f"  Reason: {signal['reason']}")
+
+                # Execute signal
+                result = ensemble.execute(signal, prices)
+                if result['executed']:
+                    print(f"  EXECUTED: {result}")
+
+                time.sleep(300)  # 5min loop
+
+            except KeyboardInterrupt:
+                print("\n\n" + "=" * 60)
+                print("Stopping ensemble paper trading...")
+                print("=" * 60)
+
+                final_status = ensemble.get_status()
+                print(f"\nFinal Stats:")
+                print(f"  Total signals: {final_status['total_signals']}")
+                print(f"  Executed signals: {final_status['executed_signals']}")
+                print(f"  Final weights: {final_status['weights']}")
+
+                break
 
     elif args.mode == 'paper':
         print("\n[PAPER TRADING MODE - Phase 7]")
