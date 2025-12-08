@@ -1,27 +1,31 @@
 """
 Ensemble RL Training Environment
-Phase 16: Multi-Strategy Weight Optimization
+Phase 21: Multi-Strategy Weight Optimization (6 Strategies)
 
-This environment trains an RL agent to dynamically weight three strategies:
+This environment trains an RL agent to dynamically weight six strategies:
 1. MeanReversionVWAP - Dominates in chop (XRP $2.00-2.20 range)
 2. XRPBTCPairTrading - Activates on XRP/BTC divergence
 3. DefensiveYield - Max weight during high ATR + fear
+4. MATrendFollow - 9-SMA trend following with breakout detection
+5. XRPBTCLeadLag - BTC breakout → XRP follow with high leverage
+6. IntraDayScalper - BB squeeze + RSI extremes, activates on ATR >3%
 
-Observation Space (22 features):
+Observation Space (36 features):
 - Regime features (7): ATR XRP/BTC, correlation, RSI, VWAP deviation, z-score
-- Strategy signals (9): 3 strategies x (action, confidence, leverage)
-- Current weights (3): Mean reversion, pair trading, defensive
-- Portfolio state (3): BTC/XRP/USDT weights
+- Strategy signals (18): 6 strategies x (action, confidence, leverage)
+- Current weights (6): Mean reversion, pair trading, defensive, ma_trend, leadlag, scalper
+- Portfolio state (5): BTC/XRP/USDT weights + volatility + scalp_active flag
 
 Action Space:
-- Discrete(5): Weight presets (chop, divergence, fear, balanced, aggressive)
-- Or Continuous(3): Direct weight values (softmax normalized)
+- Discrete(8): Weight presets (chop, divergence, fear, balanced, aggressive, trend, breakout, scalp)
+- Or Continuous(6): Direct weight values (softmax normalized)
 
 Reward:
 - PNL from executed trades
 - Accumulation bias for BTC/XRP/USDT
 - Yield bonus during defensive mode
 - Regime alignment bonus (right strategy for right market)
+- Scalp bonus for capturing intra-day swings
 """
 
 import gymnasium as gym
@@ -74,15 +78,15 @@ class EnsembleEnv(gym.Env):
 
         # Action space
         if use_discrete_actions:
-            # 5 weight presets: chop, divergence, fear, balanced, aggressive
-            self.action_space = spaces.Discrete(5)
+            # 8 weight presets: chop, divergence, fear, balanced, aggressive, trend, breakout, scalp
+            self.action_space = spaces.Discrete(8)
         else:
-            # Continuous weights (softmax applied in step)
-            self.action_space = spaces.Box(low=-2, high=2, shape=(3,), dtype=np.float32)
+            # Continuous weights for 6 strategies (softmax applied in step)
+            self.action_space = spaces.Box(low=-2, high=2, shape=(6,), dtype=np.float32)
 
-        # Observation space: 22 features
+        # Observation space: 36 features (Phase 21: 6 strategies)
         self.observation_space = spaces.Box(
-            low=-np.inf, high=np.inf, shape=(22,), dtype=np.float32
+            low=-np.inf, high=np.inf, shape=(36,), dtype=np.float32
         )
 
         # Environment state
@@ -90,8 +94,15 @@ class EnsembleEnv(gym.Env):
         self.max_steps = min(len(df) for df in data_dict.values()) - 1
         self.portfolio = None
 
-        # Strategy weights
-        self.weights = {'mean_reversion': 0.4, 'pair_trading': 0.2, 'defensive': 0.4}
+        # Strategy weights (6 strategies - Phase 21)
+        self.weights = {
+            'mean_reversion': 0.20,
+            'pair_trading': 0.12,
+            'defensive': 0.22,
+            'ma_trend': 0.18,
+            'leadlag': 0.13,
+            'scalper': 0.15
+        }
 
         # Regime tracking
         self.current_regime = 'neutral'
@@ -99,13 +110,16 @@ class EnsembleEnv(gym.Env):
         self.current_correlation = 0.8
         self.current_rsi = {'XRP': 50.0, 'BTC': 50.0}
 
-        # Weight presets for discrete actions
+        # Weight presets for discrete actions (8 presets for 6 strategies - Phase 21)
         self.weight_presets = {
-            0: {'mean_reversion': 0.7, 'pair_trading': 0.1, 'defensive': 0.2},  # Chop
-            1: {'mean_reversion': 0.2, 'pair_trading': 0.6, 'defensive': 0.2},  # Divergence
-            2: {'mean_reversion': 0.1, 'pair_trading': 0.1, 'defensive': 0.8},  # Fear
-            3: {'mean_reversion': 0.4, 'pair_trading': 0.3, 'defensive': 0.3},  # Balanced
-            4: {'mean_reversion': 0.5, 'pair_trading': 0.4, 'defensive': 0.1},  # Aggressive
+            0: {'mean_reversion': 0.45, 'pair_trading': 0.08, 'defensive': 0.15, 'ma_trend': 0.12, 'leadlag': 0.10, 'scalper': 0.10},  # Chop
+            1: {'mean_reversion': 0.12, 'pair_trading': 0.40, 'defensive': 0.12, 'ma_trend': 0.08, 'leadlag': 0.13, 'scalper': 0.15},  # Divergence
+            2: {'mean_reversion': 0.10, 'pair_trading': 0.05, 'defensive': 0.55, 'ma_trend': 0.10, 'leadlag': 0.10, 'scalper': 0.10},  # Fear
+            3: {'mean_reversion': 0.17, 'pair_trading': 0.17, 'defensive': 0.17, 'ma_trend': 0.17, 'leadlag': 0.16, 'scalper': 0.16},  # Balanced
+            4: {'mean_reversion': 0.20, 'pair_trading': 0.20, 'defensive': 0.08, 'ma_trend': 0.22, 'leadlag': 0.15, 'scalper': 0.15},  # Aggressive
+            5: {'mean_reversion': 0.12, 'pair_trading': 0.08, 'defensive': 0.12, 'ma_trend': 0.40, 'leadlag': 0.13, 'scalper': 0.15},  # Trend
+            6: {'mean_reversion': 0.08, 'pair_trading': 0.08, 'defensive': 0.10, 'ma_trend': 0.25, 'leadlag': 0.35, 'scalper': 0.14},  # Breakout
+            7: {'mean_reversion': 0.10, 'pair_trading': 0.08, 'defensive': 0.12, 'ma_trend': 0.15, 'leadlag': 0.15, 'scalper': 0.40},  # Scalp (high vol)
         }
 
         # Simulated strategy signals (will be computed from data)
@@ -125,8 +139,15 @@ class EnsembleEnv(gym.Env):
         self.current_step = 60  # Warmup period
         self.portfolio = Portfolio(self.initial_balance.copy())
 
-        # Reset weights to balanced
-        self.weights = {'mean_reversion': 0.4, 'pair_trading': 0.2, 'defensive': 0.4}
+        # Reset weights to balanced (6 strategies)
+        self.weights = {
+            'mean_reversion': 0.17,
+            'pair_trading': 0.17,
+            'defensive': 0.17,
+            'ma_trend': 0.17,
+            'leadlag': 0.16,
+            'scalper': 0.16
+        }
 
         # Reset tracking
         self.positions = {'long': {}, 'short': {}}
@@ -242,7 +263,10 @@ class EnsembleEnv(gym.Env):
         signals = {
             'mean_reversion': {'action': 'hold', 'confidence': 0.0, 'leverage': 1},
             'pair_trading': {'action': 'hold', 'confidence': 0.0, 'leverage': 1},
-            'defensive': {'action': 'hold', 'confidence': 0.0, 'leverage': 1}
+            'defensive': {'action': 'hold', 'confidence': 0.0, 'leverage': 1},
+            'ma_trend': {'action': 'hold', 'confidence': 0.0, 'leverage': 1},
+            'leadlag': {'action': 'hold', 'confidence': 0.0, 'leverage': 1},
+            'scalper': {'action': 'hold', 'confidence': 0.0, 'leverage': 1}
         }
 
         if 'XRP/USDT' not in self.data:
@@ -292,6 +316,93 @@ class EnsembleEnv(gym.Env):
                 'confidence': min(0.6 + self.current_volatility * 5, 0.95),
                 'leverage': 1
             }
+
+        # Phase 21: MA Trend signals (SMA9 crossover)
+        if 'XRP/USDT' in self.data:
+            xrp_df = self.data['XRP/USDT']
+            if self.current_step >= 10:
+                close_prices = xrp_df['close'].iloc[:self.current_step+1].values
+                sma9 = np.mean(close_prices[-9:])
+                current_price = close_prices[-1]
+                prev_price = close_prices[-2]
+
+                # Uptrend: close above SMA9
+                if current_price > sma9 and prev_price <= sma9:
+                    signals['ma_trend'] = {
+                        'action': 'buy',
+                        'confidence': min(0.7 + (current_price / sma9 - 1) * 10, 0.95),
+                        'leverage': 5
+                    }
+                # Downtrend: close below SMA9
+                elif current_price < sma9 and prev_price >= sma9:
+                    signals['ma_trend'] = {
+                        'action': 'sell',
+                        'confidence': min(0.65 + (sma9 / current_price - 1) * 10, 0.90),
+                        'leverage': 4
+                    }
+
+        # Phase 21: Lead-Lag signals (BTC leads XRP)
+        if 'BTC/USDT' in self.data and 'XRP/USDT' in self.data:
+            btc_df = self.data['BTC/USDT']
+            if self.current_step >= 24:
+                btc_prices = btc_df['close'].iloc[:self.current_step+1].values
+                btc_high_24h = np.max(btc_prices[-24:-1])
+                current_btc = btc_prices[-1]
+                btc_vol = btc_df['volume'].iloc[-24:-1].mean()
+                current_vol = btc_df['volume'].iloc[self.current_step]
+
+                # BTC breakout detection
+                if current_btc > btc_high_24h and current_vol > btc_vol * 1.5:
+                    # BTC breakout → XRP follow with high leverage
+                    signals['leadlag'] = {
+                        'action': 'buy',
+                        'confidence': min(0.85 + (current_btc / btc_high_24h - 1) * 5, 0.95),
+                        'leverage': 7
+                    }
+                elif self.current_correlation > 0.8:
+                    # High correlation: XRP follows BTC direction
+                    btc_change = (current_btc - btc_prices[-4]) / btc_prices[-4]
+                    if btc_change > 0.01:
+                        signals['leadlag'] = {
+                            'action': 'buy',
+                            'confidence': 0.70 + self.current_correlation * 0.1,
+                            'leverage': 5
+                        }
+                    elif btc_change < -0.01:
+                        signals['leadlag'] = {
+                            'action': 'sell',
+                            'confidence': 0.65 + self.current_correlation * 0.1,
+                            'leverage': 5
+                        }
+
+        # Phase 21: Scalper signals (BB squeeze + high volatility)
+        if 'XRP/USDT' in self.data:
+            xrp_df = self.data['XRP/USDT']
+            if self.current_step >= 25 and self.current_volatility > 0.03:  # ATR >3% activates
+                close_prices = xrp_df['close'].iloc[:self.current_step+1].values
+                # Simplified Bollinger Bands
+                if len(close_prices) >= 20:
+                    sma20 = np.mean(close_prices[-20:])
+                    std20 = np.std(close_prices[-20:])
+                    bb_upper = sma20 + 2 * std20
+                    bb_lower = sma20 - 2 * std20
+                    current_price = close_prices[-1]
+                    current_rsi = self.current_rsi.get('XRP', 50)
+
+                    # Oversold squeeze: price at lower band + RSI oversold
+                    if current_price <= bb_lower and current_rsi < 30:
+                        signals['scalper'] = {
+                            'action': 'buy',
+                            'confidence': min(0.70 + (30 - current_rsi) / 50, 0.90),
+                            'leverage': 3
+                        }
+                    # Overbought squeeze: price at upper band + RSI overbought
+                    elif current_price >= bb_upper and current_rsi > 70:
+                        signals['scalper'] = {
+                            'action': 'sell',
+                            'confidence': min(0.65 + (current_rsi - 70) / 50, 0.85),
+                            'leverage': 3
+                        }
 
         self.strategy_signals = signals
         return signals
@@ -361,27 +472,35 @@ class EnsembleEnv(gym.Env):
         # Simulate strategy signals
         signals = self._simulate_strategy_signals()
 
-        # Strategy signals (9: 3 strategies x 3 features)
+        # Strategy signals (18: 6 strategies x 3 features) - Phase 21
         action_map = {'hold': 0, 'buy': 1, 'sell': -1, 'park': 0,
                       'short_xrp_long_btc': -0.5, 'long_xrp_short_btc': 0.5}
 
-        for name in ['mean_reversion', 'pair_trading', 'defensive']:
+        for name in ['mean_reversion', 'pair_trading', 'defensive', 'ma_trend', 'leadlag', 'scalper']:
             signal = signals.get(name, {})
             action_val = action_map.get(signal.get('action', 'hold'), 0)
             confidence = signal.get('confidence', 0)
             leverage = signal.get('leverage', 1) / 10
             obs.extend([action_val, confidence, leverage])
 
-        # Current weights (3)
-        for name in ['mean_reversion', 'pair_trading', 'defensive']:
-            obs.append(self.weights.get(name, 0.33))
+        # Current weights (6) - Phase 21
+        for name in ['mean_reversion', 'pair_trading', 'defensive', 'ma_trend', 'leadlag', 'scalper']:
+            obs.append(self.weights.get(name, 0.17))
 
-        # Portfolio state (3)
+        # Portfolio state (5) - Phase 21: added volatility + scalp_active
         prices = self._current_prices()
         total = max(self.portfolio.get_total_usd(prices), 1.0)
         for asset in ['BTC', 'XRP', 'USDT']:
             weight = self.portfolio.balances.get(asset, 0) * prices.get(asset, 1.0) / total
             obs.append(weight)
+
+        # Volatility feature
+        obs.append(self.current_volatility)
+
+        # Scalp active flag (1.0 if high vol + scalper has signal)
+        scalper_active = 1.0 if (self.current_volatility > 0.03 and
+                                  signals.get('scalper', {}).get('action', 'hold') != 'hold') else 0.0
+        obs.append(scalper_active)
 
         return np.array(obs, dtype=np.float32)
 
@@ -457,13 +576,16 @@ class EnsembleEnv(gym.Env):
         if self.use_discrete_actions:
             self.weights = self.weight_presets.get(action, self.weight_presets[3]).copy()
         else:
-            # Continuous action: softmax to get weights
+            # Continuous action: softmax to get weights (6 strategies - Phase 21)
             exp_action = np.exp(action - np.max(action))
             weights_arr = exp_action / exp_action.sum()
             self.weights = {
                 'mean_reversion': float(weights_arr[0]),
                 'pair_trading': float(weights_arr[1]),
-                'defensive': float(weights_arr[2])
+                'defensive': float(weights_arr[2]),
+                'ma_trend': float(weights_arr[3]),
+                'leadlag': float(weights_arr[4]),
+                'scalper': float(weights_arr[5])
             }
 
         # Execute trade based on weighted signals
@@ -492,20 +614,31 @@ class EnsembleEnv(gym.Env):
             weight = asset_value / total
             alignment_score += min(weight, self.targets[asset])
 
-        # Regime alignment bonus (reward correct strategy for market)
+        # Regime alignment bonus (reward correct strategy for market) - Phase 21
         regime_bonus = 0.0
-        if self.current_regime == 'chop' and self.weights['mean_reversion'] > 0.5:
+        if self.current_regime == 'chop' and self.weights['mean_reversion'] > 0.35:
             regime_bonus = 1.0
-        elif self.current_regime == 'divergence' and self.weights['pair_trading'] > 0.4:
+        elif self.current_regime == 'divergence' and self.weights['pair_trading'] > 0.3:
             regime_bonus = 1.0
-        elif self.current_regime == 'fear' and self.weights['defensive'] > 0.6:
+        elif self.current_regime == 'fear' and self.weights['defensive'] > 0.4:
             regime_bonus = 1.0
+        # Phase 21: Trend bonus for MA trend and Lead-Lag
+        elif self.current_regime == 'neutral':
+            if self.weights['ma_trend'] > 0.3 or self.weights['leadlag'] > 0.3:
+                regime_bonus = 0.5  # Partial bonus for trend strategies in neutral
+
+        # Phase 21: Scalp bonus for high volatility captures
+        scalp_bonus = 0.0
+        if self.current_volatility > 0.03 and self.weights.get('scalper', 0) > 0.3:
+            scalp_signal = self.strategy_signals.get('scalper', {})
+            if scalp_signal.get('action', 'hold') != 'hold':
+                scalp_bonus = 1.5  # Reward scalper activation during high vol
 
         # Yield bonus
         yield_bonus = yield_earned * 2.0  # 2x weight for yield
 
         # Combined reward
-        reward = (base_reward * 10 + alignment_score * 3 + regime_bonus + yield_bonus + trade_pnl * 5)
+        reward = (base_reward * 10 + alignment_score * 3 + regime_bonus + yield_bonus + trade_pnl * 5 + scalp_bonus)
 
         done = self.current_step >= self.max_steps
         truncated = False

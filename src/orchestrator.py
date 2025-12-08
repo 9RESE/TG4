@@ -1,18 +1,19 @@
 """
 RL Orchestrator - Master controller for RL-driven trading decisions
-Phase 20: RL Ensemble Orchestrator + Dynamic Strategy Weighting
+Phase 21: RL Ensemble Orchestrator + Dynamic Strategy Weighting + Scalper
 
 This file contains:
 1. RLOrchestrator - The original live trading controller (unchanged)
 2. StrategyRouter - Modular strategy router using BaseStrategy interface
 3. EnsembleOrchestrator - RL-driven multi-strategy weighting
 
-Phase 20 Strategies:
+Phase 21 Strategies (6 total):
 - MeanReversionVWAP: High weight in chop ($2.00-2.20 range)
 - XRPBTCPairTrading: Activate on XRP news / BTC weakness divergence
 - DefensiveYield: Max weight during high ATR + fear
-- MATrendFollow: 9-period SMA trend following (NEW Phase 20)
-- XRPBTCLeadLag: Correlation-aware BTC/XRP following (NEW Phase 20)
+- MATrendFollow: 9-period SMA trend following
+- XRPBTCLeadLag: Correlation-aware BTC/XRP following
+- IntraDayScalper: BB squeeze + RSI extremes, activates on ATR >3% (NEW Phase 21)
 
 Target: Unbeatable multi-strategy orchestration with accumulation bias.
 """
@@ -990,19 +991,20 @@ class StrategyRouter:
 
 class EnsembleOrchestrator:
     """
-    Phase 20: RL Ensemble Orchestrator with Dynamic Strategy Weighting.
+    Phase 21: RL Ensemble Orchestrator with Dynamic Strategy Weighting.
 
-    Uses a trained RL agent to dynamically weight signals from multiple strategies:
+    Uses a trained RL agent to dynamically weight signals from 6 strategies:
     - MeanReversionVWAP: Dominates in XRP $2.00-2.20 chop (high weight in tight range)
     - XRPBTCPairTrading: Activates on XRP/BTC divergence (news, alt-season)
     - DefensiveYield: Max weight during high ATR + fear (grind-down protection)
-    - MATrendFollow: 9-period SMA trend following (NEW Phase 20)
-    - XRPBTCLeadLag: Correlation-aware BTC/XRP following (NEW Phase 20)
+    - MATrendFollow: 9-period SMA trend following
+    - XRPBTCLeadLag: Correlation-aware BTC/XRP following
+    - IntraDayScalper: BB squeeze + RSI extremes, activates on ATR >3% (NEW Phase 21)
 
     The RL agent learns optimal weights based on:
     - Regime features: ATR, correlation, RSI, VWAP deviation
     - Strategy signals: Each strategy's action + confidence
-    - Reward: PNL + accumulation bias + yield bonus
+    - Reward: PNL + accumulation bias + yield bonus + scalp bonus
 
     Target: Unbeatable multi-strategy alpha with BTC/XRP/USDT accumulation bias.
     """
@@ -1023,6 +1025,7 @@ class EnsembleOrchestrator:
         from strategies.defensive_yield import DefensiveYield
         from strategies.ma_trend_follow import MATrendFollow
         from strategies.xrp_btc_leadlag import XRPBTCLeadLag
+        from strategies.intraday_scalper import IntraDayScalper
         from strategies.strategy_factory import StrategyFactory
 
         self.portfolio = portfolio
@@ -1054,12 +1057,21 @@ class EnsembleOrchestrator:
             'btc_lead_bars': 3, 'min_btc_move': 0.01
         })
 
+        # Phase 21: Scalper config
+        sc_config = self.factory.config.get('strategies', {}).get('intraday_scalper', {
+            'bb_period': 20, 'bb_std': 2.0, 'rsi_period': 14,
+            'daily_vol_pct': 3.0, 'rsi_oversold': 30, 'rsi_overbought': 70,
+            'scalp_target_pct': 0.01, 'scalp_stop_pct': 0.005,
+            'symbols': ['BTC/USDT', 'XRP/USDT']
+        })
+
         self.strategies = {
             'mean_reversion': MeanReversionVWAP(mr_config),
             'pair_trading': XRPBTCPairTrading(pt_config),
             'defensive': DefensiveYield(dy_config),
             'ma_trend': MATrendFollow(ma_config),
-            'leadlag': XRPBTCLeadLag(ll_config)
+            'leadlag': XRPBTCLeadLag(ll_config),
+            'scalper': IntraDayScalper(sc_config)
         }
 
         # Initialize strategies with portfolio and exchanges
@@ -1079,13 +1091,14 @@ class EnsembleOrchestrator:
         self.current_rsi = {'XRP': 50.0, 'BTC': 50.0}
 
         # Strategy weights (RL agent updates these)
-        # Phase 20: 5 strategies now
+        # Phase 21: 6 strategies now
         self.weights = {
-            'mean_reversion': 0.25,
-            'pair_trading': 0.15,
-            'defensive': 0.25,
-            'ma_trend': 0.20,
-            'leadlag': 0.15
+            'mean_reversion': 0.20,
+            'pair_trading': 0.12,
+            'defensive': 0.22,
+            'ma_trend': 0.18,
+            'leadlag': 0.13,
+            'scalper': 0.15
         }
 
         # Performance tracking
@@ -1240,7 +1253,7 @@ class EnsembleOrchestrator:
         return 'neutral'
 
     def _get_ensemble_observation(self, signals: dict, features: dict) -> np.ndarray:
-        """Build observation vector for RL agent."""
+        """Build observation vector for RL agent. Phase 21: 36 features for 6 strategies."""
         obs = []
 
         # Regime features (7)
@@ -1254,8 +1267,8 @@ class EnsembleOrchestrator:
             features.get('zscore_pair', 0)
         ])
 
-        # Strategy signals (15: 5 strategies x 3 features each) - Phase 20
-        for name in ['mean_reversion', 'pair_trading', 'defensive', 'ma_trend', 'leadlag']:
+        # Strategy signals (18: 6 strategies x 3 features each) - Phase 21
+        for name in ['mean_reversion', 'pair_trading', 'defensive', 'ma_trend', 'leadlag', 'scalper']:
             signal = signals.get(name, {})
             action_map = {'hold': 0, 'buy': 1, 'sell': -1, 'short': -1,
                           'short_xrp_long_btc': -0.5, 'long_xrp_short_btc': 0.5,
@@ -1266,16 +1279,25 @@ class EnsembleOrchestrator:
 
             obs.extend([action_val, confidence, leverage])
 
-        # Current weights (5) - Phase 20
-        for name in ['mean_reversion', 'pair_trading', 'defensive', 'ma_trend', 'leadlag']:
-            obs.append(self.weights.get(name, 0.20))
+        # Current weights (6) - Phase 21
+        for name in ['mean_reversion', 'pair_trading', 'defensive', 'ma_trend', 'leadlag', 'scalper']:
+            obs.append(self.weights.get(name, 0.17))
 
-        # Portfolio state (3)
+        # Portfolio state (5) - Phase 21: added volatility + scalp_active
         prices = self._current_prices()
         total = max(self.portfolio.get_total_usd(prices), 1.0)
         for asset in ['BTC', 'XRP', 'USDT']:
             weight = self.portfolio.balances.get(asset, 0) * prices.get(asset, 1.0) / total
             obs.append(weight)
+
+        # Volatility feature
+        obs.append(self.current_volatility)
+
+        # Scalp active flag (1.0 if high vol + scalper has signal)
+        scalper_signal = signals.get('scalper', {})
+        scalper_active = 1.0 if (self.current_volatility > 0.03 and
+                                  scalper_signal.get('action', 'hold') != 'hold') else 0.0
+        obs.append(scalper_active)
 
         return np.array(obs, dtype=np.float32)
 
@@ -1290,30 +1312,42 @@ class EnsembleOrchestrator:
         return prices
 
     def _update_weights_rl(self, obs: np.ndarray):
-        """Use RL agent to update strategy weights."""
+        """Use RL agent to update strategy weights. Phase 21: 6 strategies."""
         if self.rl_agent is None:
             return self._update_weights_rule_based()
 
         try:
             action, _ = self.rl_agent.predict(obs, deterministic=True)
-            # Check if action is array-like with 5 elements (continuous) or scalar (discrete)
+            # Check if action is array-like with 6 elements (continuous) or scalar (discrete)
             action_arr = np.atleast_1d(action)
-            if action_arr.shape[0] == 5:
-                # Continuous: 5D softmax weights - Phase 20
+            if action_arr.shape[0] == 6:
+                # Continuous: 6D softmax weights - Phase 21
                 weights = np.exp(action_arr) / np.sum(np.exp(action_arr))
                 self.weights['mean_reversion'] = float(weights[0])
                 self.weights['pair_trading'] = float(weights[1])
                 self.weights['defensive'] = float(weights[2])
                 self.weights['ma_trend'] = float(weights[3])
                 self.weights['leadlag'] = float(weights[4])
-            elif action_arr.shape[0] == 3:
-                # Legacy 3D model - distribute to 5 strategies
+                self.weights['scalper'] = float(weights[5])
+            elif action_arr.shape[0] == 5:
+                # Legacy 5D model - distribute to 6 strategies
                 weights = np.exp(action_arr) / np.sum(np.exp(action_arr))
-                self.weights['mean_reversion'] = float(weights[0]) * 0.8
-                self.weights['pair_trading'] = float(weights[1]) * 0.8
-                self.weights['defensive'] = float(weights[2]) * 0.8
-                self.weights['ma_trend'] = float(weights[0]) * 0.1 + float(weights[1]) * 0.1
-                self.weights['leadlag'] = float(weights[1]) * 0.1 + float(weights[2]) * 0.1
+                self.weights['mean_reversion'] = float(weights[0]) * 0.85
+                self.weights['pair_trading'] = float(weights[1]) * 0.85
+                self.weights['defensive'] = float(weights[2]) * 0.85
+                self.weights['ma_trend'] = float(weights[3]) * 0.85
+                self.weights['leadlag'] = float(weights[4]) * 0.85
+                # Scalper gets remaining weight
+                self.weights['scalper'] = 1.0 - sum([self.weights[k] for k in ['mean_reversion', 'pair_trading', 'defensive', 'ma_trend', 'leadlag']])
+            elif action_arr.shape[0] == 3:
+                # Legacy 3D model - distribute to 6 strategies
+                weights = np.exp(action_arr) / np.sum(np.exp(action_arr))
+                self.weights['mean_reversion'] = float(weights[0]) * 0.7
+                self.weights['pair_trading'] = float(weights[1]) * 0.7
+                self.weights['defensive'] = float(weights[2]) * 0.7
+                self.weights['ma_trend'] = float(weights[0]) * 0.1 + float(weights[1]) * 0.05
+                self.weights['leadlag'] = float(weights[1]) * 0.1 + float(weights[2]) * 0.05
+                self.weights['scalper'] = 0.15  # Fixed 15% for scalper
             else:
                 # Discrete action: map to weight presets
                 self._apply_weight_preset(int(action_arr[0]))
@@ -1322,33 +1356,39 @@ class EnsembleOrchestrator:
             self._update_weights_rule_based()
 
     def _apply_weight_preset(self, action_id: int):
-        """Apply weight preset from discrete action. Phase 20: 5 strategies."""
+        """Apply weight preset from discrete action. Phase 21: 6 strategies with 8 presets."""
         presets = {
-            0: {'mean_reversion': 0.5, 'pair_trading': 0.05, 'defensive': 0.15, 'ma_trend': 0.20, 'leadlag': 0.10},  # Chop focus
-            1: {'mean_reversion': 0.15, 'pair_trading': 0.4, 'defensive': 0.10, 'ma_trend': 0.15, 'leadlag': 0.20},  # Divergence focus
-            2: {'mean_reversion': 0.10, 'pair_trading': 0.05, 'defensive': 0.60, 'ma_trend': 0.15, 'leadlag': 0.10},  # Fear/defensive
-            3: {'mean_reversion': 0.25, 'pair_trading': 0.15, 'defensive': 0.25, 'ma_trend': 0.20, 'leadlag': 0.15},  # Balanced
-            4: {'mean_reversion': 0.20, 'pair_trading': 0.20, 'defensive': 0.05, 'ma_trend': 0.30, 'leadlag': 0.25},  # Aggressive/trend
-            5: {'mean_reversion': 0.15, 'pair_trading': 0.10, 'defensive': 0.15, 'ma_trend': 0.35, 'leadlag': 0.25},  # MA trend focus
+            0: {'mean_reversion': 0.45, 'pair_trading': 0.08, 'defensive': 0.15, 'ma_trend': 0.12, 'leadlag': 0.10, 'scalper': 0.10},  # Chop
+            1: {'mean_reversion': 0.12, 'pair_trading': 0.40, 'defensive': 0.12, 'ma_trend': 0.08, 'leadlag': 0.13, 'scalper': 0.15},  # Divergence
+            2: {'mean_reversion': 0.10, 'pair_trading': 0.05, 'defensive': 0.55, 'ma_trend': 0.10, 'leadlag': 0.10, 'scalper': 0.10},  # Fear
+            3: {'mean_reversion': 0.17, 'pair_trading': 0.17, 'defensive': 0.17, 'ma_trend': 0.17, 'leadlag': 0.16, 'scalper': 0.16},  # Balanced
+            4: {'mean_reversion': 0.20, 'pair_trading': 0.20, 'defensive': 0.08, 'ma_trend': 0.22, 'leadlag': 0.15, 'scalper': 0.15},  # Aggressive
+            5: {'mean_reversion': 0.12, 'pair_trading': 0.08, 'defensive': 0.12, 'ma_trend': 0.40, 'leadlag': 0.13, 'scalper': 0.15},  # Trend
+            6: {'mean_reversion': 0.08, 'pair_trading': 0.08, 'defensive': 0.10, 'ma_trend': 0.25, 'leadlag': 0.35, 'scalper': 0.14},  # Breakout
+            7: {'mean_reversion': 0.10, 'pair_trading': 0.08, 'defensive': 0.12, 'ma_trend': 0.15, 'leadlag': 0.15, 'scalper': 0.40},  # Scalp (high vol)
         }
-        preset = presets.get(action_id % 6, presets[3])
+        preset = presets.get(action_id % 8, presets[3])
         self.weights.update(preset)
 
     def _update_weights_rule_based(self):
-        """Rule-based weight updates when RL agent unavailable. Phase 20: 5 strategies."""
+        """Rule-based weight updates when RL agent unavailable. Phase 21: 6 strategies."""
         regime = self.current_regime
 
+        # Phase 21: Scalper weight increases in high volatility
+        scalper_boost = 0.25 if self.current_volatility > 0.03 else 0.10
+
         if regime == 'chop':
-            # Mean reversion dominates, MA trend for breakouts
-            self.weights = {'mean_reversion': 0.5, 'pair_trading': 0.05, 'defensive': 0.15, 'ma_trend': 0.20, 'leadlag': 0.10}
+            # Mean reversion dominates, moderate scalper
+            self.weights = {'mean_reversion': 0.45, 'pair_trading': 0.05, 'defensive': 0.15, 'ma_trend': 0.15, 'leadlag': 0.08, 'scalper': 0.12}
         elif regime == 'divergence':
             # Pair trading + leadlag for correlation plays
-            self.weights = {'mean_reversion': 0.15, 'pair_trading': 0.35, 'defensive': 0.10, 'ma_trend': 0.15, 'leadlag': 0.25}
+            self.weights = {'mean_reversion': 0.12, 'pair_trading': 0.35, 'defensive': 0.10, 'ma_trend': 0.12, 'leadlag': 0.18, 'scalper': 0.13}
         elif regime == 'fear':
-            # Defensive + MA trend for exits
-            self.weights = {'mean_reversion': 0.10, 'pair_trading': 0.05, 'defensive': 0.55, 'ma_trend': 0.20, 'leadlag': 0.10}
-        else:  # neutral - trending conditions favor MA + leadlag
-            self.weights = {'mean_reversion': 0.20, 'pair_trading': 0.15, 'defensive': 0.15, 'ma_trend': 0.30, 'leadlag': 0.20}
+            # Defensive + scalper for quick exits/captures
+            self.weights = {'mean_reversion': 0.08, 'pair_trading': 0.05, 'defensive': 0.45, 'ma_trend': 0.12, 'leadlag': 0.10, 'scalper': scalper_boost}
+        else:  # neutral - trending conditions favor MA + leadlag + scalper on vol
+            scalper_wt = scalper_boost if self.current_volatility > 0.03 else 0.15
+            self.weights = {'mean_reversion': 0.18, 'pair_trading': 0.12, 'defensive': 0.15, 'ma_trend': 0.25, 'leadlag': 0.15, 'scalper': scalper_wt}
 
     def _weighted_vote(self, signals: dict) -> dict:
         """Combine strategy signals using weighted voting with BTC momentum bias."""
