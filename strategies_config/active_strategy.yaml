@@ -1,5 +1,5 @@
 # Strategy Configuration
-# Phase 15: Modular Strategy Factory
+# Phase 16: Tuned Parameters for Dec 2025
 #
 # active: The strategy to use for live trading
 # strategies: Configuration for each available strategy
@@ -18,36 +18,66 @@ strategies:
       - "Bear mode: Selective shorts on overbought rips"
       - "Auto-yield: 6.5% avg APY on parked USDT"
 
-  # NEW STRATEGY - Requires backtesting before live use
+  # Phase 16 TUNED - Ready for live testing
   mean_reversion_vwap:
     enabled: true
     symbol: "XRP/USDT"
-    max_leverage: 5
-    position_size_pct: 0.10
-    vwap_period: 20
-    rsi_period: 14
-    description: "VWAP + RSI mean reversion"
-    notes:
-      - "Long: RSI < 30 AND price > 0.5% below VWAP"
-      - "Short: RSI > 70 AND price > 0.5% above VWAP"
-      - "Target: VWAP reversion"
 
-  # NEW STRATEGY - Requires backtesting before live use
+    # Phase 16 Tuning
+    dev_threshold: 0.003        # 0.3% (was 0.5%) - tighter for more trades
+    rsi_oversold: 32            # (was 30) - slightly relaxed
+    rsi_overbought: 68          # (was 70) - slightly relaxed
+    max_leverage: 7             # (was 5) - higher for amplified accumulation
+    stop_loss_pct: 0.04         # 4% (was 5%) - tighter for leverage
+
+    # Volume filter
+    volume_filter: true
+    volume_mult: 1.5            # Require 1.5x avg volume
+    volume_window: 20
+
+    # Standard params
+    vwap_window: 14
+    rsi_window: 14
+    long_size: 0.12
+    short_size: 0.10
+
+    description: "VWAP + RSI mean reversion - Phase 16 tuned"
+    notes:
+      - "Long: RSI < 32 AND price 0.3%+ below VWAP AND vol > 1.5x"
+      - "Short: RSI > 68 AND price 0.3%+ above VWAP AND vol > 1.5x"
+      - "Target: 5-15% monthly in XRP $2.00-2.20 chop"
+
+  # Phase 16 TUNED - Ready for live testing
   xrp_btc_pair_trading:
     enabled: true
     xrp_symbol: "XRP/USDT"
     btc_symbol: "BTC/USDT"
+
+    # Phase 16 Tuning
+    lookback: 336               # 2 weeks (was 168) - more stable hedge
+    entry_z: 1.8                # (was 2.0) - earlier signals
+    exit_z: 0.5
+    stop_z: 3.0
+    coint_pvalue_threshold: 0.10  # (was 0.05) - relaxed cointegration
+
+    # BTC momentum filter
+    use_btc_filter: true
+    btc_rsi_window: 14
+    hedge_recalc_period: 24     # Recalculate hedge ratio daily
+
+    # Standard params
     max_leverage: 10
     position_size_pct: 0.10
-    lookback_period: 100
-    description: "Statistical arbitrage using XRP/BTC cointegration"
-    notes:
-      - "Entry: Z-score > 2 or < -2"
-      - "Exit: Z-score reverts to 0"
-      - "Stop: Z-score > 3 or < -3"
-      - "Pairs trade: Long one, short the other"
 
-# Backtesting notes:
-# - Test new strategies in notebooks before enabling for live
-# - Compare Sharpe ratio, max drawdown, win rate
-# - Ensure strategies don't conflict (e.g., simultaneous opposing trades)
+    description: "XRP/BTC cointegration stat arb - Phase 16 tuned"
+    notes:
+      - "Entry: Z > 1.8 + BTC RSI > 50 (short XRP/long BTC)"
+      - "Entry: Z < -1.8 + BTC RSI < 50 (long XRP/short BTC)"
+      - "BTC filter ensures momentum alignment"
+      - "Target: Sharpe > 1.5 on divergences"
+
+# Phase 16 Ensemble Notes:
+# RL agent will weight strategies dynamically:
+# - Mean Reversion (chop regime): High weight in $2.00-2.20 range
+# - Pair Trading (divergence regime): Activate on XRP news/BTC weakness
+# - Defensive (grind-down): Max weight during high ATR + fear
