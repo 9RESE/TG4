@@ -1,6 +1,9 @@
 """
 RL Orchestrator - Master controller for RL-driven trading decisions
-Phase 13: Yield-Max + Opportunistic Shorts + Real Rate Pull + Live Launch
+Phase 14: Live Launch + Dashboard + Final Opportunistic Tuning
+- Softened thresholds for Dec grind rips (RSI>68, ATR>4.2%)
+- Dashboard integration for live regime visualization
+- Auto-yield accrual with compounding
 """
 import numpy as np
 from models.rl_agent import TradingEnv, load_rl_agent
@@ -16,14 +19,14 @@ from risk_manager import RiskManager
 
 class RLOrchestrator:
     """
-    Phase 13: Yield-Max + Opportunistic Shorts + Real Rate Pull.
-    - Amplified yield via YieldManager (6.5% avg APY Kraken/Bitrue)
-    - Opportunistic shorts on rare rips (RSI >70 in grind-downs)
+    Phase 14: Live Launch + Dashboard + Final Opportunistic Tuning.
+    - Softened thresholds for Dec grind rips (RSI>68, ATR>4.2%, conf>0.78)
+    - Dashboard integration for live regime visualization
+    - Auto-yield accrual with compounding (6.5% avg APY)
+    - Opportunistic shorts on rare rips (RSI >68 in grind-downs)
     - Higher precision short rewards for downside capture
-    - Aggressive offense in greed regime (low ATR + RSI oversold)
-    - LSTM dip detector must align for leverage execution
     - Up to 10x Kraken / 3x Bitrue ETFs on confirmed dips
-    - Phase 13: Target -4% or better via yield + selective short PNL
+    - Target: Bears flat/positive long-term via compounding yield + precision captures
     """
 
     # Confidence threshold for leverage trades
@@ -33,14 +36,14 @@ class RLOrchestrator:
     OFFENSIVE_CONFIDENCE_THRESHOLD = 0.85  # Higher bar for offense
     GREED_VOL_THRESHOLD = 0.02  # ATR% below this = greed regime
 
-    # Phase 13: Opportunistic short thresholds
-    BEAR_CONFIDENCE_THRESHOLD = 0.75  # Lowered for opportunistic shorts
+    # Phase 14: Softened opportunistic short thresholds for Dec grind rips
+    BEAR_CONFIDENCE_THRESHOLD = 0.78  # Softened from 0.75 for more opportunities
     BEAR_VOL_THRESHOLD = 0.04  # ATR% above this = bear regime
     RSI_OVERBOUGHT = 65  # Overbought detection for shorts
     RSI_SHORT_EXIT = 40  # Auto-exit shorts when RSI drops below this
     RSI_RIP_THRESHOLD = 72  # Phase 12: Overbought rip threshold (short aggressively)
-    RSI_OPPORTUNISTIC = 70  # Phase 13: Opportunistic short in grind-downs
-    OPPORTUNISTIC_VOL_THRESHOLD = 0.045  # ATR% for opportunistic shorts
+    RSI_OPPORTUNISTIC = 68  # Phase 14: SOFTENED from 70 - more opportunistic shorts
+    OPPORTUNISTIC_VOL_THRESHOLD = 0.042  # Phase 14: SOFTENED from 0.045 - lower ATR bar
 
     # Phase 13: YieldManager integration (6.5% avg APY)
     YIELD_HOURS_PER_STEP = 4  # Apply yield every 4 hours in backtest
@@ -319,14 +322,21 @@ class RLOrchestrator:
             if yield_earned > 0:
                 result['yield_earned'] = yield_earned
 
-        # Phase 13: Opportunistic shorts in grind-down mode (RSI >70 spike)
+        # Phase 14: Opportunistic shorts in grind-down mode (RSI >68 spike, ATR >4.2%)
+        # Softened thresholds for Dec grind rips to capture more opportunities
         if (result.get('bear_type') == 'grind_down' and
             usdt_available > 100 and
             self.current_volatility > self.OPPORTUNISTIC_VOL_THRESHOLD):
 
-            # Check for RSI >70 opportunistic spike
-            xrp_opportunistic = xrp_rsi > self.RSI_OPPORTUNISTIC and xrp_above_vwap
-            btc_opportunistic = btc_rsi > self.RSI_OPPORTUNISTIC and btc_above_vwap
+            # Phase 14: Check for RSI >68 opportunistic spike (softened from 70)
+            xrp_conf = xrp_dip_signal.get('confidence', 0)
+            btc_conf = btc_dip_signal.get('confidence', 0)
+            xrp_opportunistic = (xrp_rsi > self.RSI_OPPORTUNISTIC and
+                                 xrp_above_vwap and
+                                 xrp_conf > self.BEAR_CONFIDENCE_THRESHOLD)
+            btc_opportunistic = (btc_rsi > self.RSI_OPPORTUNISTIC and
+                                 btc_above_vwap and
+                                 btc_conf > self.BEAR_CONFIDENCE_THRESHOLD)
 
             if xrp_opportunistic and self.short_positions['XRP'] is None:
                 # Conservative 4x opportunistic short

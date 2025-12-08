@@ -1,10 +1,11 @@
 """
-Phase 13: Live Paper Trading Loop
-Yield-Max + Opportunistic Shorts + Real Rate Pull + Live Launch.
+Phase 14: Live Paper Trading Loop with Dashboard
+Live Launch + Dashboard + Final Opportunistic Tuning.
 Runs every 10 minutes, logs trades, yield, and portfolio state.
 Features:
-- Real USDT yield logging (6.5% avg APY)
-- Opportunistic short tracking
+- Real-time regime dashboard (fear/greed display)
+- Auto-yield accrual with compounding (6.5% avg APY)
+- Softened opportunistic short thresholds (RSI>68, ATR>4.2%)
 - Enhanced equity curve with yield metrics
 """
 import os
@@ -23,15 +24,17 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from data_fetcher import DataFetcher
 from portfolio import Portfolio
 from orchestrator import RLOrchestrator
+from dashboard import LiveDashboard
 
 
 class LivePaperTrader:
     """
-    Live paper trading loop with logging.
-    Fetches real-time data, runs RL decisions, logs everything.
+    Phase 14: Live paper trading loop with dashboard integration.
+    Fetches real-time data, runs RL decisions, displays regime dashboard.
     """
 
-    def __init__(self, initial_balance: dict = None, log_dir: str = 'logs'):
+    def __init__(self, initial_balance: dict = None, log_dir: str = 'logs',
+                 enable_dashboard: bool = True, enable_plots: bool = False):
         self.initial_balance = initial_balance or {
             'USDT': 1000.0,
             'XRP': 500.0,
@@ -45,6 +48,10 @@ class LivePaperTrader:
         self.portfolio = Portfolio(self.initial_balance.copy())
         self.data = {}
         self.orchestrator = None
+
+        # Phase 14: Dashboard integration
+        self.enable_dashboard = enable_dashboard
+        self.dashboard = LiveDashboard(enable_plots=enable_plots) if enable_dashboard else None
 
         # Logging files
         self.trades_file = self.log_dir / 'trades.csv'
@@ -73,14 +80,15 @@ class LivePaperTrader:
                     'rsi_xrp', 'rsi_btc', 'portfolio_value', 'pnl'
                 ])
 
-        # Equity curve - Phase 13: Added yield tracking
+        # Equity curve - Phase 14: Added fear/greed tracking
         if not self.equity_file.exists():
             with open(self.equity_file, 'w', newline='') as f:
                 writer = csv.writer(f)
                 writer.writerow([
                     'timestamp', 'portfolio_value', 'usdt', 'xrp', 'btc',
                     'xrp_price', 'btc_price', 'mode', 'volatility',
-                    'margin_exposure', 'etf_exposure', 'yield_earned', 'total_yield'
+                    'margin_exposure', 'etf_exposure', 'yield_earned', 'total_yield',
+                    'fear_greed_index', 'fear_greed_label'
                 ])
 
     def _handle_shutdown(self, signum, frame):
@@ -139,7 +147,7 @@ class LivePaperTrader:
             ])
 
     def log_equity(self, prices: dict, result: dict = None):
-        """Log portfolio state to equity_curve.csv. Phase 13: Added yield tracking."""
+        """Log portfolio state to equity_curve.csv. Phase 14: Added fear/greed."""
         timestamp = datetime.now().isoformat()
         portfolio_value = self.portfolio.get_total_usd(prices)
 
@@ -151,9 +159,19 @@ class LivePaperTrader:
                 margin_exposure += pos.get('size', 0) * prices.get('XRP', 2.0)
             etf_exposure = sum(self.orchestrator.bitrue.etf_holdings.values())
 
-        # Phase 13: Get yield stats
+        # Phase 14: Get yield and fear/greed stats
         yield_earned = result.get('yield_earned', 0) if result else 0
         total_yield = self.portfolio.total_yield_earned if hasattr(self.portfolio, 'total_yield_earned') else 0
+
+        # Calculate fear/greed index
+        volatility = result.get('volatility', 0) if result else 0
+        rsi = result.get('rsi', {}) if result else {}
+        rsi_xrp = rsi.get('XRP', 50)
+        rsi_btc = rsi.get('BTC', 50)
+
+        fg_index, fg_label = 50, 'Neutral'
+        if self.dashboard:
+            fg_index, fg_label = self.dashboard.get_fear_greed_index(volatility, rsi_xrp, rsi_btc)
 
         with open(self.equity_file, 'a', newline='') as f:
             writer = csv.writer(f)
@@ -166,19 +184,18 @@ class LivePaperTrader:
                 prices.get('XRP', 0),
                 prices.get('BTC', 0),
                 result.get('mode', 'unknown') if result else 'init',
-                result.get('volatility', 0) if result else 0,
+                volatility,
                 margin_exposure,
                 etf_exposure,
                 yield_earned,
-                total_yield
+                total_yield,
+                fg_index,
+                fg_label
             ])
 
     def run_cycle(self) -> dict:
-        """Run one trading cycle."""
+        """Run one trading cycle with dashboard update."""
         self.cycle_count += 1
-        print(f"\n{'='*60}")
-        print(f"[CYCLE {self.cycle_count}] {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        print(f"{'='*60}")
 
         # Fetch latest data
         if not self.fetch_latest_data():
@@ -186,7 +203,6 @@ class LivePaperTrader:
             return {'action': 'skip', 'reason': 'data_fetch_failed'}
 
         prices = self.get_current_prices()
-        print(f"[PRICES] XRP: ${prices.get('XRP', 0):.4f}, BTC: ${prices.get('BTC', 0):.2f}")
 
         # Initialize orchestrator if needed
         if self.orchestrator is None:
@@ -205,10 +221,6 @@ class LivePaperTrader:
 
         # Get current portfolio value
         portfolio_value = self.portfolio.get_total_usd(prices)
-        print(f"[PORTFOLIO] Value: ${portfolio_value:.2f}")
-        print(f"  USDT: {self.portfolio.balances.get('USDT', 0):.2f}")
-        print(f"  XRP:  {self.portfolio.balances.get('XRP', 0):.4f}")
-        print(f"  BTC:  {self.portfolio.balances.get('BTC', 0):.6f}")
 
         # Run RL decision
         if self.orchestrator.enabled:
@@ -216,15 +228,17 @@ class LivePaperTrader:
             self.orchestrator.check_and_manage_positions(prices)
             self.orchestrator.update_env_step()
 
-            # Log results
-            print(f"\n[DECISION] Mode: {result.get('mode', 'unknown')}")
-            print(f"  Action: {result.get('asset', '?')} {result.get('action_type', '?')}")
-            print(f"  Volatility: {result.get('volatility', 0)*100:.2f}%")
-            print(f"  Executed: {result.get('executed', False)}")
-
-            if result.get('leverage_used'):
-                print(f"  Leverage: {result.get('leverage', 0)}x")
-                print(f"  Collateral: ${result.get('collateral', 0):.2f}")
+            # Phase 14: Update dashboard
+            if self.dashboard:
+                self.dashboard.update(
+                    portfolio_value=portfolio_value,
+                    mode=result.get('mode', 'unknown'),
+                    volatility=result.get('volatility', 0),
+                    rsi_xrp=result.get('rsi', {}).get('XRP', 50),
+                    rsi_btc=result.get('rsi', {}).get('BTC', 50),
+                    yield_earned=result.get('yield_earned', 0),
+                    prices=prices
+                )
 
             # Log to CSV
             self.log_trade(result, prices)
@@ -248,11 +262,13 @@ class LivePaperTrader:
         interval_seconds = interval_minutes * 60
 
         print(f"\n{'#'*60}")
-        print(f"# PHASE 13: YIELD-MAX LIVE PAPER TRADING")
+        print(f"# PHASE 14: LIVE LAUNCH + DASHBOARD")
         print(f"# Interval: {interval_minutes} minutes")
         print(f"# Max cycles: {max_cycles or 'infinite'}")
         print(f"# Logs: {self.log_dir}")
         print(f"# Yield APY: 6.5% avg (Kraken 6% + Bitrue 7%)")
+        print(f"# Opportunistic thresholds: RSI>68, ATR>4.2%, conf>0.78")
+        print(f"# Dashboard: {'enabled' if self.enable_dashboard else 'disabled'}")
         print(f"{'#'*60}")
 
         # Initial data fetch and equity log
@@ -286,8 +302,13 @@ class LivePaperTrader:
         print("\n[STOPPED] Live paper trading stopped")
         self._print_summary()
 
+        # Close dashboard
+        if self.dashboard:
+            self.dashboard.print_summary()
+            self.dashboard.close()
+
     def _print_summary(self):
-        """Print trading session summary. Phase 13: Added yield summary."""
+        """Print trading session summary. Phase 14: Added fear/greed summary."""
         print(f"\n{'='*60}")
         print("SESSION SUMMARY")
         print(f"{'='*60}")
@@ -309,11 +330,19 @@ class LivePaperTrader:
                     print(f"Max value:     ${df['portfolio_value'].max():.2f}")
                     print(f"Min value:     ${df['portfolio_value'].min():.2f}")
 
-                    # Phase 13: Yield summary
+                    # Phase 14: Yield summary
                     if 'total_yield' in df.columns:
                         total_yield = df['total_yield'].iloc[-1]
                         print(f"\n--- YIELD STATS ---")
                         print(f"Total yield:   ${total_yield:.4f}")
+
+                    # Phase 14: Fear/Greed summary
+                    if 'fear_greed_label' in df.columns:
+                        print(f"\n--- FEAR/GREED DISTRIBUTION ---")
+                        fg_counts = df['fear_greed_label'].value_counts()
+                        for label, count in fg_counts.items():
+                            pct = (count / len(df)) * 100
+                            print(f"  {label}: {pct:.1f}%")
             except Exception as e:
                 print(f"Could not load summary: {e}")
 
@@ -332,7 +361,7 @@ def main():
     """Main entry point for live paper trading."""
     import argparse
 
-    parser = argparse.ArgumentParser(description='Phase 13: Yield-Max Live Paper Trading')
+    parser = argparse.ArgumentParser(description='Phase 14: Live Launch + Dashboard')
     parser.add_argument('--interval', type=int, default=10,
                         help='Minutes between cycles (default: 10)')
     parser.add_argument('--cycles', type=int, default=None,
@@ -345,6 +374,10 @@ def main():
                         help='Starting BTC (default: 0)')
     parser.add_argument('--log-dir', type=str, default='logs',
                         help='Log directory (default: logs)')
+    parser.add_argument('--no-dashboard', action='store_true',
+                        help='Disable terminal dashboard')
+    parser.add_argument('--plots', action='store_true',
+                        help='Enable matplotlib plots (requires display)')
 
     args = parser.parse_args()
 
@@ -354,7 +387,12 @@ def main():
         'BTC': args.btc
     }
 
-    trader = LivePaperTrader(initial_balance, args.log_dir)
+    trader = LivePaperTrader(
+        initial_balance,
+        args.log_dir,
+        enable_dashboard=not args.no_dashboard,
+        enable_plots=args.plots
+    )
     trader.run(interval_minutes=args.interval, max_cycles=args.cycles)
 
 
