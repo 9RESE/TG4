@@ -106,7 +106,12 @@ class OrderbookSnapshot:
 class DataSnapshot:
     """
     Immutable market data snapshot passed to strategies.
-    Thread-safe and hashable for logging/replay.
+
+    Thread-safe: All fields are immutable (frozen dataclass with tuple containers).
+
+    Note: Not truly hashable due to Dict fields. For replay/logging purposes,
+    use the snapshot's timestamp and a content hash of serialized data.
+    Consider using DataSnapshot.to_hash() for unique identification.
     """
     timestamp: datetime
 
@@ -213,22 +218,38 @@ class Position:
     take_profit: Optional[float] = None
     highest_price: float = 0.0  # For trailing stop
     lowest_price: float = float('inf')
+    entry_fee: float = 0.0  # Fee paid at entry for complete P&L calculation
 
     @property
     def notional(self) -> float:
         """Position notional value at entry."""
         return self.size * self.entry_price
 
-    def unrealized_pnl(self, current_price: float) -> float:
-        """Calculate unrealized P&L."""
+    def unrealized_pnl(self, current_price: float, exit_fee: float = 0.0) -> float:
+        """
+        Calculate unrealized P&L including entry and estimated exit fees.
+
+        Args:
+            current_price: Current market price
+            exit_fee: Estimated exit fee (default 0)
+
+        Returns:
+            Net unrealized P&L after fees
+        """
         if self.side == 'long':
-            return (current_price - self.entry_price) * self.size
+            gross_pnl = (current_price - self.entry_price) * self.size
         else:  # short
-            return (self.entry_price - current_price) * self.size
+            gross_pnl = (self.entry_price - current_price) * self.size
+
+        return gross_pnl - self.entry_fee - exit_fee
 
     def unrealized_pnl_pct(self, current_price: float) -> float:
-        """Calculate unrealized P&L as percentage."""
-        return (self.unrealized_pnl(current_price) / self.notional) * 100
+        """Calculate unrealized P&L as percentage (excludes fees for simplicity)."""
+        if self.side == 'long':
+            gross_pnl = (current_price - self.entry_price) * self.size
+        else:
+            gross_pnl = (self.entry_price - current_price) * self.size
+        return (gross_pnl / self.notional) * 100 if self.notional > 0 else 0.0
 
 
 @dataclass

@@ -34,7 +34,7 @@ python ws_tester.py
 
 ### 4. Access the Dashboard
 
-Open your browser to `http://localhost:8080` to see the real-time dashboard showing:
+Open your browser to `http://localhost:8787` to see the real-time dashboard showing:
 - Strategy leaderboard ranked by P&L
 - Live trade feed
 - Current prices
@@ -133,7 +133,7 @@ All logs are in JSON Lines format for easy parsing.
 ### Dashboard not loading
 
 1. Ensure FastAPI and uvicorn are installed: `pip install fastapi uvicorn`
-2. Check if port 8080 is available
+2. Check if port 8787 is available (or configure different port in `config.yaml`)
 3. Try running with `--no-dashboard` to verify the core system works
 
 ### No signals being generated
@@ -148,6 +148,22 @@ All logs are in JSON Lines format for easy parsing.
 2. Kraken may be experiencing issues - try `--simulated` mode
 3. Check firewall settings for outbound WebSocket connections
 
+## Understanding Position Types
+
+The system supports four trading actions:
+
+| Action | Description | When to Use |
+|--------|-------------|-------------|
+| `buy` | Open or add to a long position | Bullish signal, expect price to rise |
+| `sell` | Close an existing long position | Taking profit or stop-loss on long |
+| `short` | Open or add to a short position | Bearish signal, expect price to fall |
+| `cover` | Close an existing short position | Taking profit or stop-loss on short |
+
+Strategies automatically use the correct action based on current position:
+- When flat and bearish signal → `short`
+- When long and bearish signal → `sell`
+- When short and bullish signal → `cover`
+
 ## Next Steps
 
 - [Creating Custom Strategies](./create-strategy.md)
@@ -155,4 +171,4 @@ All logs are in JSON Lines format for easy parsing.
 - [Analyzing Log Files](./log-analysis.md)
 
 ---
-*Last updated: 2025-12-13*
+*Last updated: 2025-12-13 (v1.0.2)*

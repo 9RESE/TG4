@@ -133,16 +133,29 @@ def _evaluate_symbol(data, config: dict, state: dict, symbol: str, Signal):
         )
 
     if inventory > -max_inventory and imbalance < -0.1:
-        # More asks than bids - potential short opportunity
-        return Signal(
-            action='sell',
-            symbol=symbol,
-            size=position_size,
-            price=ob.best_bid,
-            reason=f"MM: Spread capture sell (spread={spread_pct:.2f}%)",
-            stop_loss=ob.mid * (1 + config['stop_loss_pct'] / 100),
-            take_profit=ob.mid * (1 - config['take_profit_pct'] / 100),
-        )
+        # More asks than bids - sell long or open short
+        if inventory > 0:
+            # We have a long position - sell to reduce
+            return Signal(
+                action='sell',
+                symbol=symbol,
+                size=min(position_size, inventory),  # Don't sell more than we have
+                price=ob.best_bid,
+                reason=f"MM: Reduce long on imbalance (spread={spread_pct:.2f}%)",
+                stop_loss=ob.mid * (1 - config['stop_loss_pct'] / 100),
+                take_profit=ob.mid * (1 + config['take_profit_pct'] / 100),
+            )
+        else:
+            # We're flat or short - open/add to short position
+            return Signal(
+                action='short',
+                symbol=symbol,
+                size=position_size,
+                price=ob.best_bid,
+                reason=f"MM: Spread capture short (spread={spread_pct:.2f}%)",
+                stop_loss=ob.mid * (1 + config['stop_loss_pct'] / 100),
+                take_profit=ob.mid * (1 - config['take_profit_pct'] / 100),
+            )
 
     return None
 

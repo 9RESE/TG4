@@ -160,7 +160,8 @@ class WebSocketPaperTester:
             self.data_manager = DataManager(self.symbols)
 
         # Initialize executor with configurable parameters
-        executor_config = self.config.get('executor', {})
+        # Note: config.yaml uses 'execution' key (HIGH-002 fix)
+        executor_config = self.config.get('execution', {})
         self.executor = PaperExecutor(
             self.portfolio_manager,
             max_short_leverage=executor_config.get('max_short_leverage', 2.0),
@@ -221,10 +222,14 @@ class WebSocketPaperTester:
                 self._dashboard_add_trade = add_trade
                 self._dashboard_update_state = update_state
 
+                # Get dashboard config with defaults
+                dashboard_host = self.config.get('dashboard', {}).get('host', '127.0.0.1')
+                dashboard_port = self.config.get('dashboard', {}).get('port', 8787)
+
                 config = uvicorn.Config(
                     app,
-                    host="0.0.0.0",
-                    port=8080,
+                    host=dashboard_host,
+                    port=dashboard_port,
                     log_level="warning"
                 )
                 server = uvicorn.Server(config)
@@ -232,7 +237,7 @@ class WebSocketPaperTester:
                 dashboard_task = asyncio.create_task(server.serve())
                 broadcast_task = asyncio.create_task(publisher.broadcast_loop())
 
-                print(f"\nDashboard: http://localhost:8080")
+                print(f"\nDashboard: http://{dashboard_host}:{dashboard_port}")
             except ImportError:
                 print("\n[WARN] FastAPI/uvicorn not installed. Dashboard disabled.")
                 self.enable_dashboard = False

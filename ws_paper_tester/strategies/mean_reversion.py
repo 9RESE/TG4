@@ -181,15 +181,28 @@ def _evaluate_symbol(data, config: dict, state: dict, symbol: str, Signal):
 
         # Extra confirmation: price near or above upper BB
         if current_price >= bb_upper * 0.995:
-            return Signal(
-                action='sell',
-                symbol=symbol,
-                size=config['position_size_usd'],
-                price=current_price,
-                reason=f"MR: Overbought (dev={deviation_pct:.2f}%, RSI={rsi:.1f})",
-                stop_loss=current_price * (1 + config['stop_loss_pct'] / 100),
-                take_profit=sma,  # Target the mean
-            )
+            if current_position > 0:
+                # We have a long position - sell to reduce/close
+                return Signal(
+                    action='sell',
+                    symbol=symbol,
+                    size=min(config['position_size_usd'], current_position),
+                    price=current_price,
+                    reason=f"MR: Close long - overbought (dev={deviation_pct:.2f}%, RSI={rsi:.1f})",
+                    stop_loss=current_price * (1 - config['stop_loss_pct'] / 100),
+                    take_profit=sma,  # Target the mean
+                )
+            else:
+                # We're flat or short - open/add to short position
+                return Signal(
+                    action='short',
+                    symbol=symbol,
+                    size=config['position_size_usd'],
+                    price=current_price,
+                    reason=f"MR: Short - overbought (dev={deviation_pct:.2f}%, RSI={rsi:.1f})",
+                    stop_loss=current_price * (1 + config['stop_loss_pct'] / 100),
+                    take_profit=sma,  # Target the mean
+                )
 
     # VWAP reversion opportunity
     if vwap:
@@ -211,12 +224,22 @@ def _evaluate_symbol(data, config: dict, state: dict, symbol: str, Signal):
 
 
 def on_fill(fill: dict, state: dict) -> None:
-    """Update position tracking."""
+    """Update position tracking. Handles buy/sell/short/cover actions."""
     size_usd = fill.get('size', 0) * fill.get('price', 0)
-    if fill.get('side') == 'buy':
+    side = fill.get('side', '')
+
+    if side == 'buy':
+        # Opening or adding to long
         state['position'] = state.get('position', 0) + size_usd
-    else:
+    elif side == 'sell':
+        # Closing long position
         state['position'] = state.get('position', 0) - size_usd
+    elif side == 'short':
+        # Opening or adding to short (position goes negative)
+        state['position'] = state.get('position', 0) - size_usd
+    elif side == 'cover':
+        # Closing short position (position moves toward zero)
+        state['position'] = state.get('position', 0) + size_usd
 
     state['last_fill'] = fill
 

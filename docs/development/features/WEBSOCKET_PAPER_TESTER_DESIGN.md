@@ -1,10 +1,11 @@
 # WebSocket Paper Trading Tester - Design Document
 
-**Version:** 2.0
+**Version:** 2.1
 **Date:** 2025-12-13
 **Status:** IMPLEMENTED
 **Author:** Architecture Review
 **Implementation:** `/ws_paper_tester/`
+**Current Release:** v1.0.2
 
 ---
 
@@ -1812,4 +1813,59 @@ async def run(self, ...):
 
 ---
 
-*Document updated 2025-12-13 - APPROVED for implementation*
+## Implementation Notes (v1.0.2)
+
+### Code Review Findings (2025-12-13)
+
+A deep code review was conducted on the implementation. Key findings and fixes:
+
+#### Critical Fixes Applied
+
+| ID | Issue | Resolution |
+|----|-------|------------|
+| HIGH-002 | Config key mismatch - `execution` section in config.yaml not loaded | Fixed in `ws_tester.py:163` - changed key lookup from `'executor'` to `'execution'` |
+| MEDIUM-002 | `market_making.py` used `'sell'` action for new short positions | Refactored to check inventory and use `'short'` when flat/already short |
+| MEDIUM-003 | `mean_reversion.py` same issue as MEDIUM-002 | Same fix applied with proper stop-loss/take-profit directions |
+
+#### Enhancements Applied
+
+| Feature | Description |
+|---------|-------------|
+| Entry Fee Tracking | `Position.entry_fee` field added for accurate P&L calculation |
+| Dashboard Security | Changed default binding from `0.0.0.0:8080` to `127.0.0.1:8787` |
+| Test Coverage | Expanded from 81 to 126 tests with new integration and WebSocket tests |
+| Credentials Module | Added `ws_tester/credentials.py` for secure API key handling |
+
+#### Remaining Items for Future
+
+| Priority | Issue | Status |
+|----------|-------|--------|
+| HIGH-001 | No subscription confirmation tracking in WebSocket client | Documented |
+| MEDIUM-001 | Exception swallowing in message loop | Documented |
+| LOW-001 | Orderbook overwrites trade price | Documented behavior |
+
+### Architecture Compliance
+
+All major design requirements verified as implemented:
+
+- ✅ Immutable DataSnapshot (`@dataclass(frozen=True)`)
+- ✅ Plugin-style strategy loading with auto-discovery
+- ✅ Isolated $100 portfolios per strategy
+- ✅ Stop-loss/take-profit execution
+- ✅ Structured JSONL logging with rotation
+- ✅ Real-time FastAPI + WebSocket dashboard
+- ✅ YAML configuration support
+- ✅ Short selling with proper `short`/`cover` actions
+
+### Thread Safety Assessment
+
+| Component | Mechanism | Status |
+|-----------|-----------|--------|
+| PortfolioManager | `threading.RLock` | ✅ Verified |
+| StrategyPortfolio | `threading.RLock` | ✅ Verified |
+| DataManager | `asyncio.Lock` | ✅ Verified |
+| Dashboard state | `threading.RLock` + `threading.Lock` | ✅ Verified |
+
+---
+
+*Document updated 2025-12-13 - v2.1 with implementation notes*

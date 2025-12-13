@@ -142,6 +142,7 @@ class PaperExecutor:
                 (existing_pos.entry_price * existing_pos.size) +
                 (execution_price * base_size)
             ) / total_size
+            total_entry_fee = existing_pos.entry_fee + fee
 
             new_pos = Position(
                 symbol=signal.symbol,
@@ -152,7 +153,8 @@ class PaperExecutor:
                 stop_loss=signal.stop_loss or existing_pos.stop_loss,
                 take_profit=signal.take_profit or existing_pos.take_profit,
                 highest_price=max(existing_pos.highest_price, execution_price),
-                lowest_price=min(existing_pos.lowest_price, execution_price)
+                lowest_price=min(existing_pos.lowest_price, execution_price),
+                entry_fee=total_entry_fee
             )
         else:
             new_pos = Position(
@@ -164,7 +166,8 @@ class PaperExecutor:
                 stop_loss=signal.stop_loss,
                 take_profit=signal.take_profit,
                 highest_price=execution_price,
-                lowest_price=execution_price
+                lowest_price=execution_price,
+                entry_fee=fee
             )
 
         portfolio.positions[signal.symbol] = new_pos
@@ -205,7 +208,9 @@ class PaperExecutor:
         if signal.symbol in portfolio.positions:
             pos = portfolio.positions[signal.symbol]
             if pos.side == 'long':
-                pnl = (execution_price - pos.entry_price) * base_size - fee
+                # Include proportional entry fee in P&L calculation
+                proportional_entry_fee = pos.entry_fee * (base_size / pos.size) if pos.size > 0 else 0
+                pnl = (execution_price - pos.entry_price) * base_size - fee - proportional_entry_fee
                 portfolio.total_pnl += pnl
 
                 if pnl > 0:
@@ -218,6 +223,7 @@ class PaperExecutor:
                     del portfolio.positions[signal.symbol]
                 else:
                     remaining_size = pos.size - base_size
+                    remaining_entry_fee = pos.entry_fee * (remaining_size / pos.size) if pos.size > 0 else 0
                     portfolio.positions[signal.symbol] = Position(
                         symbol=pos.symbol,
                         side=pos.side,
@@ -227,7 +233,8 @@ class PaperExecutor:
                         stop_loss=pos.stop_loss,
                         take_profit=pos.take_profit,
                         highest_price=pos.highest_price,
-                        lowest_price=pos.lowest_price
+                        lowest_price=pos.lowest_price,
+                        entry_fee=remaining_entry_fee
                     )
 
         portfolio.assets[base_asset] -= base_size
@@ -284,6 +291,7 @@ class PaperExecutor:
                 (existing_pos.entry_price * existing_pos.size) +
                 (execution_price * base_size)
             ) / total_size
+            total_entry_fee = existing_pos.entry_fee + fee
 
             new_pos = Position(
                 symbol=signal.symbol,
@@ -294,7 +302,8 @@ class PaperExecutor:
                 stop_loss=signal.stop_loss or existing_pos.stop_loss,
                 take_profit=signal.take_profit or existing_pos.take_profit,
                 highest_price=max(existing_pos.highest_price, execution_price),
-                lowest_price=min(existing_pos.lowest_price, execution_price)
+                lowest_price=min(existing_pos.lowest_price, execution_price),
+                entry_fee=total_entry_fee
             )
         else:
             new_pos = Position(
@@ -306,7 +315,8 @@ class PaperExecutor:
                 stop_loss=signal.stop_loss,
                 take_profit=signal.take_profit,
                 highest_price=execution_price,
-                lowest_price=execution_price
+                lowest_price=execution_price,
+                entry_fee=fee
             )
 
         portfolio.positions[signal.symbol] = new_pos
@@ -353,8 +363,9 @@ class PaperExecutor:
             if base_size <= 0:
                 return None
 
-        # Calculate P&L (profit if price went down)
-        pnl = (pos.entry_price - execution_price) * base_size - fee
+        # Calculate P&L (profit if price went down) including proportional entry fee
+        proportional_entry_fee = pos.entry_fee * (base_size / pos.size) if pos.size > 0 else 0
+        pnl = (pos.entry_price - execution_price) * base_size - fee - proportional_entry_fee
         portfolio.total_pnl += pnl
 
         if pnl > 0:
@@ -370,6 +381,7 @@ class PaperExecutor:
             del portfolio.positions[signal.symbol]
         else:
             remaining_size = pos.size - base_size
+            remaining_entry_fee = pos.entry_fee * (remaining_size / pos.size) if pos.size > 0 else 0
             portfolio.positions[signal.symbol] = Position(
                 symbol=pos.symbol,
                 side=pos.side,
@@ -379,7 +391,8 @@ class PaperExecutor:
                 stop_loss=pos.stop_loss,
                 take_profit=pos.take_profit,
                 highest_price=pos.highest_price,
-                lowest_price=pos.lowest_price
+                lowest_price=pos.lowest_price,
+                entry_fee=remaining_entry_fee
             )
 
         return Fill(
@@ -454,6 +467,7 @@ class PaperExecutor:
                     stop_loss=pos.stop_loss,
                     take_profit=pos.take_profit,
                     highest_price=max(pos.highest_price, price),
-                    lowest_price=min(pos.lowest_price, price)
+                    lowest_price=min(pos.lowest_price, price),
+                    entry_fee=pos.entry_fee
                 )
                 portfolio.positions[symbol] = new_pos

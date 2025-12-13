@@ -95,7 +95,7 @@ class DashboardPublisher:
                 # Broadcast to all connected clients concurrently (non-blocking)
                 async def send_to_client(client: WebSocket):
                     try:
-                        await asyncio.wait_for(client.send_text(message), timeout=5.0)
+                        await asyncio.wait_for(client.send_text(message), timeout=2.0)
                         return None
                     except (asyncio.TimeoutError, ConnectionError, RuntimeError, OSError):
                         # Client disconnected, timed out, or connection error
