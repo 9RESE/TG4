@@ -1,13 +1,21 @@
 """
 Base Strategy Abstract Class
 Phase 15: Modular Strategy Factory - Scalable Architecture
+Phase 31: Per-strategy risk profiles with unified framework
 
 Provides a common interface for all trading strategies.
 Each strategy implements generate_signals() and update_model().
 """
 from abc import ABC, abstractmethod
-from typing import Dict, Optional, Any
+from typing import Dict, Optional, Any, Tuple
 import pandas as pd
+import sys
+import os
+
+# Add parent directory to path for imports
+sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+
+from risk_manager import StrategyRiskProfile, get_risk_profile
 
 
 class BaseStrategy(ABC):
@@ -22,6 +30,12 @@ class BaseStrategy(ABC):
     - initialize(): Setup before trading starts
     - on_order_filled(): Callback when order is executed
     - get_status(): Return strategy status/metrics
+
+    Phase 31: Each strategy now has a risk_profile with:
+    - min_confidence: Minimum confidence to execute trades
+    - stop_loss_pct, take_profit_pct: Exit targets
+    - max_hold_hours: Maximum position hold time
+    - Trailing stop configuration
     """
 
     def __init__(self, config: Dict[str, Any]):
@@ -37,6 +51,15 @@ class BaseStrategy(ABC):
         self.max_leverage = config.get('max_leverage', 5)
         self.position_size_pct = config.get('position_size_pct', 0.10)  # 10% default
         self.active_positions: Dict[str, Any] = {}
+
+        # Phase 31: Initialize risk profile
+        self.risk_profile = get_risk_profile(self.name, config)
+
+        # Convenience accessors for commonly used risk params
+        self.min_confidence = self.risk_profile.min_confidence
+        self.stop_loss_pct = self.risk_profile.stop_loss_pct
+        self.take_profit_pct = self.risk_profile.take_profit_pct
+        self.max_hold_hours = self.risk_profile.max_hold_hours
 
     @abstractmethod
     def generate_signals(self, data: Dict[str, pd.DataFrame]) -> Dict[str, Any]:
@@ -104,9 +127,48 @@ class BaseStrategy(ABC):
             'name': self.name,
             'enabled': self.enabled,
             'active_positions': len(self.active_positions),
+            'risk_profile': {
+                'min_confidence': self.min_confidence,
+                'stop_loss_pct': self.stop_loss_pct,
+                'take_profit_pct': self.take_profit_pct,
+                'max_hold_hours': self.max_hold_hours,
+                'category': self.risk_profile.category.value,
+            },
             'config': {k: v for k, v in self.config.items()
                       if k not in ['api_key', 'secret']}  # Exclude secrets
         }
+
+    def check_position_exit(self, entry_price: float, current_price: float,
+                           entry_time_hours: float, peak_price: float = None,
+                           side: str = 'long') -> Tuple[bool, str]:
+        """
+        Check if an open position should be exited based on risk rules.
+
+        Args:
+            entry_price: Entry price of position
+            current_price: Current market price
+            entry_time_hours: Hours since entry
+            peak_price: Peak price since entry (for trailing stop)
+            side: 'long' or 'short'
+
+        Returns:
+            Tuple[bool, str]: (should_exit, reason)
+        """
+        return self.risk_profile.check_exit(
+            entry_price, current_price, entry_time_hours, peak_price, side
+        )
+
+    def meets_confidence_threshold(self, confidence: float) -> bool:
+        """
+        Check if a signal's confidence meets the strategy's minimum threshold.
+
+        Args:
+            confidence: Signal confidence (0.0 to 1.0)
+
+        Returns:
+            bool: True if confidence meets or exceeds threshold
+        """
+        return confidence >= self.min_confidence
 
     def validate_signal(self, signal: Dict[str, Any]) -> bool:
         """
@@ -123,7 +185,14 @@ class BaseStrategy(ABC):
             if key not in signal:
                 return False
 
-        valid_actions = ['buy', 'sell', 'short', 'cover', 'hold']
+        # Phase 25: Extended valid actions for all strategy types
+        # - buy: Open long position
+        # - sell: Close long position
+        # - short: Open short position
+        # - cover: Close short position (alias for buy to cover)
+        # - hold: No action
+        # - close: Generic close (used by some strategies)
+        valid_actions = ['buy', 'sell', 'short', 'cover', 'hold', 'close']
         if signal.get('action') not in valid_actions:
             return False
 

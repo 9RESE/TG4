@@ -68,11 +68,11 @@ def generate_xrp_signals(data: dict, symbol: str = 'XRP/USDT'):
     # Dip detection for leverage entries
     is_dip = detect_dip(close, lookback=24, threshold=-0.03)  # 3% dip in last 24 hours
 
-    # LSTM prediction
+    # LSTM prediction (quiet training)
     predictor = LSTMPredictor()
     train_end = int(len(close) * 0.8)
     if train_end > 60:
-        predictor.train(close[:train_end])
+        predictor.train(close[:train_end], verbose=False)
         window = close[max(0, len(close)-100):]
         lstm_bullish = predictor.predict_signal(window)
     else:
@@ -203,7 +203,7 @@ def generate_ripple_signals(data: dict, symbol: str = 'XRP/USDT'):
     predictor = LSTMPredictor()
     train_end = int(len(close) * 0.8)
     if train_end > 60:
-        predictor.train(close[:train_end])
+        predictor.train(close[:train_end], verbose=False)
 
     signals = []
     for i in range(train_end, len(close)):

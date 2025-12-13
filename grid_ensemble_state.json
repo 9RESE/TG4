@@ -1,0 +1,1624 @@
+{
+  "config": {
+    "symbol": "BTC/USD",
+    "total_capital": 10000.0,
+    "upper_price": 100000,
+    "lower_price": 94000,
+    "max_drawdown": 0.1,
+    "stop_loss": 92000,
+    "take_profit": 102000,
+    "fee_rate": 0.0026
+  },
+  "stats": {
+    "start_time": "2025-12-10T13:52:55.970897",
+    "total_capital": 10000.0,
+    "current_value": 9794.348971770682,
+    "total_pnl": -181.8660850117182,
+    "realized_pnl": -169.53748717021614,
+    "unrealized_pnl": -12.328597841502067,
+    "total_fees": 23.784943217600723,
+    "total_trades": 85,
+    "winning_trades": 0,
+    "losing_trades": 2,
+    "max_drawdown": 0.020796888367632892,
+    "peak_value": 10000.0,
+    "strategy_pnl": {
+      "bb_squeeze": -1.1896831530203686
+    }
+  },
+  "paper_trades": [
+    {
+      "timestamp": "2025-12-10T13:52:59.370751",
+      "strategy": "arithmetic",
+      "action": "buy",
+      "symbol": "BTC/USD",
+      "price": 94000.0,
+      "size": 0.0007978723404255319,
+      "leverage": 1,
+      "reason": "Grid buy at level 0 ($94000.00)",
+      "pnl": -2.0039576648936217,
+      "closed": true,
+      "close_price": 91971.9,
+      "close_time": "2025-12-10T14:07:08.345045"
+    },
+    {
+      "timestamp": "2025-12-10T13:52:59.370799",
+      "strategy": "arithmetic",
+      "action": "buy",
+      "symbol": "BTC/USD",
+      "price": 94300.0,
+      "size": 0.0007953340402969247,
+      "leverage": 1,
+      "reason": "Grid buy at level 1 ($94300.00)",
+      "pnl": -2.2368029745493154,
+      "closed": true,
+      "close_price": 91971.9,
+      "close_time": "2025-12-10T14:07:08.345048"
+    },
+    {
+      "timestamp": "2025-12-10T13:52:59.370819",
+      "strategy": "arithmetic",
+      "action": "buy",
+      "symbol": "BTC/USD",
+      "price": 94600.0,
+      "size": 0.0007928118393234672,
+      "leverage": 1,
+      "reason": "Grid buy at level 2 ($94600.00)",
+      "pnl": -2.468171464059201,
+      "closed": true,
+      "close_price": 91971.9,
+      "close_time": "2025-12-10T14:07:08.345050"
+    },
+    {
+      "timestamp": "2025-12-10T13:52:59.370832",
+      "strategy": "arithmetic",
+      "action": "buy",
+      "symbol": "BTC/USD",
+      "price": 94900.0,
+      "size": 0.0007903055848261328,
+      "leverage": 1,
+      "reason": "Grid buy at level 3 ($94900.00)",
+      "pnl": -2.6980771390937877,
+      "closed": true,
+      "close_price": 91971.9,
+      "close_time": "2025-12-10T14:07:08.345051"
+    },
+    {
+      "timestamp": "2025-12-10T13:52:59.370843",
+      "strategy": "arithmetic",
+      "action": "buy",
+      "symbol": "BTC/USD",
+      "price": 95200.0,
+      "size": 0.0007878151260504202,
+      "leverage": 1,
+      "reason": "Grid buy at level 4 ($95200.00)",
+      "pnl": -2.9265338287815172,
+      "closed": true,
+      "close_price": 91971.9,
+      "close_time": "2025-12-10T14:07:08.345051"
+    },
+    {
+      "timestamp": "2025-12-10T13:52:59.370856",
+      "strategy": "geometric",
+      "action": "buy",
+      "symbol": "BTC/USD",
+      "price": 94000,
+      "size": 0.0006117021276595744,
+      "leverage": 1,
+      "reason": "Grid buy at level 0 ($94000.00)",
+      "pnl": -1.5363675430851098,
+      "closed": true,
+      "close_price": 91971.9,
+      "close_time": "2025-12-10T14:07:08.345052"
+    },
+    {
+      "timestamp": "2025-12-10T13:52:59.370874",
+      "strategy": "geometric",
+      "action": "buy",
+      "symbol": "BTC/USD",
+      "price": 94752.0,
+      "size": 0.0005984249262538722,
+      "leverage": 1,
+      "reason": "Grid buy at level 1 ($94752.00)",
+      "pnl": -1.9542057513054656,
+      "closed": true,
+      "close_price": 91971.9,
+      "close_time": "2025-12-10T14:07:08.345053"
+    },
+    {
+      "timestamp": "2025-12-10T13:52:59.370885",
+      "strategy": "geometric",
+      "action": "buy",
+      "symbol": "BTC/USD",
+      "price": 95510.016,
+      "size": 0.0005854359109917132,
+      "leverage": 1,
+      "reason": "Grid buy at level 2 ($95510.02)",
+      "pnl": -2.3567126440029846,
+      "closed": true,
+      "close_price": 91971.9,
+      "close_time": "2025-12-10T14:07:08.345053"
+    },
+    {
+      "timestamp": "2025-12-10T13:52:59.370894",
+      "strategy": "geometric",
+      "action": "buy",
+      "symbol": "BTC/USD",
+      "price": 96274.096128,
+      "size": 0.0005727288266954598,
+      "leverage": 1,
+      "reason": "Grid buy at level 3 ($96274.10)",
+      "pnl": -2.744307902683716,
+      "closed": true,
+      "close_price": 91971.9,
+      "close_time": "2025-12-10T14:07:08.345054"
+    },
+    {
+      "timestamp": "2025-12-10T13:52:59.370903",
+      "strategy": "geometric",
+      "action": "buy",
+      "symbol": "BTC/USD",
+      "price": 97044.288897024,
+      "size": 0.0005602975539582181,
+      "leverage": 1,
+      "reason": "Grid buy at level 4 ($97044.29)",
+      "pnl": -3.1174008933008936,
+      "closed": true,
+      "close_price": 91971.9,
+      "close_time": "2025-12-10T14:07:08.345054"
+    },
+    {
+      "timestamp": "2025-12-10T13:52:59.370913",
+      "strategy": "bb_squeeze",
+      "action": "buy",
+      "symbol": "BTC/USD",
+      "price": 94000.0,
+      "size": 0.0005319148936170213,
+      "leverage": 1,
+      "reason": "Grid buy at level 0 ($94000.00)",
+      "pnl": -1.3359717765957477,
+      "closed": true,
+      "close_price": 91971.9,
+      "close_time": "2025-12-10T14:07:08.345057"
+    },
+    {
+      "timestamp": "2025-12-10T13:52:59.370923",
+      "strategy": "bb_squeeze",
+      "action": "buy",
+      "symbol": "BTC/USD",
+      "price": 94300.0,
+      "size": 0.0005302226935312832,
+      "leverage": 1,
+      "reason": "Grid buy at level 1 ($94300.00)",
+      "pnl": -1.491201983032877,
+      "closed": true,
+      "close_price": 91971.9,
+      "close_time": "2025-12-10T14:07:08.345058"
+    },
+    {
+      "timestamp": "2025-12-10T13:52:59.370932",
+      "strategy": "bb_squeeze",
+      "action": "buy",
+      "symbol": "BTC/USD",
+      "price": 94600.0,
+      "size": 0.0005285412262156448,
+      "leverage": 1,
+      "reason": "Grid buy at level 2 ($94600.00)",
+      "pnl": -1.6454476427061342,
+      "closed": true,
+      "close_price": 91971.9,
+      "close_time": "2025-12-10T14:07:08.345058"
+    },
+    {
+      "timestamp": "2025-12-10T13:52:59.370945",
+      "strategy": "bb_squeeze",
+      "action": "buy",
+      "symbol": "BTC/USD",
+      "price": 94900.0,
+      "size": 0.0005268703898840885,
+      "leverage": 1,
+      "reason": "Grid buy at level 3 ($94900.00)",
+      "pnl": -1.7987180927291917,
+      "closed": true,
+      "close_price": 91971.9,
+      "close_time": "2025-12-10T14:07:08.345059"
+    },
+    {
+      "timestamp": "2025-12-10T13:52:59.370953",
+      "strategy": "bb_squeeze",
+      "action": "buy",
+      "symbol": "BTC/USD",
+      "price": 95200.0,
+      "size": 0.0005252100840336134,
+      "leverage": 1,
+      "reason": "Grid buy at level 4 ($95200.00)",
+      "pnl": -1.9510225525210114,
+      "closed": true,
+      "close_price": 91971.9,
+      "close_time": "2025-12-10T14:07:08.345059"
+    },
+    {
+      "timestamp": "2025-12-10T13:52:59.370963",
+      "strategy": "dual_grid_hedge",
+      "action": "buy",
+      "symbol": "BTC/USD",
+      "price": 94000.0,
+      "size": 0.0007092198581560284,
+      "leverage": 1,
+      "reason": "Grid buy at level 0 ($94000.00)",
+      "pnl": -1.7812957021276636,
+      "closed": true,
+      "close_price": 91971.9,
+      "close_time": "2025-12-10T14:07:08.345060"
+    },
+    {
+      "timestamp": "2025-12-10T13:52:59.370967",
+      "strategy": "dual_grid_hedge",
+      "action": "buy",
+      "symbol": "BTC/USD",
+      "price": 94333.33333333333,
+      "size": 0.000706713780918728,
+      "leverage": 1,
+      "reason": "Grid buy at level 1 ($94333.33)",
+      "pnl": -2.0111851166077748,
+      "closed": true,
+      "close_price": 91971.9,
+      "close_time": "2025-12-10T14:07:08.345060"
+    },
+    {
+      "timestamp": "2025-12-10T13:52:59.370970",
+      "strategy": "dual_grid_hedge",
+      "action": "buy",
+      "symbol": "BTC/USD",
+      "price": 94666.66666666667,
+      "size": 0.0007042253521126761,
+      "leverage": 1,
+      "reason": "Grid buy at level 2 ($94666.67)",
+      "pnl": -2.2394555915493033,
+      "closed": true,
+      "close_price": 91971.9,
+      "close_time": "2025-12-10T14:07:08.345061"
+    },
+    {
+      "timestamp": "2025-12-10T13:52:59.370972",
+      "strategy": "dual_grid_hedge",
+      "action": "buy",
+      "symbol": "BTC/USD",
+      "price": 95000.0,
+      "size": 0.0007017543859649123,
+      "leverage": 1,
+      "reason": "Grid buy at level 3 ($95000.00)",
+      "pnl": -2.466124168421057,
+      "closed": true,
+      "close_price": 91971.9,
+      "close_time": "2025-12-10T14:07:08.345061"
+    },
+    {
+      "timestamp": "2025-12-10T13:52:59.370973",
+      "strategy": "dual_grid_hedge",
+      "action": "buy",
+      "symbol": "BTC/USD",
+      "price": 95333.33333333333,
+      "size": 0.0006993006993006994,
+      "leverage": 1,
+      "reason": "Grid buy at level 4 ($95333.33)",
+      "pnl": -2.6912076503496514,
+      "closed": true,
+      "close_price": 91971.9,
+      "close_time": "2025-12-10T14:07:08.345061"
+    },
+    {
+      "timestamp": "2025-12-10T13:52:59.370978",
+      "strategy": "time_weighted",
+      "action": "buy",
+      "symbol": "BTC/USD",
+      "price": 93100.0,
+      "size": 0.0007160759040458289,
+      "leverage": 1,
+      "reason": "Grid buy at level 1 ($93100.00)",
+      "pnl": -1.1523716004296498,
+      "closed": true,
+      "close_price": 91971.9,
+      "close_time": "2025-12-10T14:07:08.345062"
+    },
+    {
+      "timestamp": "2025-12-10T13:52:59.370980",
+      "strategy": "time_weighted",
+      "action": "buy",
+      "symbol": "BTC/USD",
+      "price": 93700.0,
+      "size": 0.0007114905727499111,
+      "leverage": 1,
+      "reason": "Grid buy at level 2 ($93700.00)",
+      "pnl": -1.5729967556029925,
+      "closed": true,
+      "close_price": 91971.9,
+      "close_time": "2025-12-10T14:07:08.345062"
+    },
+    {
+      "timestamp": "2025-12-10T13:52:59.370982",
+      "strategy": "time_weighted",
+      "action": "buy",
+      "symbol": "BTC/USD",
+      "price": 94300.0,
+      "size": 0.0007069635913750442,
+      "leverage": 1,
+      "reason": "Grid buy at level 3 ($94300.00)",
+      "pnl": -1.9882693107105027,
+      "closed": true,
+      "close_price": 91971.9,
+      "close_time": "2025-12-10T14:07:08.345063"
+    },
+    {
+      "timestamp": "2025-12-10T13:52:59.370985",
+      "strategy": "time_weighted",
+      "action": "buy",
+      "symbol": "BTC/USD",
+      "price": 94900.0,
+      "size": 0.0007024938531787848,
+      "leverage": 1,
+      "reason": "Grid buy at level 4 ($94900.00)",
+      "pnl": -2.3982907903055892,
+      "closed": true,
+      "close_price": 91971.9,
+      "close_time": "2025-12-10T14:07:08.345063"
+    },
+    {
+      "timestamp": "2025-12-10T13:52:59.370987",
+      "strategy": "time_weighted",
+      "action": "buy",
+      "symbol": "BTC/USD",
+      "price": 95500.0,
+      "size": 0.0006980802792321117,
+      "leverage": 1,
+      "reason": "Grid buy at level 5 ($95500.00)",
+      "pnl": -2.803160167539271,
+      "closed": true,
+      "close_price": 91971.9,
+      "close_time": "2025-12-10T14:07:08.345064"
+    },
+    {
+      "timestamp": "2025-12-10T14:06:36.947667",
+      "strategy": "rsi_reversion",
+      "action": "buy",
+      "symbol": "BTC/USD",
+      "price": 94000.0,
+      "size": 0.0007978723404255319,
+      "leverage": 1,
+      "reason": "Grid buy at level 0 ($94000.00)",
+      "pnl": -2.0039576648936217,
+      "closed": true,
+      "close_price": 91971.9,
+      "close_time": "2025-12-10T14:07:08.345054"
+    },
+    {
+      "timestamp": "2025-12-10T14:06:36.947707",
+      "strategy": "rsi_reversion",
+      "action": "buy",
+      "symbol": "BTC/USD",
+      "price": 94300.0,
+      "size": 0.0007953340402969247,
+      "leverage": 1,
+      "reason": "Grid buy at level 1 ($94300.00)",
+      "pnl": -2.2368029745493154,
+      "closed": true,
+      "close_price": 91971.9,
+      "close_time": "2025-12-10T14:07:08.345055"
+    },
+    {
+      "timestamp": "2025-12-10T14:06:36.947724",
+      "strategy": "rsi_reversion",
+      "action": "buy",
+      "symbol": "BTC/USD",
+      "price": 94600.0,
+      "size": 0.0007928118393234672,
+      "leverage": 1,
+      "reason": "Grid buy at level 2 ($94600.00)",
+      "pnl": -2.468171464059201,
+      "closed": true,
+      "close_price": 91971.9,
+      "close_time": "2025-12-10T14:07:08.345056"
+    },
+    {
+      "timestamp": "2025-12-10T14:06:36.947734",
+      "strategy": "rsi_reversion",
+      "action": "buy",
+      "symbol": "BTC/USD",
+      "price": 94900.0,
+      "size": 0.0007903055848261328,
+      "leverage": 1,
+      "reason": "Grid buy at level 3 ($94900.00)",
+      "pnl": -2.6980771390937877,
+      "closed": true,
+      "close_price": 91971.9,
+      "close_time": "2025-12-10T14:07:08.345056"
+    },
+    {
+      "timestamp": "2025-12-10T14:06:36.947743",
+      "strategy": "rsi_reversion",
+      "action": "buy",
+      "symbol": "BTC/USD",
+      "price": 95200.0,
+      "size": 0.0007878151260504202,
+      "leverage": 1,
+      "reason": "Grid buy at level 4 ($95200.00)",
+      "pnl": -2.9265338287815172,
+      "closed": true,
+      "close_price": 91971.9,
+      "close_time": "2025-12-10T14:07:08.345057"
+    },
+    {
+      "timestamp": "2025-12-10T14:07:08.345077",
+      "strategy": "rsi_reversion",
+      "action": "buy",
+      "symbol": "BTC/USD",
+      "price": 94000.0,
+      "size": 0.0007978723404255319,
+      "leverage": 1,
+      "reason": "Grid buy at level 0 ($94000.00)",
+      "pnl": -2.042872180851064,
+      "closed": true,
+      "close_price": 91923.0,
+      "close_time": "2025-12-10T14:08:42.692198"
+    },
+    {
+      "timestamp": "2025-12-10T14:07:08.345108",
+      "strategy": "rsi_reversion",
+      "action": "buy",
+      "symbol": "BTC/USD",
+      "price": 94600.0,
+      "size": 0.0007928118393234672,
+      "leverage": 1,
+      "reason": "Grid buy at level 2 ($94600.00)",
+      "pnl": -2.5068391649048625,
+      "closed": true,
+      "close_price": 91923.0,
+      "close_time": "2025-12-10T14:08:42.692199"
+    },
+    {
+      "timestamp": "2025-12-10T14:07:08.345121",
+      "strategy": "rsi_reversion",
+      "action": "buy",
+      "symbol": "BTC/USD",
+      "price": 95800.0,
+      "size": 0.0007828810020876827,
+      "leverage": 1,
+      "reason": "Grid buy at level 6 ($95800.00)",
+      "pnl": -3.4173380480167017,
+      "closed": true,
+      "close_price": 91923.0,
+      "close_time": "2025-12-10T14:08:42.692199"
+    },
+    {
+      "timestamp": "2025-12-10T14:07:08.345132",
+      "strategy": "rsi_reversion",
+      "action": "buy",
+      "symbol": "BTC/USD",
+      "price": 96100.0,
+      "size": 0.0007804370447450572,
+      "leverage": 1,
+      "reason": "Grid buy at level 7 ($96100.00)",
+      "pnl": -3.6414098335067635,
+      "closed": true,
+      "close_price": 91923.0,
+      "close_time": "2025-12-10T14:08:42.692200"
+    },
+    {
+      "timestamp": "2025-12-10T14:07:08.345144",
+      "strategy": "rsi_reversion",
+      "action": "buy",
+      "symbol": "BTC/USD",
+      "price": 96400.0,
+      "size": 0.0007780082987551867,
+      "leverage": 1,
+      "reason": "Grid buy at level 8 ($96400.00)",
+      "pnl": -3.8640869813278007,
+      "closed": true,
+      "close_price": 91923.0,
+      "close_time": "2025-12-10T14:08:42.692200"
+    },
+    {
+      "timestamp": "2025-12-10T14:07:08.345154",
+      "strategy": "bb_squeeze",
+      "action": "buy",
+      "symbol": "BTC/USD",
+      "price": 94000.0,
+      "size": 0.0005319148936170213,
+      "leverage": 1,
+      "reason": "Grid buy at level 0 ($94000.00)",
+      "pnl": -1.3619147872340427,
+      "closed": true,
+      "close_price": 91923.0,
+      "close_time": "2025-12-10T14:08:42.692200"
+    },
+    {
+      "timestamp": "2025-12-10T14:07:08.345164",
+      "strategy": "bb_squeeze",
+      "action": "buy",
+      "symbol": "BTC/USD",
+      "price": 94600.0,
+      "size": 0.0005285412262156448,
+      "leverage": 1,
+      "reason": "Grid buy at level 2 ($94600.00)",
+      "pnl": -1.6712261099365753,
+      "closed": true,
+      "close_price": 91923.0,
+      "close_time": "2025-12-10T14:08:42.692201"
+    },
+    {
+      "timestamp": "2025-12-10T14:07:08.345174",
+      "strategy": "bb_squeeze",
+      "action": "buy",
+      "symbol": "BTC/USD",
+      "price": 95800.0,
+      "size": 0.0005219206680584551,
+      "leverage": 1,
+      "reason": "Grid buy at level 6 ($95800.00)",
+      "pnl": -2.278225365344467,
+      "closed": true,
+      "close_price": 91923.0,
+      "close_time": "2025-12-10T14:08:42.692201"
+    },
+    {
+      "timestamp": "2025-12-10T14:07:08.345182",
+      "strategy": "bb_squeeze",
+      "action": "buy",
+      "symbol": "BTC/USD",
+      "price": 96100.0,
+      "size": 0.0005202913631633715,
+      "leverage": 1,
+      "reason": "Grid buy at level 7 ($96100.00)",
+      "pnl": -2.427606555671176,
+      "closed": true,
+      "close_price": 91923.0,
+      "close_time": "2025-12-10T14:08:42.692201"
+    },
+    {
+      "timestamp": "2025-12-10T14:07:08.345191",
+      "strategy": "bb_squeeze",
+      "action": "buy",
+      "symbol": "BTC/USD",
+      "price": 96400.0,
+      "size": 0.0005186721991701245,
+      "leverage": 1,
+      "reason": "Grid buy at level 8 ($96400.00)",
+      "pnl": -2.5760579875518674,
+      "closed": true,
+      "close_price": 91923.0,
+      "close_time": "2025-12-10T14:08:42.692202"
+    },
+    {
+      "timestamp": "2025-12-10T14:07:08.345200",
+      "strategy": "dual_grid_hedge",
+      "action": "buy",
+      "symbol": "BTC/USD",
+      "price": 94000.0,
+      "size": 0.0007092198581560284,
+      "leverage": 1,
+      "reason": "Grid buy at level 0 ($94000.00)",
+      "pnl": -1.8158863829787235,
+      "closed": true,
+      "close_price": 91923.0,
+      "close_time": "2025-12-10T14:08:42.692202"
+    },
+    {
+      "timestamp": "2025-12-10T14:07:08.345204",
+      "strategy": "dual_grid_hedge",
+      "action": "buy",
+      "symbol": "BTC/USD",
+      "price": 94333.33333333333,
+      "size": 0.000706713780918728,
+      "leverage": 1,
+      "reason": "Grid buy at level 1 ($94333.33)",
+      "pnl": -2.0456535689045903,
+      "closed": true,
+      "close_price": 91923.0,
+      "close_time": "2025-12-10T14:08:42.692203"
+    },
+    {
+      "timestamp": "2025-12-10T14:07:08.345207",
+      "strategy": "dual_grid_hedge",
+      "action": "buy",
+      "symbol": "BTC/USD",
+      "price": 94666.66666666667,
+      "size": 0.0007042253521126761,
+      "leverage": 1,
+      "reason": "Grid buy at level 2 ($94666.67)",
+      "pnl": -2.2738026760563415,
+      "closed": true,
+      "close_price": 91923.0,
+      "close_time": "2025-12-10T14:08:42.692203"
+    },
+    {
+      "timestamp": "2025-12-10T14:07:08.345209",
+      "strategy": "dual_grid_hedge",
+      "action": "buy",
+      "symbol": "BTC/USD",
+      "price": 95000.0,
+      "size": 0.0007017543859649123,
+      "leverage": 1,
+      "reason": "Grid buy at level 3 ($95000.00)",
+      "pnl": -2.500350736842105,
+      "closed": true,
+      "close_price": 91923.0,
+      "close_time": "2025-12-10T14:08:42.692204"
+    },
+    {
+      "timestamp": "2025-12-10T14:07:08.345210",
+      "strategy": "dual_grid_hedge",
+      "action": "buy",
+      "symbol": "BTC/USD",
+      "price": 95333.33333333333,
+      "size": 0.0006993006993006994,
+      "leverage": 1,
+      "reason": "Grid buy at level 4 ($95333.33)",
+      "pnl": -2.7253145454545424,
+      "closed": true,
+      "close_price": 91923.0,
+      "close_time": "2025-12-10T14:08:42.692204"
+    },
+    {
+      "timestamp": "2025-12-10T14:07:08.345215",
+      "strategy": "time_weighted",
+      "action": "buy",
+      "symbol": "BTC/USD",
+      "price": 93250.0,
+      "size": 0.0005004468275245755,
+      "leverage": 1,
+      "reason": "Grid buy at level 0 ($93250.00)",
+      "pnl": -0.9050329651474531,
+      "closed": true,
+      "close_price": 91923.0,
+      "close_time": "2025-12-10T14:08:42.692204"
+    },
+    {
+      "timestamp": "2025-12-10T14:07:08.345217",
+      "strategy": "time_weighted",
+      "action": "buy",
+      "symbol": "BTC/USD",
+      "price": 93750.0,
+      "size": 0.0004977777777777778,
+      "leverage": 1,
+      "reason": "Grid buy at level 1 ($93750.00)",
+      "pnl": -1.1497421226666666,
+      "closed": true,
+      "close_price": 91923.0,
+      "close_time": "2025-12-10T14:08:42.692205"
+    },
+    {
+      "timestamp": "2025-12-10T14:07:08.345219",
+      "strategy": "time_weighted",
+      "action": "buy",
+      "symbol": "BTC/USD",
+      "price": 94250.0,
+      "size": 0.0004951370468611847,
+      "leverage": 1,
+      "reason": "Grid buy at level 2 ($94250.00)",
+      "pnl": -1.391854896551724,
+      "closed": true,
+      "close_price": 91923.0,
+      "close_time": "2025-12-10T14:08:42.692205"
+    },
+    {
+      "timestamp": "2025-12-10T14:07:08.345221",
+      "strategy": "time_weighted",
+      "action": "buy",
+      "symbol": "BTC/USD",
+      "price": 94750.0,
+      "size": 0.0004925241864555848,
+      "leverage": 1,
+      "reason": "Grid buy at level 3 ($94750.00)",
+      "pnl": -1.6314123905013191,
+      "closed": true,
+      "close_price": 91923.0,
+      "close_time": "2025-12-10T14:08:42.692206"
+    },
+    {
+      "timestamp": "2025-12-10T14:07:08.345223",
+      "strategy": "time_weighted",
+      "action": "buy",
+      "symbol": "BTC/USD",
+      "price": 95250.0,
+      "size": 0.0004899387576552931,
+      "leverage": 1,
+      "reason": "Grid buy at level 4 ($95250.00)",
+      "pnl": -1.868454845144357,
+      "closed": true,
+      "close_price": 91923.0,
+      "close_time": "2025-12-10T14:08:42.692206"
+    },
+    {
+      "timestamp": "2025-12-10T14:07:39.945097",
+      "strategy": "arithmetic",
+      "action": "buy",
+      "symbol": "BTC/USD",
+      "price": 94000.0,
+      "size": 0.0007978723404255319,
+      "leverage": 1,
+      "reason": "Grid buy at level 0 ($94000.00)",
+      "pnl": -2.042872180851064,
+      "closed": true,
+      "close_price": 91923.0,
+      "close_time": "2025-12-10T14:08:42.692192"
+    },
+    {
+      "timestamp": "2025-12-10T14:07:39.945137",
+      "strategy": "arithmetic",
+      "action": "buy",
+      "symbol": "BTC/USD",
+      "price": 94600.0,
+      "size": 0.0007928118393234672,
+      "leverage": 1,
+      "reason": "Grid buy at level 2 ($94600.00)",
+      "pnl": -2.5068391649048625,
+      "closed": true,
+      "close_price": 91923.0,
+      "close_time": "2025-12-10T14:08:42.692194"
+    },
+    {
+      "timestamp": "2025-12-10T14:07:39.945151",
+      "strategy": "arithmetic",
+      "action": "buy",
+      "symbol": "BTC/USD",
+      "price": 95800.0,
+      "size": 0.0007828810020876827,
+      "leverage": 1,
+      "reason": "Grid buy at level 6 ($95800.00)",
+      "pnl": -3.4173380480167017,
+      "closed": true,
+      "close_price": 91923.0,
+      "close_time": "2025-12-10T14:08:42.692195"
+    },
+    {
+      "timestamp": "2025-12-10T14:07:39.945161",
+      "strategy": "arithmetic",
+      "action": "buy",
+      "symbol": "BTC/USD",
+      "price": 96100.0,
+      "size": 0.0007804370447450572,
+      "leverage": 1,
+      "reason": "Grid buy at level 7 ($96100.00)",
+      "pnl": -3.6414098335067635,
+      "closed": true,
+      "close_price": 91923.0,
+      "close_time": "2025-12-10T14:08:42.692195"
+    },
+    {
+      "timestamp": "2025-12-10T14:07:39.945172",
+      "strategy": "arithmetic",
+      "action": "buy",
+      "symbol": "BTC/USD",
+      "price": 96400.0,
+      "size": 0.0007780082987551867,
+      "leverage": 1,
+      "reason": "Grid buy at level 8 ($96400.00)",
+      "pnl": -3.8640869813278007,
+      "closed": true,
+      "close_price": 91923.0,
+      "close_time": "2025-12-10T14:08:42.692196"
+    },
+    {
+      "timestamp": "2025-12-10T14:07:39.945186",
+      "strategy": "geometric",
+      "action": "buy",
+      "symbol": "BTC/USD",
+      "price": 94000,
+      "size": 0.0006117021276595744,
+      "leverage": 1,
+      "reason": "Grid buy at level 0 ($94000.00)",
+      "pnl": -1.5662020053191488,
+      "closed": true,
+      "close_price": 91923.0,
+      "close_time": "2025-12-10T14:08:42.692196"
+    },
+    {
+      "timestamp": "2025-12-10T14:07:39.945209",
+      "strategy": "geometric",
+      "action": "buy",
+      "symbol": "BTC/USD",
+      "price": 95510.016,
+      "size": 0.0005854359109917132,
+      "leverage": 1,
+      "reason": "Grid buy at level 2 ($95510.02)",
+      "pnl": -2.3852660277287523,
+      "closed": true,
+      "close_price": 91923.0,
+      "close_time": "2025-12-10T14:08:42.692197"
+    },
+    {
+      "timestamp": "2025-12-10T14:07:39.945225",
+      "strategy": "geometric",
+      "action": "buy",
+      "symbol": "BTC/USD",
+      "price": 98603.2083538658,
+      "size": 0.0005362386267691836,
+      "leverage": 1,
+      "reason": "Grid buy at level 6 ($98603.21)",
+      "pnl": -3.8478212862701904,
+      "closed": true,
+      "close_price": 91923.0,
+      "close_time": "2025-12-10T14:08:42.692197"
+    },
+    {
+      "timestamp": "2025-12-10T14:07:39.945237",
+      "strategy": "geometric",
+      "action": "buy",
+      "symbol": "BTC/USD",
+      "price": 99392.03402069674,
+      "size": 0.0005245993861532118,
+      "leverage": 1,
+      "reason": "Grid buy at level 7 ($99392.03)",
+      "pnl": -4.179196410878723,
+      "closed": true,
+      "close_price": 91923.0,
+      "close_time": "2025-12-10T14:08:42.692198"
+    },
+    {
+      "timestamp": "2025-12-10T14:08:11.323289",
+      "strategy": "geometric",
+      "action": "buy",
+      "symbol": "BTC/USD",
+      "price": 98603.2083538658,
+      "size": 0.0005362386267691836,
+      "leverage": 1,
+      "reason": "Grid buy at level 6 ($98603.21)",
+      "pnl": -3.8478212862701904,
+      "closed": true,
+      "close_price": 91923.0,
+      "close_time": "2025-12-10T14:08:42.692198"
+    },
+    {
+      "timestamp": "2025-12-10T14:08:42.692218",
+      "strategy": "rsi_reversion",
+      "action": "buy",
+      "symbol": "BTC/USD",
+      "price": 95800.0,
+      "size": 0.0007828810020876827,
+      "leverage": 1,
+      "reason": "Grid buy at level 6 ($95800.00)",
+      "pnl": -3.4009402922755743,
+      "closed": true,
+      "close_price": 91944.0,
+      "close_time": "2025-12-10T14:10:48.517166"
+    },
+    {
+      "timestamp": "2025-12-10T14:08:42.692251",
+      "strategy": "bb_squeeze",
+      "action": "buy",
+      "symbol": "BTC/USD",
+      "price": 95800.0,
+      "size": 0.0005219206680584551,
+      "leverage": 1,
+      "reason": "Grid buy at level 6 ($95800.00)",
+      "pnl": -2.267293528183716,
+      "closed": true,
+      "close_price": 91944.0,
+      "close_time": "2025-12-10T14:10:48.517166"
+    },
+    {
+      "timestamp": "2025-12-10T14:08:42.692267",
+      "strategy": "dual_grid_hedge",
+      "action": "buy",
+      "symbol": "BTC/USD",
+      "price": 94000.0,
+      "size": 0.0007092198581560284,
+      "leverage": 1,
+      "reason": "Grid buy at level 0 ($94000.00)",
+      "pnl": -1.8010314893617023,
+      "closed": true,
+      "close_price": 91944.0,
+      "close_time": "2025-12-10T14:10:48.517167"
+    },
+    {
+      "timestamp": "2025-12-10T14:08:42.692272",
+      "strategy": "dual_grid_hedge",
+      "action": "buy",
+      "symbol": "BTC/USD",
+      "price": 94333.33333333333,
+      "size": 0.000706713780918728,
+      "leverage": 1,
+      "reason": "Grid buy at level 1 ($94333.33)",
+      "pnl": -2.0308511660777353,
+      "closed": true,
+      "close_price": 91944.0,
+      "close_time": "2025-12-10T14:10:48.517167"
+    },
+    {
+      "timestamp": "2025-12-10T14:08:42.692275",
+      "strategy": "dual_grid_hedge",
+      "action": "buy",
+      "symbol": "BTC/USD",
+      "price": 94666.66666666667,
+      "size": 0.0007042253521126761,
+      "leverage": 1,
+      "reason": "Grid buy at level 2 ($94666.67)",
+      "pnl": -2.2590523943662006,
+      "closed": true,
+      "close_price": 91944.0,
+      "close_time": "2025-12-10T14:10:48.517168"
+    },
+    {
+      "timestamp": "2025-12-10T14:08:42.692278",
+      "strategy": "dual_grid_hedge",
+      "action": "buy",
+      "symbol": "BTC/USD",
+      "price": 95000.0,
+      "size": 0.0007017543859649123,
+      "leverage": 1,
+      "reason": "Grid buy at level 3 ($95000.00)",
+      "pnl": -2.485652210526316,
+      "closed": true,
+      "close_price": 91944.0,
+      "close_time": "2025-12-10T14:10:48.517168"
+    },
+    {
+      "timestamp": "2025-12-10T14:08:42.692280",
+      "strategy": "dual_grid_hedge",
+      "action": "buy",
+      "symbol": "BTC/USD",
+      "price": 95333.33333333333,
+      "size": 0.0006993006993006994,
+      "leverage": 1,
+      "reason": "Grid buy at level 4 ($95333.33)",
+      "pnl": -2.71066741258741,
+      "closed": true,
+      "close_price": 91944.0,
+      "close_time": "2025-12-10T14:10:48.517168"
+    },
+    {
+      "timestamp": "2025-12-10T14:08:42.692285",
+      "strategy": "time_weighted",
+      "action": "buy",
+      "symbol": "BTC/USD",
+      "price": 93250.0,
+      "size": 0.0005004468275245755,
+      "leverage": 1,
+      "reason": "Grid buy at level 0 ($93250.00)",
+      "pnl": -0.8945509061662199,
+      "closed": true,
+      "close_price": 91944.0,
+      "close_time": "2025-12-10T14:10:48.517169"
+    },
+    {
+      "timestamp": "2025-12-10T14:08:42.692288",
+      "strategy": "time_weighted",
+      "action": "buy",
+      "symbol": "BTC/USD",
+      "price": 93750.0,
+      "size": 0.0004977777777777778,
+      "leverage": 1,
+      "reason": "Grid buy at level 1 ($93750.00)",
+      "pnl": -1.139315968,
+      "closed": true,
+      "close_price": 91944.0,
+      "close_time": "2025-12-10T14:10:48.517169"
+    },
+    {
+      "timestamp": "2025-12-10T14:08:42.692289",
+      "strategy": "time_weighted",
+      "action": "buy",
+      "symbol": "BTC/USD",
+      "price": 94250.0,
+      "size": 0.0004951370468611847,
+      "leverage": 1,
+      "reason": "Grid buy at level 2 ($94250.00)",
+      "pnl": -1.3814840530503978,
+      "closed": true,
+      "close_price": 91944.0,
+      "close_time": "2025-12-10T14:10:48.517170"
+    },
+    {
+      "timestamp": "2025-12-10T14:08:42.692291",
+      "strategy": "time_weighted",
+      "action": "buy",
+      "symbol": "BTC/USD",
+      "price": 94750.0,
+      "size": 0.0004925241864555848,
+      "leverage": 1,
+      "reason": "Grid buy at level 3 ($94750.00)",
+      "pnl": -1.6210962744063324,
+      "closed": true,
+      "close_price": 91944.0,
+      "close_time": "2025-12-10T14:10:48.517170"
+    },
+    {
+      "timestamp": "2025-12-10T14:08:42.692293",
+      "strategy": "time_weighted",
+      "action": "buy",
+      "symbol": "BTC/USD",
+      "price": 95250.0,
+      "size": 0.0004899387576552931,
+      "leverage": 1,
+      "reason": "Grid buy at level 4 ($95250.00)",
+      "pnl": -1.8581928818897637,
+      "closed": true,
+      "close_price": 91944.0,
+      "close_time": "2025-12-10T14:10:48.517170"
+    },
+    {
+      "timestamp": "2025-12-10T14:09:14.088150",
+      "strategy": "arithmetic",
+      "action": "buy",
+      "symbol": "BTC/USD",
+      "price": 95800.0,
+      "size": 0.0007828810020876827,
+      "leverage": 1,
+      "reason": "Grid buy at level 6 ($95800.00)",
+      "pnl": -3.4009402922755743,
+      "closed": true,
+      "close_price": 91944.0,
+      "close_time": "2025-12-10T14:10:48.517164"
+    },
+    {
+      "timestamp": "2025-12-10T14:10:48.517182",
+      "strategy": "dual_grid_hedge",
+      "action": "buy",
+      "symbol": "BTC/USD",
+      "price": 94000.0,
+      "size": 0.0007092198581560284,
+      "leverage": 1,
+      "reason": "Grid buy at level 0 ($94000.00)",
+      "pnl": 0.0,
+      "closed": false,
+      "close_price": 0.0,
+      "close_time": null
+    },
+    {
+      "timestamp": "2025-12-10T14:10:48.517188",
+      "strategy": "dual_grid_hedge",
+      "action": "buy",
+      "symbol": "BTC/USD",
+      "price": 94333.33333333333,
+      "size": 0.000706713780918728,
+      "leverage": 1,
+      "reason": "Grid buy at level 1 ($94333.33)",
+      "pnl": 0.0,
+      "closed": false,
+      "close_price": 0.0,
+      "close_time": null
+    },
+    {
+      "timestamp": "2025-12-10T14:10:48.517190",
+      "strategy": "dual_grid_hedge",
+      "action": "buy",
+      "symbol": "BTC/USD",
+      "price": 94666.66666666667,
+      "size": 0.0007042253521126761,
+      "leverage": 1,
+      "reason": "Grid buy at level 2 ($94666.67)",
+      "pnl": 0.0,
+      "closed": false,
+      "close_price": 0.0,
+      "close_time": null
+    },
+    {
+      "timestamp": "2025-12-10T14:10:48.517192",
+      "strategy": "dual_grid_hedge",
+      "action": "buy",
+      "symbol": "BTC/USD",
+      "price": 95000.0,
+      "size": 0.0007017543859649123,
+      "leverage": 1,
+      "reason": "Grid buy at level 3 ($95000.00)",
+      "pnl": 0.0,
+      "closed": false,
+      "close_price": 0.0,
+      "close_time": null
+    },
+    {
+      "timestamp": "2025-12-10T14:10:48.517194",
+      "strategy": "dual_grid_hedge",
+      "action": "buy",
+      "symbol": "BTC/USD",
+      "price": 95333.33333333333,
+      "size": 0.0006993006993006994,
+      "leverage": 1,
+      "reason": "Grid buy at level 4 ($95333.33)",
+      "pnl": 0.0,
+      "closed": false,
+      "close_price": 0.0,
+      "close_time": null
+    },
+    {
+      "timestamp": "2025-12-10T14:10:48.517199",
+      "strategy": "time_weighted",
+      "action": "buy",
+      "symbol": "BTC/USD",
+      "price": 93250.0,
+      "size": 0.0005004468275245755,
+      "leverage": 1,
+      "reason": "Grid buy at level 0 ($93250.00)",
+      "pnl": 0.0,
+      "closed": false,
+      "close_price": 0.0,
+      "close_time": null
+    },
+    {
+      "timestamp": "2025-12-10T14:10:48.517201",
+      "strategy": "time_weighted",
+      "action": "buy",
+      "symbol": "BTC/USD",
+      "price": 93750.0,
+      "size": 0.0004977777777777778,
+      "leverage": 1,
+      "reason": "Grid buy at level 1 ($93750.00)",
+      "pnl": 0.0,
+      "closed": false,
+      "close_price": 0.0,
+      "close_time": null
+    },
+    {
+      "timestamp": "2025-12-10T14:10:48.517203",
+      "strategy": "time_weighted",
+      "action": "buy",
+      "symbol": "BTC/USD",
+      "price": 94250.0,
+      "size": 0.0004951370468611847,
+      "leverage": 1,
+      "reason": "Grid buy at level 2 ($94250.00)",
+      "pnl": 0.0,
+      "closed": false,
+      "close_price": 0.0,
+      "close_time": null
+    },
+    {
+      "timestamp": "2025-12-10T14:10:48.517205",
+      "strategy": "time_weighted",
+      "action": "buy",
+      "symbol": "BTC/USD",
+      "price": 94750.0,
+      "size": 0.0004925241864555848,
+      "leverage": 1,
+      "reason": "Grid buy at level 3 ($94750.00)",
+      "pnl": 0.0,
+      "closed": false,
+      "close_price": 0.0,
+      "close_time": null
+    },
+    {
+      "timestamp": "2025-12-10T14:10:48.517206",
+      "strategy": "time_weighted",
+      "action": "buy",
+      "symbol": "BTC/USD",
+      "price": 95250.0,
+      "size": 0.0004899387576552931,
+      "leverage": 1,
+      "reason": "Grid buy at level 4 ($95250.00)",
+      "pnl": 0.0,
+      "closed": false,
+      "close_price": 0.0,
+      "close_time": null
+    },
+    {
+      "timestamp": "2025-12-10T15:13:42.132959",
+      "strategy": "bb_squeeze",
+      "action": "buy",
+      "symbol": "BTC/USD",
+      "price": 92358.54029848443,
+      "size": 0.0005186721991701245,
+      "leverage": 1,
+      "reason": "Grid buy at level 8 ($92358.54)",
+      "pnl": -0.7316458459906857,
+      "closed": true,
+      "close_price": 91425.76630458236,
+      "close_time": "2025-12-10T15:14:13.578553"
+    },
+    {
+      "timestamp": "2025-12-10T15:18:56.923902",
+      "strategy": "bb_squeeze",
+      "action": "buy",
+      "symbol": "BTC/USD",
+      "price": 92092.03344308384,
+      "size": 0.0005219206680584551,
+      "leverage": 1,
+      "reason": "Grid buy at level 6 ($92092.03)",
+      "pnl": -0.4580373070296829,
+      "closed": true,
+      "close_price": 91692.27315998294,
+      "close_time": "2025-12-10T15:19:28.524718"
+    }
+  ],
+  "price_history": [
+    {
+      "timestamp": "2025-12-10 15:00:35.566896",
+      "price": 92379.7
+    },
+    {
+      "timestamp": "2025-12-10 15:01:06.946588",
+      "price": 92413.5
+    },
+    {
+      "timestamp": "2025-12-10 15:01:38.632365",
+      "price": 92499.6
+    },
+    {
+      "timestamp": "2025-12-10 15:02:10.336816",
+      "price": 92534.7
+    },
+    {
+      "timestamp": "2025-12-10 15:02:41.948157",
+      "price": 92499.7
+    },
+    {
+      "timestamp": "2025-12-10 15:03:13.331989",
+      "price": 92447.8
+    },
+    {
+      "timestamp": "2025-12-10 15:03:44.710692",
+      "price": 92447.8
+    },
+    {
+      "timestamp": "2025-12-10 15:04:16.107325",
+      "price": 92480.5
+    },
+    {
+      "timestamp": "2025-12-10 15:04:47.562195",
+      "price": 92461.6
+    },
+    {
+      "timestamp": "2025-12-10 15:05:19.153228",
+      "price": 92461.6
+    },
+    {
+      "timestamp": "2025-12-10 15:05:50.582188",
+      "price": 92520.8
+    },
+    {
+      "timestamp": "2025-12-10 15:06:21.968667",
+      "price": 92520.7
+    },
+    {
+      "timestamp": "2025-12-10 15:06:53.355603",
+      "price": 92480.2
+    },
+    {
+      "timestamp": "2025-12-10 15:07:24.739037",
+      "price": 92552.3
+    },
+    {
+      "timestamp": "2025-12-10 15:07:56.113013",
+      "price": 92534.8
+    },
+    {
+      "timestamp": "2025-12-10 15:08:27.689159",
+      "price": 92564.2
+    },
+    {
+      "timestamp": "2025-12-10 15:08:59.185237",
+      "price": 92596.5
+    },
+    {
+      "timestamp": "2025-12-10 15:09:30.628725",
+      "price": 92631.2
+    },
+    {
+      "timestamp": "2025-12-10 15:10:02.068437",
+      "price": 92668.1
+    },
+    {
+      "timestamp": "2025-12-10 15:10:33.379936",
+      "price": 92686.6
+    },
+    {
+      "timestamp": "2025-12-10 15:11:04.786076",
+      "price": 92686.6
+    },
+    {
+      "timestamp": "2025-12-10 15:11:36.177993",
+      "price": 92589.6
+    },
+    {
+      "timestamp": "2025-12-10 15:12:07.773293",
+      "price": 92555.1
+    },
+    {
+      "timestamp": "2025-12-10 15:12:39.386286",
+      "price": 92500.2
+    },
+    {
+      "timestamp": "2025-12-10 15:13:10.761549",
+      "price": 92445.6
+    },
+    {
+      "timestamp": "2025-12-10 15:13:42.132631",
+      "price": 92266.6
+    },
+    {
+      "timestamp": "2025-12-10 15:14:13.578229",
+      "price": 92123.2
+    },
+    {
+      "timestamp": "2025-12-10 15:14:44.987555",
+      "price": 92184.9
+    },
+    {
+      "timestamp": "2025-12-10 15:15:16.618858",
+      "price": 92217.9
+    },
+    {
+      "timestamp": "2025-12-10 15:15:48.012265",
+      "price": 92234.1
+    },
+    {
+      "timestamp": "2025-12-10 15:16:19.614918",
+      "price": 92261.1
+    },
+    {
+      "timestamp": "2025-12-10 15:16:51.273055",
+      "price": 92282.9
+    },
+    {
+      "timestamp": "2025-12-10 15:17:22.664437",
+      "price": 92243.5
+    },
+    {
+      "timestamp": "2025-12-10 15:17:54.073771",
+      "price": 92217.9
+    },
+    {
+      "timestamp": "2025-12-10 15:18:25.516627",
+      "price": 92134.5
+    },
+    {
+      "timestamp": "2025-12-10 15:18:56.923565",
+      "price": 92000.3
+    },
+    {
+      "timestamp": "2025-12-10 15:19:28.524426",
+      "price": 92048.7
+    },
+    {
+      "timestamp": "2025-12-10 15:19:59.896660",
+      "price": 92048.8
+    },
+    {
+      "timestamp": "2025-12-10 15:20:31.150045",
+      "price": 92174.5
+    },
+    {
+      "timestamp": "2025-12-10 15:21:02.609920",
+      "price": 92147.3
+    },
+    {
+      "timestamp": "2025-12-10 15:21:34.002917",
+      "price": 92169.3
+    },
+    {
+      "timestamp": "2025-12-10 15:22:05.402605",
+      "price": 92214.3
+    },
+    {
+      "timestamp": "2025-12-10 15:22:36.802816",
+      "price": 92229.9
+    },
+    {
+      "timestamp": "2025-12-10 15:23:08.423329",
+      "price": 92234.1
+    },
+    {
+      "timestamp": "2025-12-10 15:23:39.804416",
+      "price": 92270.0
+    },
+    {
+      "timestamp": "2025-12-10 15:24:11.169819",
+      "price": 92261.2
+    },
+    {
+      "timestamp": "2025-12-10 15:24:42.631698",
+      "price": 92270.0
+    },
+    {
+      "timestamp": "2025-12-10 15:25:14.036935",
+      "price": 92279.6
+    },
+    {
+      "timestamp": "2025-12-10 15:25:45.424417",
+      "price": 92370.9
+    },
+    {
+      "timestamp": "2025-12-10 15:26:16.835489",
+      "price": 92485.7
+    },
+    {
+      "timestamp": "2025-12-10 15:26:48.223041",
+      "price": 92456.1
+    },
+    {
+      "timestamp": "2025-12-10 15:27:19.610885",
+      "price": 92421.8
+    },
+    {
+      "timestamp": "2025-12-10 15:27:51.001728",
+      "price": 92337.5
+    },
+    {
+      "timestamp": "2025-12-10 15:28:22.668061",
+      "price": 92337.5
+    },
+    {
+      "timestamp": "2025-12-10 15:28:54.059339",
+      "price": 92321.1
+    },
+    {
+      "timestamp": "2025-12-10 15:29:25.489539",
+      "price": 92321.0
+    },
+    {
+      "timestamp": "2025-12-10 15:29:56.888105",
+      "price": 92321.0
+    },
+    {
+      "timestamp": "2025-12-10 15:30:28.329904",
+      "price": 92321.1
+    },
+    {
+      "timestamp": "2025-12-10 15:30:59.709915",
+      "price": 92359.7
+    },
+    {
+      "timestamp": "2025-12-10 15:31:31.109514",
+      "price": 92399.9
+    },
+    {
+      "timestamp": "2025-12-10 15:32:02.543937",
+      "price": 92354.2
+    },
+    {
+      "timestamp": "2025-12-10 15:32:33.927361",
+      "price": 92160.4
+    },
+    {
+      "timestamp": "2025-12-10 15:33:05.332537",
+      "price": 92193.9
+    },
+    {
+      "timestamp": "2025-12-10 15:33:36.761251",
+      "price": 92239.5
+    },
+    {
+      "timestamp": "2025-12-10 15:34:08.197305",
+      "price": 92255.5
+    },
+    {
+      "timestamp": "2025-12-10 15:34:39.631593",
+      "price": 92261.6
+    },
+    {
+      "timestamp": "2025-12-10 15:35:11.005904",
+      "price": 92314.8
+    },
+    {
+      "timestamp": "2025-12-10 15:35:42.391143",
+      "price": 92314.7
+    },
+    {
+      "timestamp": "2025-12-10 15:36:13.781233",
+      "price": 92272.2
+    },
+    {
+      "timestamp": "2025-12-10 15:36:45.149771",
+      "price": 92272.2
+    },
+    {
+      "timestamp": "2025-12-10 15:37:16.529129",
+      "price": 92309.8
+    },
+    {
+      "timestamp": "2025-12-10 15:37:47.913253",
+      "price": 92319.9
+    },
+    {
+      "timestamp": "2025-12-10 15:38:19.297745",
+      "price": 92321.0
+    },
+    {
+      "timestamp": "2025-12-10 15:38:50.694759",
+      "price": 92370.0
+    },
+    {
+      "timestamp": "2025-12-10 15:39:22.079170",
+      "price": 92394.2
+    },
+    {
+      "timestamp": "2025-12-10 15:39:53.452922",
+      "price": 92604.7
+    },
+    {
+      "timestamp": "2025-12-10 15:40:25.066652",
+      "price": 92518.6
+    },
+    {
+      "timestamp": "2025-12-10 15:40:56.462311",
+      "price": 92514.2
+    },
+    {
+      "timestamp": "2025-12-10 15:41:27.878280",
+      "price": 92496.7
+    },
+    {
+      "timestamp": "2025-12-10 15:41:59.525238",
+      "price": 92496.7
+    },
+    {
+      "timestamp": "2025-12-10 15:42:30.928310",
+      "price": 92585.8
+    },
+    {
+      "timestamp": "2025-12-10 15:43:02.327979",
+      "price": 92622.0
+    },
+    {
+      "timestamp": "2025-12-10 15:43:33.736814",
+      "price": 92514.3
+    },
+    {
+      "timestamp": "2025-12-10 15:44:05.113603",
+      "price": 92532.1
+    },
+    {
+      "timestamp": "2025-12-10 15:44:36.499365",
+      "price": 92532.1
+    },
+    {
+      "timestamp": "2025-12-10 15:45:08.145489",
+      "price": 92532.0
+    },
+    {
+      "timestamp": "2025-12-10 15:45:39.570319",
+      "price": 92532.1
+    },
+    {
+      "timestamp": "2025-12-10 15:46:10.961631",
+      "price": 92532.1
+    },
+    {
+      "timestamp": "2025-12-10 15:46:42.358793",
+      "price": 92566.3
+    },
+    {
+      "timestamp": "2025-12-10 15:47:13.745755",
+      "price": 92629.8
+    },
+    {
+      "timestamp": "2025-12-10 15:47:45.176178",
+      "price": 92604.0
+    },
+    {
+      "timestamp": "2025-12-10 15:48:16.551046",
+      "price": 92487.2
+    },
+    {
+      "timestamp": "2025-12-10 15:48:47.921480",
+      "price": 92475.8
+    },
+    {
+      "timestamp": "2025-12-10 15:49:19.622345",
+      "price": 92475.8
+    },
+    {
+      "timestamp": "2025-12-10 15:49:51.231616",
+      "price": 92475.8
+    },
+    {
+      "timestamp": "2025-12-10 15:50:22.627056",
+      "price": 92457.1
+    },
+    {
+      "timestamp": "2025-12-10 15:50:54.161524",
+      "price": 92435.3
+    },
+    {
+      "timestamp": "2025-12-10 15:51:25.601179",
+      "price": 92435.3
+    },
+    {
+      "timestamp": "2025-12-10 15:51:57.217947",
+      "price": 92435.2
+    },
+    {
+      "timestamp": "2025-12-10 15:52:28.679847",
+      "price": 92435.3
+    }
+  ],
+  "timestamp": "2025-12-10T15:52:58.681294"
+}

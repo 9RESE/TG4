@@ -5,9 +5,402 @@ Phase 11: Lowered short thresholds, 15% max exposure, RSI<40 auto-exit
 Phase 18: Trail stops on winners + regime-based dynamic sizing
 Phase 19: Early trail (+1.5% activation, 1.2% trail) + partial takes (50% at +3%)
 Phase 21: Momentum partial at +4% for breakout trades
+Phase 31: Per-strategy risk profiles with unified framework
 """
 import numpy as np
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional, Tuple, Any
+from dataclasses import dataclass, field
+from enum import Enum
+
+
+class StrategyCategory(Enum):
+    """Strategy categories with default risk profiles."""
+    ARBITRAGE = "arbitrage"       # Low risk, fast execution
+    SCALPING = "scalping"         # Medium risk, quick trades
+    MEAN_REVERSION = "mean_reversion"  # Medium risk, counter-trend
+    TREND_FOLLOWING = "trend_following"  # Higher risk, conviction trades
+    ACCUMULATION = "accumulation"  # Low risk per trade, long-term
+    PAIR_TRADING = "pair_trading"  # Market neutral, spread-based
+    GRID = "grid"                  # Systematic, range-bound
+    SENTIMENT = "sentiment"        # Signal-based, variable risk
+
+
+@dataclass
+class StrategyRiskProfile:
+    """
+    Per-strategy risk profile configuration.
+
+    Each strategy should have its own risk profile based on its nature:
+    - Arbitrage: Low confidence threshold (opportunities are fleeting)
+    - Scalping: Medium threshold, tight stops
+    - Trend Following: High threshold, wider stops
+    - Accumulation: Very low threshold (DCA is time-based)
+    """
+    # Entry thresholds
+    min_confidence: float = 0.35        # Minimum confidence to execute
+
+    # Exit risk management
+    stop_loss_pct: float = 0.02         # 2% default stop loss
+    take_profit_pct: float = 0.03       # 3% default take profit
+    max_hold_hours: float = 24.0        # Max hours to hold position
+
+    # Trailing stop
+    use_trailing_stop: bool = False
+    trailing_activation_pct: float = 0.015  # Activate after 1.5% profit
+    trailing_distance_pct: float = 0.012    # Trail 1.2% from peak
+
+    # Position sizing
+    max_position_pct: float = 0.10      # Max 10% of portfolio per trade
+    max_leverage: int = 5               # Maximum leverage
+
+    # Category for default behaviors
+    category: StrategyCategory = StrategyCategory.MEAN_REVERSION
+
+    @classmethod
+    def from_config(cls, config: Dict[str, Any]) -> 'StrategyRiskProfile':
+        """Create risk profile from strategy config dict."""
+        # Map category string to enum
+        category_str = config.get('category', 'mean_reversion')
+        category_map = {
+            'arbitrage': StrategyCategory.ARBITRAGE,
+            'scalping': StrategyCategory.SCALPING,
+            'scalper': StrategyCategory.SCALPING,
+            'mean_reversion': StrategyCategory.MEAN_REVERSION,
+            'trend_following': StrategyCategory.TREND_FOLLOWING,
+            'trend': StrategyCategory.TREND_FOLLOWING,
+            'accumulation': StrategyCategory.ACCUMULATION,
+            'pair_trading': StrategyCategory.PAIR_TRADING,
+            'grid': StrategyCategory.GRID,
+            'margin': StrategyCategory.GRID,
+            'sentiment': StrategyCategory.SENTIMENT,
+            'general': StrategyCategory.MEAN_REVERSION,
+            'breakout': StrategyCategory.TREND_FOLLOWING,
+            'momentum': StrategyCategory.TREND_FOLLOWING,
+            'volume': StrategyCategory.MEAN_REVERSION,
+            'confluence': StrategyCategory.TREND_FOLLOWING,
+        }
+        category = category_map.get(category_str, StrategyCategory.MEAN_REVERSION)
+
+        return cls(
+            min_confidence=config.get('min_confidence', cls.get_default_confidence(category)),
+            stop_loss_pct=config.get('stop_loss_pct', 0.02),
+            take_profit_pct=config.get('take_profit_pct', 0.03),
+            max_hold_hours=config.get('max_hold_hours', 24.0),
+            use_trailing_stop=config.get('use_trailing_stop', False),
+            trailing_activation_pct=config.get('trailing_activation_pct', 0.015),
+            trailing_distance_pct=config.get('trailing_distance_pct', 0.012),
+            max_position_pct=config.get('max_position_pct', config.get('position_size_pct', 0.10)),
+            max_leverage=config.get('max_leverage', 5),
+            category=category
+        )
+
+    @staticmethod
+    def get_default_confidence(category: StrategyCategory) -> float:
+        """Get default min_confidence by strategy category."""
+        defaults = {
+            StrategyCategory.ARBITRAGE: 0.15,      # Fast execution, low threshold
+            StrategyCategory.SCALPING: 0.35,       # Quick trades, medium threshold
+            StrategyCategory.MEAN_REVERSION: 0.40, # Counter-trend, need conviction
+            StrategyCategory.TREND_FOLLOWING: 0.50, # Need strong signals
+            StrategyCategory.ACCUMULATION: 0.10,   # DCA - time-based, low threshold
+            StrategyCategory.PAIR_TRADING: 0.30,   # Market neutral, medium threshold
+            StrategyCategory.GRID: 0.20,           # Systematic, lower threshold
+            StrategyCategory.SENTIMENT: 0.45,      # Variable, higher threshold
+        }
+        return defaults.get(category, 0.35)
+
+    def check_exit(self, entry_price: float, current_price: float,
+                   entry_time_hours: float, peak_price: float = None,
+                   side: str = 'long') -> Tuple[bool, str]:
+        """
+        Check if position should be exited based on risk rules.
+
+        Args:
+            entry_price: Entry price of position
+            current_price: Current market price
+            entry_time_hours: Hours since entry
+            peak_price: Peak price since entry (for trailing stop)
+            side: 'long' or 'short'
+
+        Returns:
+            Tuple[bool, str]: (should_exit, reason)
+        """
+        # Calculate PnL
+        if side == 'long':
+            pnl_pct = (current_price - entry_price) / entry_price
+        else:
+            pnl_pct = (entry_price - current_price) / entry_price
+
+        # Check take profit
+        if pnl_pct >= self.take_profit_pct:
+            return True, f'take_profit (+{pnl_pct*100:.2f}%)'
+
+        # Check stop loss
+        if pnl_pct <= -self.stop_loss_pct:
+            return True, f'stop_loss ({pnl_pct*100:.2f}%)'
+
+        # Check max hold time
+        if entry_time_hours >= self.max_hold_hours:
+            return True, f'max_hold_time ({entry_time_hours:.1f}h)'
+
+        # Check trailing stop
+        if self.use_trailing_stop and peak_price is not None:
+            if side == 'long':
+                peak_pnl = (peak_price - entry_price) / entry_price
+                if peak_pnl >= self.trailing_activation_pct:
+                    trail_stop = peak_price * (1 - self.trailing_distance_pct)
+                    if current_price <= trail_stop:
+                        return True, f'trailing_stop (+{pnl_pct*100:.2f}% locked)'
+            else:
+                # For shorts, peak_price is actually trough (lowest)
+                peak_pnl = (entry_price - peak_price) / entry_price
+                if peak_pnl >= self.trailing_activation_pct:
+                    trail_stop = peak_price * (1 + self.trailing_distance_pct)
+                    if current_price >= trail_stop:
+                        return True, f'trailing_stop (+{pnl_pct*100:.2f}% locked)'
+
+        return False, 'hold'
+
+
+# Default risk profiles by category
+DEFAULT_RISK_PROFILES: Dict[str, StrategyRiskProfile] = {
+    # Arbitrage - fast execution, low threshold
+    'triangular_arb': StrategyRiskProfile(
+        min_confidence=0.15,
+        stop_loss_pct=0.005,  # Very tight - arb should be instant
+        take_profit_pct=0.003,
+        max_hold_hours=0.1,  # 6 minutes max
+        category=StrategyCategory.ARBITRAGE
+    ),
+    'funding_rate_arb': StrategyRiskProfile(
+        min_confidence=0.20,
+        stop_loss_pct=0.01,
+        take_profit_pct=0.02,
+        max_hold_hours=9,  # After funding period
+        category=StrategyCategory.ARBITRAGE
+    ),
+
+    # Scalping - quick trades, tight stops
+    'scalping_1m5m': StrategyRiskProfile(
+        min_confidence=0.35,
+        stop_loss_pct=0.003,
+        take_profit_pct=0.004,
+        max_hold_hours=1,
+        use_trailing_stop=False,
+        category=StrategyCategory.SCALPING
+    ),
+    'intraday_scalper': StrategyRiskProfile(
+        min_confidence=0.35,
+        stop_loss_pct=0.003,
+        take_profit_pct=0.006,
+        max_hold_hours=0.5,  # 30 minutes
+        category=StrategyCategory.SCALPING
+    ),
+    'ema9_scalper': StrategyRiskProfile(
+        min_confidence=0.40,
+        stop_loss_pct=0.01,
+        take_profit_pct=0.02,
+        max_hold_hours=2,
+        category=StrategyCategory.SCALPING
+    ),
+
+    # Mean Reversion - counter-trend, medium threshold
+    'mean_reversion_vwap': StrategyRiskProfile(
+        min_confidence=0.40,
+        stop_loss_pct=0.015,
+        take_profit_pct=0.02,
+        max_hold_hours=12,
+        category=StrategyCategory.MEAN_REVERSION
+    ),
+    'mean_reversion_short': StrategyRiskProfile(
+        min_confidence=0.40,
+        stop_loss_pct=0.015,
+        take_profit_pct=0.02,
+        max_hold_hours=12,
+        category=StrategyCategory.MEAN_REVERSION
+    ),
+    'wavetrend': StrategyRiskProfile(
+        min_confidence=0.40,
+        stop_loss_pct=0.012,
+        take_profit_pct=0.018,
+        max_hold_hours=8,
+        category=StrategyCategory.MEAN_REVERSION
+    ),
+    'volume_profile': StrategyRiskProfile(
+        min_confidence=0.40,
+        stop_loss_pct=0.01,
+        take_profit_pct=0.015,
+        max_hold_hours=16,
+        category=StrategyCategory.MEAN_REVERSION
+    ),
+
+    # Trend Following - need conviction
+    'ma_trend_follow': StrategyRiskProfile(
+        min_confidence=0.50,
+        stop_loss_pct=0.02,
+        take_profit_pct=0.04,
+        max_hold_hours=48,
+        use_trailing_stop=True,
+        trailing_activation_pct=0.02,
+        trailing_distance_pct=0.015,
+        category=StrategyCategory.TREND_FOLLOWING
+    ),
+    'supertrend': StrategyRiskProfile(
+        min_confidence=0.50,
+        stop_loss_pct=0.02,
+        take_profit_pct=0.04,
+        max_hold_hours=72,
+        use_trailing_stop=True,
+        category=StrategyCategory.TREND_FOLLOWING
+    ),
+    'ichimoku_cloud': StrategyRiskProfile(
+        min_confidence=0.55,
+        stop_loss_pct=0.025,
+        take_profit_pct=0.05,
+        max_hold_hours=96,
+        use_trailing_stop=True,
+        category=StrategyCategory.TREND_FOLLOWING
+    ),
+    'volatility_breakout': StrategyRiskProfile(
+        min_confidence=0.45,
+        stop_loss_pct=0.015,
+        take_profit_pct=0.025,
+        max_hold_hours=6,
+        category=StrategyCategory.TREND_FOLLOWING
+    ),
+    'multi_indicator_confluence': StrategyRiskProfile(
+        min_confidence=0.55,
+        stop_loss_pct=0.02,
+        take_profit_pct=0.04,
+        max_hold_hours=24,
+        category=StrategyCategory.TREND_FOLLOWING
+    ),
+
+    # Accumulation - time-based, very low threshold
+    'enhanced_dca': StrategyRiskProfile(
+        min_confidence=0.10,
+        stop_loss_pct=0.10,  # Wide - accumulation strategy
+        take_profit_pct=0.15,
+        max_hold_hours=720,  # 30 days - long term
+        category=StrategyCategory.ACCUMULATION
+    ),
+    'dip_detector': StrategyRiskProfile(
+        min_confidence=0.25,
+        stop_loss_pct=0.08,
+        take_profit_pct=0.15,
+        max_hold_hours=168,  # 1 week
+        use_trailing_stop=True,
+        trailing_activation_pct=0.05,
+        trailing_distance_pct=0.03,
+        category=StrategyCategory.ACCUMULATION
+    ),
+    'twap_accumulator': StrategyRiskProfile(
+        min_confidence=0.10,
+        stop_loss_pct=0.10,
+        take_profit_pct=0.10,
+        max_hold_hours=168,
+        category=StrategyCategory.ACCUMULATION
+    ),
+
+    # Pair Trading - market neutral
+    'xrp_btc_pair_trading': StrategyRiskProfile(
+        min_confidence=0.35,
+        stop_loss_pct=0.02,
+        take_profit_pct=0.03,
+        max_hold_hours=48,
+        category=StrategyCategory.PAIR_TRADING
+    ),
+    'xrp_btc_leadlag': StrategyRiskProfile(
+        min_confidence=0.35,
+        stop_loss_pct=0.015,
+        take_profit_pct=0.025,
+        max_hold_hours=24,
+        use_trailing_stop=True,
+        category=StrategyCategory.PAIR_TRADING
+    ),
+
+    # Grid - systematic
+    'grid_arithmetic': StrategyRiskProfile(
+        min_confidence=0.20,
+        stop_loss_pct=0.05,
+        take_profit_pct=0.01,  # Per level
+        max_hold_hours=168,
+        category=StrategyCategory.GRID
+    ),
+    'grid_geometric': StrategyRiskProfile(
+        min_confidence=0.20,
+        stop_loss_pct=0.05,
+        take_profit_pct=0.01,
+        max_hold_hours=168,
+        category=StrategyCategory.GRID
+    ),
+
+    # Sentiment
+    'whale_sentiment': StrategyRiskProfile(
+        min_confidence=0.50,
+        stop_loss_pct=0.03,
+        take_profit_pct=0.05,
+        max_hold_hours=24,
+        category=StrategyCategory.SENTIMENT
+    ),
+
+    # Special
+    'defensive_yield': StrategyRiskProfile(
+        min_confidence=0.30,
+        stop_loss_pct=0.05,
+        take_profit_pct=0.08,
+        max_hold_hours=168,
+        category=StrategyCategory.ACCUMULATION
+    ),
+    'portfolio_rebalancer': StrategyRiskProfile(
+        min_confidence=0.15,
+        stop_loss_pct=0.10,
+        take_profit_pct=0.10,
+        max_hold_hours=720,
+        category=StrategyCategory.ACCUMULATION
+    ),
+    'xrp_momentum_lstm': StrategyRiskProfile(
+        min_confidence=0.45,
+        stop_loss_pct=0.02,
+        take_profit_pct=0.04,
+        max_hold_hours=24,
+        use_trailing_stop=True,
+        category=StrategyCategory.TREND_FOLLOWING
+    ),
+}
+
+
+def get_risk_profile(strategy_name: str, config: Dict[str, Any] = None) -> StrategyRiskProfile:
+    """
+    Get risk profile for a strategy.
+
+    Priority:
+    1. Values from config (if provided)
+    2. Default profile for strategy name
+    3. Generic default based on category
+    """
+    # Start with default if exists
+    if strategy_name in DEFAULT_RISK_PROFILES:
+        base_profile = DEFAULT_RISK_PROFILES[strategy_name]
+    else:
+        base_profile = StrategyRiskProfile()
+
+    # Override with config values if provided
+    if config:
+        return StrategyRiskProfile(
+            min_confidence=config.get('min_confidence', base_profile.min_confidence),
+            stop_loss_pct=config.get('stop_loss_pct', base_profile.stop_loss_pct),
+            take_profit_pct=config.get('take_profit_pct', base_profile.take_profit_pct),
+            max_hold_hours=config.get('max_hold_hours', base_profile.max_hold_hours),
+            use_trailing_stop=config.get('use_trailing_stop', base_profile.use_trailing_stop),
+            trailing_activation_pct=config.get('trailing_activation_pct', base_profile.trailing_activation_pct),
+            trailing_distance_pct=config.get('trailing_distance_pct', base_profile.trailing_distance_pct),
+            max_position_pct=config.get('max_position_pct', config.get('position_size_pct', base_profile.max_position_pct)),
+            max_leverage=config.get('max_leverage', base_profile.max_leverage),
+            category=base_profile.category
+        )
+
+    return base_profile
 
 
 class RiskManager:

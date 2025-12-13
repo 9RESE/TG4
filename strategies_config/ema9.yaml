@@ -1,0 +1,87 @@
+# Phase 25: EMA-9 Scalper Configuration (Improved)
+# Multi-filter crossover scalper with comprehensive risk management
+
+ema9_scalper:
+  # === CORE EMA PARAMETERS ===
+  timeframe: "5m"             # Primary timeframe for signals
+  ema_period: 9               # Fast EMA for crossover detection
+  ema_slow_period: 21         # Slow EMA for trend filter
+
+  # === LEVERAGE AND SIZING ===
+  leverage: 3                 # Reduced from 5x to 3x for safety
+  size_pct: 0.08              # 8% base position size
+  dynamic_sizing: true        # Enable ATR-based position sizing
+  min_size_pct: 0.03          # Min 3% position
+  max_size_pct: 0.12          # Max 12% position
+
+  # === VOLATILITY THRESHOLDS ===
+  atr_period: 14              # ATR calculation period
+  atr_threshold: 0.5          # Min ATR% to activate (filter low vol)
+  atr_threshold_high: 3.0     # Max ATR% (filter extreme vol)
+  override_atr_threshold: 1.8 # ATR% to bypass RL confidence gate
+
+  # === RSI FILTER ===
+  rsi_period: 14              # RSI calculation period
+  rsi_buy_max: 40             # Only buy when RSI < 40 (not overbought)
+  rsi_sell_min: 60            # Only sell when RSI > 60 (not oversold)
+  use_rsi_filter: true        # Enable RSI filter
+
+  # === ADX FILTER (Ranging Market Detection) ===
+  adx_period: 14              # ADX calculation period
+  adx_max: 30                 # Only trade when ADX < 30 (ranging)
+  use_adx_filter: true        # Enable ADX filter
+
+  # === VOLUME FILTER ===
+  volume_mult: 1.2            # Require volume > 1.2x average
+  volume_window: 20           # Volume lookback window
+  use_volume_filter: true     # Enable volume filter
+
+  # === TREND FILTER ===
+  use_trend_filter: true      # Require alignment with EMA-21
+  trend_tolerance: 0.002      # 0.2% tolerance for trend alignment
+
+  # === RISK MANAGEMENT ===
+  stop_loss_pct: 0.01         # 1% stop loss (now implemented!)
+  take_profit_pct: 0.02       # 2% take profit (now implemented!)
+  max_positions: 2            # Max concurrent positions (enforced)
+
+  # === TRADE COOLDOWN ===
+  cooldown_bars: 3            # Min bars between trades
+  cooldown_minutes: 10        # Min minutes between trades
+
+  # === CROSSOVER CONFIRMATION ===
+  require_confirmation: true  # Require price > threshold above EMA
+  confirmation_threshold: 0.001  # 0.1% above/below EMA for confirmation
+
+  # === SYMBOLS ===
+  symbols:
+    - "BTC/USDT"
+    - "XRP/USDT"
+
+  # === STRATEGY FLAGS ===
+  enabled: true
+  override_enabled: true      # Allow bypassing RL confidence gate
+
+# === IMPROVEMENT NOTES (Phase 25) ===
+#
+# Fixed Issues:
+# 1. SL/TP now implemented with active_scalps tracking
+# 2. Position awareness - no duplicate entries
+# 3. max_positions enforced
+# 4. Trade cooldown prevents overtrading
+# 5. Fixed ATR calculation (removed incorrect sqrt(24) scaling)
+# 6. Reduced leverage from 5x to 3x
+#
+# New Features:
+# - RSI filter: Only buy when RSI < 40, sell when RSI > 60
+# - ADX filter: Only trade in ranging markets (ADX < 30)
+# - Volume filter: Confirm signals with above-average volume
+# - Trend filter: Align with EMA-21 trend direction
+# - Dynamic position sizing based on volatility
+# - Crossover confirmation threshold (0.1%)
+#
+# Expected Improvements:
+# - Fewer false signals (multi-filter approach)
+# - Better risk/reward with proper SL/TP
+# - Reduced overtrading with cooldown
+# - More stable returns with reduced leverage

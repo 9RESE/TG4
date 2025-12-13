@@ -69,7 +69,8 @@ class DefensiveYield(BaseStrategy):
         self.current_atr = {}
         self.current_rsi = {'XRP': 50.0, 'BTC': 50.0}
         self.mode = 'defensive'
-        self.short_positions = {'BTC': None, 'XRP': None}
+        self.short_positions: Dict[str, bool] = {}  # symbol -> True if short
+        self.long_positions: Dict[str, bool] = {}   # symbol -> True if long
 
         # RL model
         self.model = None
@@ -171,8 +172,74 @@ class DefensiveYield(BaseStrategy):
 
         Returns signal dict with action, size, leverage, etc.
         """
-        # Determine current mode
+        # Determine current mode (also updates RSI and volatility)
         self.mode = self._determine_mode(data)
+
+        # CHECK EXITS FIRST - Priority over new entries
+        # Check short position exits
+        for symbol in list(self.short_positions.keys()):
+            if not self.short_positions.get(symbol):
+                continue
+
+            asset = symbol.split('/')[0]  # 'XRP' or 'BTC'
+            rsi = self.current_rsi.get(asset, 50)
+            below_vwap = not is_above_vwap(data, symbol)
+
+            # Exit short when RSI drops (target achieved) or price drops below VWAP
+            if rsi < self.RSI_SHORT_EXIT:
+                self.short_positions.pop(symbol, None)
+                return {
+                    'action': 'cover',
+                    'symbol': symbol,
+                    'size': 1.0,
+                    'leverage': 1,
+                    'confidence': 0.80,
+                    'reason': f'Short exit - RSI target hit {rsi:.1f} < {self.RSI_SHORT_EXIT}',
+                    'mode': self.mode
+                }
+            elif below_vwap:
+                self.short_positions.pop(symbol, None)
+                return {
+                    'action': 'cover',
+                    'symbol': symbol,
+                    'size': 1.0,
+                    'leverage': 1,
+                    'confidence': 0.75,
+                    'reason': f'Short exit - Price below VWAP (target zone)',
+                    'mode': self.mode
+                }
+
+        # Check long position exits
+        for symbol in list(self.long_positions.keys()):
+            if not self.long_positions.get(symbol):
+                continue
+
+            asset = symbol.split('/')[0]
+            rsi = self.current_rsi.get(asset, 50)
+
+            # Exit long when volatility spikes (defensive trigger) or RSI overbought
+            if self.current_volatility > self.BEAR_VOL_THRESHOLD:
+                self.long_positions.pop(symbol, None)
+                return {
+                    'action': 'sell',
+                    'symbol': symbol,
+                    'size': 1.0,
+                    'leverage': 1,
+                    'confidence': 0.80,
+                    'reason': f'Long exit - Volatility spike {self.current_volatility*100:.1f}% > {self.BEAR_VOL_THRESHOLD*100:.1f}%',
+                    'mode': self.mode
+                }
+            elif rsi > self.RSI_OVERBOUGHT:
+                self.long_positions.pop(symbol, None)
+                return {
+                    'action': 'sell',
+                    'symbol': symbol,
+                    'size': 1.0,
+                    'leverage': 1,
+                    'confidence': 0.75,
+                    'reason': f'Long exit - RSI overbought {rsi:.1f} > {self.RSI_OVERBOUGHT}',
+                    'mode': self.mode
+                }
 
         # Get LSTM signals
         xrp_signal = generate_xrp_signals(data) if 'XRP/USDT' in data else {'confidence': 0}
@@ -202,7 +269,7 @@ class DefensiveYield(BaseStrategy):
             risk_pct = 0.08 if is_rip else 0.05
 
             if self.current_rsi['XRP'] > self.RSI_OVERBOUGHT and xrp_above_vwap:
-                if self.short_positions['XRP'] is None:
+                if not self.short_positions.get('XRP/USDT'):
                     signal = {
                         'action': 'short',
                         'symbol': 'XRP/USDT',
@@ -212,9 +279,11 @@ class DefensiveYield(BaseStrategy):
                         'reason': f'Bear {"rip" if is_rip else "selective"} short - RSI: {self.current_rsi["XRP"]:.1f}',
                         'mode': self.mode
                     }
+                    # Track position for exit logic
+                    self.short_positions['XRP/USDT'] = True
 
             elif self.current_rsi['BTC'] > self.RSI_OVERBOUGHT and btc_above_vwap:
-                if self.short_positions['BTC'] is None:
+                if not self.short_positions.get('BTC/USDT'):
                     signal = {
                         'action': 'short',
                         'symbol': 'BTC/USDT',
@@ -225,33 +294,41 @@ class DefensiveYield(BaseStrategy):
                         'mode': self.mode,
                         'use_etf': 'BTC3S'
                     }
+                    # Track position for exit logic
+                    self.short_positions['BTC/USDT'] = True
 
         # Offensive mode - long signals
         elif self.mode == 'offensive':
             dynamic_lev = self.risk.dynamic_leverage(self.current_volatility)
 
             if xrp_dip.get('is_dip') and xrp_dip.get('confidence', 0) > self.OFFENSIVE_CONFIDENCE_THRESHOLD:
-                signal = {
-                    'action': 'buy',
-                    'symbol': 'XRP/USDT',
-                    'size': 0.15,
-                    'leverage': dynamic_lev,
-                    'confidence': xrp_dip['confidence'],
-                    'reason': f'Offensive dip buy - conf: {xrp_dip["confidence"]:.2f}',
-                    'mode': self.mode
-                }
+                if not self.long_positions.get('XRP/USDT'):
+                    signal = {
+                        'action': 'buy',
+                        'symbol': 'XRP/USDT',
+                        'size': 0.15,
+                        'leverage': dynamic_lev,
+                        'confidence': xrp_dip['confidence'],
+                        'reason': f'Offensive dip buy - conf: {xrp_dip["confidence"]:.2f}',
+                        'mode': self.mode
+                    }
+                    # Track position for exit logic
+                    self.long_positions['XRP/USDT'] = True
 
             elif btc_dip.get('is_dip') and btc_dip.get('confidence', 0) > self.OFFENSIVE_CONFIDENCE_THRESHOLD:
-                signal = {
-                    'action': 'buy',
-                    'symbol': 'BTC/USDT',
-                    'size': 0.15,
-                    'leverage': 3,  # Bitrue ETF
-                    'confidence': btc_dip['confidence'],
-                    'reason': f'Offensive dip buy BTC3L - conf: {btc_dip["confidence"]:.2f}',
-                    'mode': self.mode,
-                    'use_etf': 'BTC3L'
-                }
+                if not self.long_positions.get('BTC/USDT'):
+                    signal = {
+                        'action': 'buy',
+                        'symbol': 'BTC/USDT',
+                        'size': 0.15,
+                        'leverage': 3,  # Bitrue ETF
+                        'confidence': btc_dip['confidence'],
+                        'reason': f'Offensive dip buy BTC3L - conf: {btc_dip["confidence"]:.2f}',
+                        'mode': self.mode,
+                        'use_etf': 'BTC3L'
+                    }
+                    # Track position for exit logic
+                    self.long_positions['BTC/USDT'] = True
 
         # Defensive mode - accrue yield
         elif self.mode == 'defensive':
@@ -263,7 +340,27 @@ class DefensiveYield(BaseStrategy):
                 'confidence': 0.5,
                 'reason': f'Defensive - parking USDT, accruing yield (ATR: {self.current_volatility*100:.1f}%)',
                 'mode': self.mode,
-                'accrue_yield': True
+                'accrue_yield': True,
+                'indicators': {
+                    'mode': self.mode,
+                    'volatility': self.current_volatility,
+                    'xrp_rsi': self.current_rsi.get('XRP', 50),
+                    'btc_rsi': self.current_rsi.get('BTC', 50),
+                    'has_long_position': bool(self.long_positions),
+                    'has_short_position': bool(self.short_positions),
+                    'waiting_for_opportunity': True
+                }
+            }
+
+        # Ensure all signals have indicators
+        if 'indicators' not in signal:
+            signal['indicators'] = {
+                'mode': self.mode,
+                'volatility': self.current_volatility,
+                'xrp_rsi': self.current_rsi.get('XRP', 50),
+                'btc_rsi': self.current_rsi.get('BTC', 50),
+                'has_long_position': bool(self.long_positions),
+                'has_short_position': bool(self.short_positions)
             }
 
         return signal

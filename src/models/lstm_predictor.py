@@ -14,9 +14,15 @@ class LSTMModel(nn.Module):
         return self.fc(out[:, -1, :])  # predict next price direction
 
 class LSTMPredictor:
-    def __init__(self):
+    _device_printed = False  # Class-level flag to print device only once
+
+    def __init__(self, verbose=False):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        print(f"LSTM using device: {self.device}")  # Should show ROCm cuda on your RX 6700 XT
+        # Only print device once per session, or if verbose
+        if verbose or not LSTMPredictor._device_printed:
+            if verbose:
+                print(f"LSTM using device: {self.device}")
+            LSTMPredictor._device_printed = True
         self.model = LSTMModel().to(self.device)
         self.scaler = MinMaxScaler()
 
@@ -28,7 +34,7 @@ class LSTMPredictor:
             y.append(scaled[i])  # next price
         return torch.tensor(np.array(X), dtype=torch.float32), torch.tensor(np.array(y), dtype=torch.float32)
 
-    def train(self, prices: np.ndarray, epochs=50, seq_len=60):
+    def train(self, prices: np.ndarray, epochs=50, seq_len=60, verbose=False):
         X, y = self.prepare_data(prices, seq_len)
         X, y = X.to(self.device), y.to(self.device)
 
@@ -42,7 +48,7 @@ class LSTMPredictor:
             loss = criterion(output, y)
             loss.backward()
             optimizer.step()
-            if epoch % 10 == 0:
+            if verbose and epoch % 10 == 0:
                 print(f"Epoch {epoch}, Loss: {loss.item():.6f}")
 
         torch.save(self.model.state_dict(), "models/lstm_xrp.pth")

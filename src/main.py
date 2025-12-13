@@ -131,15 +131,23 @@ def main():
         print("Dynamic strategy weighting: Mean Reversion + Pair Trading + Defensive")
         print("Press Ctrl+C to stop\n")
 
-        # Fetch initial data
+        # Fetch initial data - Kraken uses USD not USDT
+        # But strategies expect /USDT symbols, so we map them
         print("Fetching initial market data...")
-        symbols = ['XRP/USDT', 'BTC/USDT']
+        kraken_symbols = ['XRP/USD', 'BTC/USD']
+        strategy_symbols = ['XRP/USDT', 'BTC/USDT']  # What strategies expect
         data = {}
-        for sym in symbols:
-            df = fetcher.fetch_ohlcv('kraken', sym, '1h', 500)
-            if not df.empty:
-                data[sym] = df
-                print(f"  {sym}: {len(df)} candles")
+        for kraken_sym, strat_sym in zip(kraken_symbols, strategy_symbols):
+            df = fetcher.fetch_ohlcv('kraken', kraken_sym, '1h', 500)
+            if df is not None and not df.empty:
+                data[strat_sym] = df  # Store with USDT key for strategy compatibility
+                print(f"  {kraken_sym} -> {strat_sym}: {len(df)} candles")
+            else:
+                print(f"  {kraken_sym}: Failed to fetch (will retry)")
+
+        if not data:
+            print("ERROR: Could not fetch any market data. Check your API credentials.")
+            sys.exit(1)
 
         # Initialize Ensemble Orchestrator
         ensemble = EnsembleOrchestrator(portfolio, data)
@@ -157,14 +165,14 @@ def main():
                 print(f"Loop {loop_count} @ {time.strftime('%Y-%m-%d %H:%M:%S')}")
                 print(f"{'='*60}")
 
-                # Fetch current prices
+                # Fetch current prices - use Kraken USD symbols
                 prices = {'USDT': 1.0}
-                for sym in ['XRP/USDT', 'BTC/USDT']:
-                    p = fetcher.get_best_price(sym)
+                for kraken_sym in kraken_symbols:
+                    p = fetcher.get_best_price(kraken_sym)
                     if p:
-                        base = sym.split('/')[0]
+                        base = kraken_sym.split('/')[0]
                         prices[base] = list(p.values())[0]
-                        print(f"{sym}: ${prices[base]:.4f}")
+                        print(f"{kraken_sym}: ${prices[base]:.4f}")
 
                 # Record portfolio snapshot
                 portfolio.record_snapshot(prices)
@@ -182,10 +190,10 @@ def main():
                 # Refresh data every 30 minutes
                 if time.time() - last_data_refresh > 1800:
                     print("\n[Refreshing market data...]")
-                    for sym in symbols:
-                        df = fetcher.fetch_ohlcv('kraken', sym, '1h', 500)
-                        if not df.empty:
-                            data[sym] = df
+                    for kraken_sym, strat_sym in zip(kraken_symbols, strategy_symbols):
+                        df = fetcher.fetch_ohlcv('kraken', kraken_sym, '1h', 500)
+                        if df is not None and not df.empty:
+                            data[strat_sym] = df
                             ensemble.data = data
                     last_data_refresh = time.time()
 

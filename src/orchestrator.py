@@ -1,11 +1,16 @@
 """
 RL Orchestrator - Master controller for RL-driven trading decisions
-Phase 21: RL Ensemble Orchestrator + Dynamic Strategy Weighting + Scalper
+Phase 22: EMA-9 Privileged Override Scalper + RL Ensemble
 
 This file contains:
 1. RLOrchestrator - The original live trading controller (unchanged)
 2. StrategyRouter - Modular strategy router using BaseStrategy interface
-3. EnsembleOrchestrator - RL-driven multi-strategy weighting
+3. EnsembleOrchestrator - RL-driven multi-strategy weighting + EMA-9 override
+
+Phase 22 Enhancement:
+- EMA-9 scalper with PRIVILEGED OVERRIDE that bypasses RL confidence gate
+- Triggers when daily_atr > 1.8% (high volatility)
+- Best of both: RL protection in dead markets + EMA-9 harvesting every swing
 
 Phase 21 Strategies (6 total):
 - MeanReversionVWAP: High weight in chop ($2.00-2.20 range)
@@ -13,7 +18,7 @@ Phase 21 Strategies (6 total):
 - DefensiveYield: Max weight during high ATR + fear
 - MATrendFollow: 9-period SMA trend following
 - XRPBTCLeadLag: Correlation-aware BTC/XRP following
-- IntraDayScalper: BB squeeze + RSI extremes, activates on ATR >3% (NEW Phase 21)
+- IntraDayScalper: BB squeeze + RSI extremes, activates on ATR >3%
 
 Target: Unbeatable multi-strategy orchestration with accumulation bias.
 """
@@ -27,6 +32,7 @@ from strategies.ripple_momentum_lstm import generate_xrp_signals, generate_btc_s
 from strategies.dip_buy_lstm import generate_dip_signals
 from strategies.mean_reversion import calculate_vwap, is_above_vwap
 from risk_manager import RiskManager
+from utils.diagnostic_logger import get_diagnostic_logger, close_diagnostic_logger
 
 
 class RLOrchestrator:
@@ -1026,6 +1032,7 @@ class EnsembleOrchestrator:
         from strategies.ma_trend_follow import MATrendFollow
         from strategies.xrp_btc_leadlag import XRPBTCLeadLag
         from strategies.intraday_scalper import IntraDayScalper
+        from strategies.ema9_scalper import EMA9Scalper  # Phase 22: Privileged override scalper
         from strategies.strategy_factory import StrategyFactory
 
         self.portfolio = portfolio
@@ -1065,6 +1072,16 @@ class EnsembleOrchestrator:
             'symbols': ['BTC/USDT', 'XRP/USDT']
         })
 
+        # Phase 22: EMA-9 override scalper config (privileged bypass)
+        ema9_config = self.factory.config.get('strategies', {}).get('ema9_scalper', {
+            'timeframe': '5m',
+            'ema_period': 9,
+            'leverage': 5,
+            'size_pct': 0.08,
+            'atr_threshold': 1.8,  # Daily ATR % to activate override
+            'symbols': ['BTC/USDT', 'XRP/USDT']
+        })
+
         self.strategies = {
             'mean_reversion': MeanReversionVWAP(mr_config),
             'pair_trading': XRPBTCPairTrading(pt_config),
@@ -1074,10 +1091,17 @@ class EnsembleOrchestrator:
             'scalper': IntraDayScalper(sc_config)
         }
 
+        # Phase 22: EMA-9 scalper with privileged override (DISABLED - losing money)
+        self.ema9_scalper = EMA9Scalper(ema9_config)
+        self.ema9_override_enabled = False  # DISABLED - was losing major money
+
         # Initialize strategies with portfolio and exchanges
         exchange_context = {'kraken': self.kraken, 'bitrue': self.bitrue}
         for name, strategy in self.strategies.items():
             strategy.initialize(portfolio, exchange_context)
+
+        # Phase 22: Initialize EMA-9 scalper
+        self.ema9_scalper.initialize(portfolio, exchange_context)
 
         # Load ensemble RL agent
         self.model_path = model_path or "models/rl_ensemble_agent"
@@ -1105,6 +1129,10 @@ class EnsembleOrchestrator:
         self.strategy_pnl = {name: 0.0 for name in self.strategies}
         self.total_signals = 0
         self.executed_signals = 0
+
+        # Phase 23: Diagnostic logger for tuning analysis
+        self.diag_logger = get_diagnostic_logger()
+        self.last_prices = {}  # For price change tracking
 
         print(f"EnsembleOrchestrator: Initialized with {len(self.strategies)} strategies")
 
@@ -1232,23 +1260,38 @@ class EnsembleOrchestrator:
         return corr if not np.isnan(corr) else 0.8
 
     def _determine_regime(self, features: dict) -> str:
-        """Determine current market regime."""
-        atr_avg = (features['atr_xrp'] + features['atr_btc']) / 2
+        """
+        Determine current market regime.
+
+        Phase 23 Fix: Scale hourly ATR to daily equivalent for proper regime detection.
+        Hourly ATR * sqrt(24) ≈ Daily ATR
+        - 1% hourly ATR = ~4.9% daily (TRENDING, not chop!)
+        - 0.5% hourly ATR = ~2.4% daily (low vol, chop-ish)
+        """
+        hourly_atr_avg = (features['atr_xrp'] + features['atr_btc']) / 2
+        # Scale to daily equivalent
+        daily_atr_equiv = hourly_atr_avg * np.sqrt(24)  # ~4.9x multiplier
+
         correlation = features['correlation']
         xrp_rsi = features['xrp_rsi']
         vwap_dev = abs(features['vwap_dev_xrp'])
 
-        # High fear: High ATR + extreme RSI
-        if atr_avg > 0.04 and (xrp_rsi > 70 or xrp_rsi < 30):
+        # High fear: Daily ATR >6% + extreme RSI
+        if daily_atr_equiv > 0.06 and (xrp_rsi > 70 or xrp_rsi < 30):
             return 'fear'
 
         # Divergence: Low correlation between XRP and BTC
         if correlation < 0.5:
             return 'divergence'
 
-        # Chop: Low ATR + price near VWAP
-        if atr_avg < 0.025 and vwap_dev < 0.01:
+        # Chop: Daily ATR <2% + price near VWAP
+        # (hourly ~0.4%)
+        if daily_atr_equiv < 0.02 and vwap_dev < 0.01:
             return 'chop'
+
+        # Phase 23: Trending regime for moderate-high vol without fear
+        if daily_atr_equiv > 0.03:  # >3% daily vol = trending
+            return 'trending'
 
         return 'neutral'
 
@@ -1386,20 +1429,29 @@ class EnsembleOrchestrator:
         elif regime == 'fear':
             # Defensive + scalper for quick exits/captures
             self.weights = {'mean_reversion': 0.08, 'pair_trading': 0.05, 'defensive': 0.45, 'ma_trend': 0.12, 'leadlag': 0.10, 'scalper': scalper_boost}
-        else:  # neutral - trending conditions favor MA + leadlag + scalper on vol
+        elif regime == 'trending':
+            # Phase 23: New trending regime - MA trend + leadlag dominate
+            # This triggers when daily ATR >3% but not extreme fear
+            self.weights = {'mean_reversion': 0.08, 'pair_trading': 0.08, 'defensive': 0.10, 'ma_trend': 0.35, 'leadlag': 0.25, 'scalper': 0.14}
+        else:  # neutral - moderate conditions
             scalper_wt = scalper_boost if self.current_volatility > 0.03 else 0.15
             self.weights = {'mean_reversion': 0.18, 'pair_trading': 0.12, 'defensive': 0.15, 'ma_trend': 0.25, 'leadlag': 0.15, 'scalper': scalper_wt}
 
     def _weighted_vote(self, signals: dict) -> dict:
-        """Combine strategy signals using weighted voting with BTC momentum bias."""
+        """
+        Combine strategy signals using weighted voting with BTC momentum bias.
+
+        Phase 23 Fix: Favor action signals over hold - a single confident action signal
+        should beat multiple low-confidence holds.
+        """
         # Score each possible action
         action_scores = {}
 
-        # Phase 17: BTC momentum bias - slight overweight in neutral/grind-up regimes
+        # Phase 17: BTC momentum bias - slight overweight in neutral/trending regimes
         btc_rsi = self.current_rsi.get('BTC', 50)
         btc_momentum_bias = 0.0
-        if self.current_regime == 'neutral' and btc_rsi > 55:
-            btc_momentum_bias = 0.1  # 10% boost to buy actions when BTC strong
+        if self.current_regime in ['neutral', 'trending'] and btc_rsi > 55:
+            btc_momentum_bias = 0.15  # 15% boost to buy actions when BTC strong
         elif self.current_regime == 'neutral' and btc_rsi < 45:
             btc_momentum_bias = -0.05  # Slight penalty when BTC weak
 
@@ -1408,8 +1460,22 @@ class EnsembleOrchestrator:
             action = signal.get('action', 'hold')
             confidence = signal.get('confidence', 0)
 
-            # Weight contribution = strategy weight * signal confidence
-            contribution = weight * confidence
+            # Phase 23 Fix: Penalize hold signals to favor action
+            # Hold with low confidence (< 0.1) gets 0 contribution
+            # This prevents "hold spam" from blocking legitimate signals
+            if action == 'hold':
+                if confidence < 0.1:
+                    contribution = 0  # Ignore low-confidence holds
+                else:
+                    contribution = weight * confidence * 0.5  # Halve hold contribution
+            else:
+                # Action signals get full weight + minimum floor
+                contribution = weight * confidence
+                # Phase 24: Boosted minimum floor for action signals - ensure confident signals pass
+                if confidence > 0.5:
+                    contribution = max(contribution, confidence * 0.3)  # 30% of raw confidence as floor
+                elif confidence > 0:
+                    contribution = max(contribution, 0.10)  # Minimum 10% contribution (up from 5%)
 
             # Phase 17: Apply BTC momentum bias to buy signals
             if action == 'buy' and btc_momentum_bias != 0:
@@ -1429,6 +1495,15 @@ class EnsembleOrchestrator:
         # Find winning action
         if not action_scores:
             return {'action': 'hold', 'confidence': 0, 'reason': 'No signals'}
+
+        # Phase 23 Fix: If any action signal exists with confidence > 0, prefer it over hold
+        action_only_scores = {k: v for k, v in action_scores.items() if k != 'hold'}
+        if action_only_scores:
+            best_action_score = max(v['score'] for v in action_only_scores.values())
+            hold_score = action_scores.get('hold', {}).get('score', 0)
+            # If best action has any score and hold doesn't have strong conviction, prefer action
+            if best_action_score > 0 and (best_action_score >= hold_score * 0.5 or hold_score < 0.1):
+                action_scores = action_only_scores  # Remove hold from consideration
 
         best_action = max(action_scores.keys(), key=lambda a: action_scores[a]['score'])
         best_info = action_scores[best_action]
@@ -1464,6 +1539,11 @@ class EnsembleOrchestrator:
         """
         Make ensemble trading decision.
 
+        Phase 22: EMA-9 override check FIRST - bypass RL confidence gate if:
+        1. daily_atr > 1.8% (high volatility)
+        2. EMA-9 crossover signal exists
+
+        Standard flow:
         1. Calculate regime features
         2. Get signals from all strategies
         3. Update weights via RL (or rule-based)
@@ -1475,6 +1555,37 @@ class EnsembleOrchestrator:
         # Calculate regime features
         features = self._calculate_regime_features()
         self.current_regime = self._determine_regime(features)
+
+        # Phase 23: Log market state
+        current_prices = {}
+        for symbol in ['XRP/USDT', 'BTC/USDT']:
+            if symbol in self.data and len(self.data[symbol]) > 0:
+                current_prices[symbol] = float(self.data[symbol]['close'].iloc[-1])
+
+        self.diag_logger.log_market_state(
+            prices=current_prices,
+            features=features,
+            regime=self.current_regime,
+            rsi=self.current_rsi.copy(),
+            volatility=self.current_volatility
+        )
+
+        # Phase 22: Check EMA-9 override FIRST (privileged bypass)
+        if self.ema9_override_enabled:
+            try:
+                ema9_signal = self.ema9_scalper.generate_signals(self.data)
+
+                # If override is active and we have a signal, bypass RL entirely
+                if ema9_signal.get('override', False) and ema9_signal.get('action', 'hold') != 'hold':
+                    ema9_signal['privileged_override'] = True
+                    ema9_signal['regime'] = self.current_regime
+                    ema9_signal['weights'] = self.weights.copy()
+                    self.total_signals += 1
+                    print(f"EMA-9 OVERRIDE: {ema9_signal['action'].upper()} {ema9_signal.get('symbol', 'N/A')} "
+                          f"(ATR: {ema9_signal.get('atr_pct', 0):.2f}%, conf: {ema9_signal.get('confidence', 0):.2f})")
+                    return ema9_signal
+            except Exception as e:
+                print(f"EnsembleOrchestrator: EMA-9 override check error - {e}")
 
         # Get signals from all strategies
         signals = {}
@@ -1490,6 +1601,9 @@ class EnsembleOrchestrator:
         pt_indicators = pt_signal.get('indicators', {})
         features['zscore_pair'] = pt_indicators.get('zscore', 0)
 
+        # Phase 23: Log strategy signals
+        self.diag_logger.log_strategy_signals(signals, self.weights)
+
         # Build RL observation and update weights
         obs = self._get_ensemble_observation(signals, features)
         self._update_weights_rl(obs)
@@ -1497,13 +1611,61 @@ class EnsembleOrchestrator:
         # Weighted vote
         final_signal = self._weighted_vote(signals)
 
+        # Phase 23: Momentum-based initial position logic
+        # If portfolio is 100% USDT with no positions and we're in a trending market,
+        # override hold with a small seed buy to get into the market
+        if final_signal.get('action') == 'hold':
+            btc_rsi = self.current_rsi.get('BTC', 50)
+            xrp_rsi = self.current_rsi.get('XRP', 50)
+
+            # Check if we have no positions (100% USDT)
+            usdt_balance = self.portfolio.balances.get('USDT', 0)
+            xrp_balance = self.portfolio.balances.get('XRP', 0)
+            btc_balance = self.portfolio.balances.get('BTC', 0)
+            has_no_positions = (xrp_balance < 1 and btc_balance < 0.0001 and usdt_balance > 100)
+
+            # Momentum seed conditions (Phase 24: relaxed):
+            # - No positions
+            # - Trending or neutral regime
+            # - BTC RSI > 48 (even slight bullish tilt, lowered from 55)
+            # - XRP RSI between 35-75 (wider range, was 40-70)
+            if (has_no_positions and
+                self.current_regime in ['trending', 'neutral'] and
+                btc_rsi > 48 and
+                35 < xrp_rsi < 75):
+
+                print(f"MOMENTUM SEED: No positions, regime={self.current_regime}, BTC RSI={btc_rsi:.1f}, XRP RSI={xrp_rsi:.1f}")
+                final_signal = {
+                    'action': 'buy',
+                    'symbol': 'XRP/USDT',
+                    'size': 0.05,  # Small 5% seed position
+                    'leverage': 3,  # Conservative leverage
+                    'confidence': 0.5,  # Medium confidence
+                    'reason': f'Momentum seed: {self.current_regime} regime, BTC RSI={btc_rsi:.1f}',
+                    'strategy': 'momentum_seed',
+                    'contributing_strategies': ['momentum_seed'],
+                    'weights': self.weights.copy(),
+                    'regime': self.current_regime,
+                    'momentum_seed': True
+                }
+
         self.total_signals += 1
+
+        # Phase 23: Log final decision
+        portfolio_state = {
+            'USDT': self.portfolio.balances.get('USDT', 0),
+            'XRP': self.portfolio.balances.get('XRP', 0),
+            'BTC': self.portfolio.balances.get('BTC', 0)
+        }
+        self.diag_logger.log_decision(final_signal, self.current_regime, portfolio_state)
 
         return final_signal
 
     def execute(self, signal: dict, prices: dict) -> dict:
         """
         Execute ensemble trading signal.
+
+        Phase 22: EMA-9 override signals BYPASS confidence gate entirely.
 
         Args:
             signal: Signal from decide()
@@ -1526,12 +1688,49 @@ class EnsembleOrchestrator:
         asset = symbol.split('/')[0] if '/' in symbol else symbol
         usdt_available = self.portfolio.balances.get('USDT', 0)
 
-        # Phase 17: Regime-based confidence gate
-        # Lower threshold in chop regime for more Mean Reversion entries
-        confidence_threshold = 0.45 if self.current_regime == 'chop' else 0.5
-        if signal.get('confidence', 0) < confidence_threshold and action != 'hold':
-            result['reason'] = f"Low confidence ({signal.get('confidence', 0):.2f} < {confidence_threshold})"
-            return result
+        # Phase 22: EMA-9 override signals BYPASS confidence gate
+        is_privileged = signal.get('privileged_override', False)
+
+        # Phase 22b: Calculate BTC ATR for vol-based gate adjustment
+        btc_atr_pct = 0.0
+        if 'BTC/USDT' in self.data:
+            btc_atr_pct = self._calculate_atr_pct(self.data['BTC/USDT'])
+
+        # Phase 22b: Lead-Lag boost on BTC vol (ATR >1.2%)
+        is_leadlag_btc_follow = (
+            signal.get('strategy') == 'leadlag' or
+            'leadlag' in signal.get('contributing_strategies', [])
+        )
+        if is_leadlag_btc_follow and btc_atr_pct > 0.012 and action == 'buy':
+            # Boost confidence and leverage for BTC momentum follow
+            original_conf = signal.get('confidence', 0)
+            signal['confidence'] = min(original_conf * 1.5, 0.95)
+            signal['leverage'] = max(signal.get('leverage', 1), 4)
+            result['leadlag_btc_boost'] = True
+            print(f"LEAD-LAG BOOST: BTC ATR {btc_atr_pct*100:.2f}% > 1.2%, conf {original_conf:.2f} -> {signal['confidence']:.2f}, lev -> 4x")
+
+        # Phase 24: Dynamic confidence gate based on regime + BTC vol
+        # Significantly lowered thresholds to allow more trading activity
+        if not is_privileged:
+            if self.current_regime == 'chop':
+                confidence_threshold = 0.30  # Lowered from 0.45
+            elif self.current_regime == 'neutral' and btc_atr_pct > 0.012:
+                confidence_threshold = 0.20  # Lowered from 0.35 for BTC momentum follows
+            elif self.current_regime == 'trending':
+                confidence_threshold = 0.15  # Very low for trending - trust the signals
+            else:
+                confidence_threshold = 0.25  # Lowered from 0.40
+
+            if signal.get('confidence', 0) < confidence_threshold and action != 'hold':
+                result['reason'] = f"Low confidence ({signal.get('confidence', 0):.2f} < {confidence_threshold})"
+                result['btc_atr'] = btc_atr_pct
+                result['confidence_threshold'] = confidence_threshold
+                # Phase 23: Log rejection
+                self.diag_logger.log_execution(signal, False, result['reason'], result)
+                return result
+        else:
+            result['privileged_override'] = True
+            print(f"PRIVILEGED OVERRIDE: Bypassing confidence gate for EMA-9 signal")
 
         if action == 'hold':
             result['executed'] = True
@@ -1615,6 +1814,11 @@ class EnsembleOrchestrator:
             result['executed'] = True
             result['closed'] = True
 
+        # Phase 23: Log execution result
+        executed = result.get('executed', False)
+        reason = result.get('reason', action if executed else 'Unknown')
+        self.diag_logger.log_execution(signal, executed, reason, result)
+
         return result
 
     def get_status(self) -> dict:
@@ -1630,6 +1834,8 @@ class EnsembleOrchestrator:
             'total_signals': self.total_signals,
             'executed_signals': self.executed_signals,
             'strategies': {name: s.get_status() for name, s in self.strategies.items()},
+            'ema9_scalper': self.ema9_scalper.get_status(),  # Phase 22
+            'ema9_override_enabled': self.ema9_override_enabled,  # Phase 22
             'kraken': self.kraken.get_status(),
             'bitrue': self.bitrue.get_status()
         }

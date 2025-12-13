@@ -634,11 +634,25 @@ class EnsembleEnv(gym.Env):
             if scalp_signal.get('action', 'hold') != 'hold':
                 scalp_bonus = 1.5  # Reward scalper activation during high vol
 
+        # Phase 22b: Lead-Lag low-confidence wins bonus
+        # Reward accurate BTC momentum follows even with low initial confidence
+        leadlag_bonus = 0.0
+        leadlag_signal = self.strategy_signals.get('leadlag', {})
+        leadlag_conf = leadlag_signal.get('confidence', 0)
+        if (leadlag_signal.get('action', 'hold') == 'buy' and
+            leadlag_conf < 0.5 and  # Low initial confidence
+            trade_pnl > 0 and  # But profitable
+            self.weights.get('leadlag', 0) > 0.15):  # LeadLag was active
+            leadlag_bonus = 1.5 * trade_pnl  # 1.5x multiplier for accurate low-conf calls
+            # Also boost leadlag weight reward
+            if self.current_regime == 'neutral':
+                leadlag_bonus += 0.5  # Extra bonus for neutral regime BTC follows
+
         # Yield bonus
         yield_bonus = yield_earned * 2.0  # 2x weight for yield
 
         # Combined reward
-        reward = (base_reward * 10 + alignment_score * 3 + regime_bonus + yield_bonus + trade_pnl * 5 + scalp_bonus)
+        reward = (base_reward * 10 + alignment_score * 3 + regime_bonus + yield_bonus + trade_pnl * 5 + scalp_bonus + leadlag_bonus)
 
         done = self.current_step >= self.max_steps
         truncated = False

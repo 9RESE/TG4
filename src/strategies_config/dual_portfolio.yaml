@@ -1,0 +1,930 @@
+# Dual Portfolio Strategy Configuration
+# Split: 70% USDT Accumulation / 30% Crypto Accumulation
+# Starting Balance: 10,000 USDT
+#
+# USDT Portfolio (70% = $7,000): Quick trades, tight exits, profit in USDT
+# Crypto Portfolio (30% = $3,000): Long-term accumulation of BTC/XRP
+#
+# Phase 31: Per-strategy risk profiles
+# Phase 32: Per-strategy isolated portfolios ($1000 each for performance tracking)
+# Each strategy has its own min_confidence threshold based on category:
+#   - arbitrage: 0.15 (fast execution)
+#   - scalping: 0.35 (quick trades)
+#   - mean_reversion: 0.40 (counter-trend)
+#   - trend_following: 0.50 (need conviction)
+#   - accumulation: 0.10 (time-based, low threshold)
+#   - pair_trading: 0.30 (market neutral)
+#   - grid: 0.20 (systematic)
+
+global:
+  paper_trading: true
+  starting_balance:
+    USDT: 10000.0
+    XRP: 0.0
+    BTC: 0.0
+  fee_rate: 0.001  # 0.1%
+  max_drawdown: 0.12  # 12% total portfolio
+
+  # Portfolio allocation
+  portfolio_mode: dual
+  usdt_portfolio_pct: 0.70    # 70% for USDT accumulation ($7,000)
+  crypto_portfolio_pct: 0.30  # 30% for crypto accumulation ($3,000)
+
+  # Risk management
+  risk_per_trade: 0.08  # 8% of allocated portfolio per trade
+  max_concurrent_positions: 6
+
+  # USDT portfolio specific
+  usdt_portfolio:
+    max_hold_hours: 24          # Force close after 24h
+    default_take_profit: 0.02   # 2% profit target
+    default_stop_loss: 0.015    # 1.5% stop loss
+    force_usdt_settlement: true # Always close to USDT
+
+  # Crypto portfolio specific
+  crypto_portfolio:
+    allow_indefinite_hold: true
+    rebalance_threshold: 0.10   # Rebalance when 10% off target
+
+  # Phase 32: Per-strategy isolated portfolios
+  # Each strategy gets its own $1000 starting balance for independent tracking
+  use_isolated_portfolios: true
+  per_strategy_capital: 1000.0  # $1000 per strategy
+
+# =============================================================================
+# USDT ACCUMULATION STRATEGIES (70% of portfolio = $7,000)
+# Goal: Generate USDT profits through quick trades
+# =============================================================================
+
+strategies:
+
+  # ===== ARBITRAGE - Best for USDT (market neutral, immediate profit) =====
+
+  funding_rate_arb:
+    enabled: true
+    category: arbitrage           # Phase 31: Category for risk profile
+    portfolio: usdt
+    allocation_pct: 0.20  # 20% of USDT portfolio ($1,400)
+    description: "Funding rate cash-and-carry - 19.26% APY, settles to USDT"
+
+    # Phase 31: Risk profile (arbitrage category defaults)
+    min_confidence: 0.20          # Low threshold - opportunities are fleeting
+    stop_loss_pct: 0.01           # 1% stop
+    take_profit_pct: 0.02         # 2% target
+    max_hold_hours: 9             # Exit after funding period
+
+    min_funding_rate: 0.01
+    max_funding_rate: 0.10
+    negative_funding_threshold: -0.01
+
+    base_size_pct: 0.15
+    max_positions: 2
+    leverage: 2
+
+    # USDT settlement
+    settle_to_usdt: true        # Close all legs after funding
+    exit_after_funding_minutes: 15
+
+    funding_interval_hours: 8
+    entry_before_funding_minutes: 30
+
+    trading_fee_pct: 0.001
+    slippage_pct: 0.001
+
+    symbols:
+      - "BTC/USDT"
+      - "XRP/USDT"
+
+  triangular_arb:
+    enabled: true
+    category: arbitrage           # Phase 31: Category for risk profile
+    portfolio: usdt
+    allocation_pct: 0.10  # 10% of USDT portfolio ($700)
+    description: "Triangular arb ending in USDT - pure profit capture"
+
+    # Phase 31: Risk profile (arbitrage - instant execution)
+    min_confidence: 0.15          # Very low - arb must execute fast
+    stop_loss_pct: 0.005          # 0.5% stop (arb should be instant)
+    take_profit_pct: 0.003        # 0.3% target
+    max_hold_hours: 0.1           # 6 minutes max
+
+    # Modified paths to END in USDT
+    trios:
+      - path: ['USDT', 'BTC', 'XRP']
+        pairs: ['BTC/USDT', 'XRP/BTC', 'XRP/USDT']
+        start_asset: 'USDT'
+        end_asset: 'USDT'
+      - path: ['USDT', 'XRP', 'BTC']
+        pairs: ['XRP/USDT', 'XRP/BTC', 'BTC/USDT']
+        start_asset: 'USDT'
+        end_asset: 'USDT'
+
+    min_profit_pct: 0.08        # 0.08% min profit (lower for more opportunities)
+    fee_per_trade: 0.001
+    slippage_buffer: 0.001
+
+    trade_size_pct: 0.05
+    max_trade_size_usd: 350
+
+    cooldown_seconds: 10
+    max_opportunities_per_hour: 30
+
+  # ===== SCALPING - Quick in/out, profit in USDT =====
+
+  scalping_1m5m:
+    enabled: true
+    category: scalping            # Phase 31: Category for risk profile
+    portfolio: usdt
+    allocation_pct: 0.15  # 15% of USDT portfolio ($1,050)
+    description: "Ultra-fast scalping with tight USDT exits"
+
+    # Phase 31: Risk profile (scalping category)
+    min_confidence: 0.35          # Medium threshold for quick trades
+    stop_loss_pct: 0.003          # 0.3% stop
+    take_profit_pct: 0.004        # 0.4% target
+    max_hold_hours: 1             # Force exit after 1 hour
+
+    primary_timeframe: "5m"
+
+    sma_fast: 5
+    sma_slow: 12
+    ema_period: 200
+    use_ema_filter: true
+
+    use_prev_day_levels: true
+    level_tolerance: 0.002
+
+    use_choch: true
+    choch_lookback: 10
+
+    # Tight exits for USDT accumulation
+    scalp_target_pct: 0.004     # 0.4% target (tight)
+    scalp_stop_pct: 0.003       # 0.3% stop
+    max_hold_minutes: 60        # Force exit after 1 hour
+
+    max_positions: 2
+    base_size_pct: 0.05
+    cooldown_seconds: 60
+    max_leverage: 3
+
+    symbols:
+      - "BTC/USDT"
+      - "XRP/USDT"
+
+  intraday_scalper:
+    enabled: true
+    category: scalping            # Phase 31: Category for risk profile
+    portfolio: usdt
+    allocation_pct: 0.10  # 10% of USDT portfolio ($700)
+    description: "BB squeeze scalper with USDT settlement"
+
+    # Phase 31: Risk profile (scalping category)
+    min_confidence: 0.35          # Medium threshold
+    stop_loss_pct: 0.003          # 0.3% stop
+    take_profit_pct: 0.006        # 0.6% target
+    max_hold_hours: 0.5           # 30 minutes max
+
+    symbols:
+      - "BTC/USDT"
+      - "XRP/USDT"
+
+    bb_period: 20
+    bb_std: 2.0
+    rsi_period: 14
+    ema_period: 21
+    adx_period: 14
+    atr_period: 14
+
+    rsi_oversold: 25
+    rsi_overbought: 75
+
+    vol_threshold: 0.15
+    vol_threshold_high: 1.0
+
+    use_adx_filter: true
+    adx_max: 25
+
+    use_volume_filter: true
+    volume_mult: 1.5
+    volume_window: 20
+
+    # Tight USDT-focused exits
+    stop_loss_pct: 0.003
+    take_profit_pct: 0.006
+    max_hold_minutes: 30        # Force exit after 30 min
+
+    max_leverage: 3
+    base_size_pct: 0.05
+    cooldown_bars: 5
+
+  ema9_scalper:
+    enabled: true
+    category: scalping
+    portfolio: usdt
+    allocation_pct: 0.08
+    description: "EMA-9 crossover scalper optimized for 1m charts"
+
+    # Phase 31: Risk profile (scalping category)
+    min_confidence: 0.35
+    stop_loss_pct: 0.004
+    take_profit_pct: 0.006
+    max_hold_hours: 0.5
+
+    symbols:
+      - "BTC/USDT"
+      - "XRP/USDT"
+
+    # EMA parameters
+    ema_fast: 9
+    ema_slow: 21
+    rsi_period: 14
+    atr_period: 14
+    adx_period: 14
+
+    # Thresholds
+    rsi_buy_max: 65
+    rsi_sell_min: 35
+    atr_threshold: 0.008
+    atr_threshold_high: 0.05
+    adx_max: 30
+
+    # Position management
+    max_positions: 2
+    base_size_pct: 0.05
+    cooldown_bars: 3
+    max_leverage: 3
+
+  # ===== MEAN REVERSION - Natural round-trip to USDT =====
+
+  mean_reversion_short:
+    enabled: true
+    category: mean_reversion      # Phase 31: Category for risk profile
+    portfolio: usdt
+    allocation_pct: 0.15  # 15% of USDT portfolio ($1,050)
+    description: "Short overbought conditions - profits naturally in USDT"
+
+    # Phase 31: Risk profile (mean reversion - counter-trend)
+    min_confidence: 0.40          # Higher threshold for counter-trend
+    stop_loss_pct: 0.015          # 1.5% stop
+    take_profit_pct: 0.02         # 2% target
+    max_hold_hours: 12            # Force cover after 12h
+
+    symbol: "XRP/USDT"
+
+    vwap_period: 20
+    deviation_threshold: 0.015  # 1.5% above VWAP
+    band_std_mult: 2.0
+
+    rsi_period: 14
+    rsi_overbought: 62          # Short when RSI > 62 + above VWAP
+    rsi_oversold: 38            # Cover when RSI < 38
+
+    # USDT profit targets
+    take_profit_pct: 0.02       # 2% profit target
+    stop_loss_pct: 0.015        # 1.5% stop
+    max_hold_hours: 12          # Force cover after 12h
+
+    max_leverage: 4
+    base_size_pct: 0.08
+
+  wavetrend:
+    enabled: true
+    category: mean_reversion      # Phase 31: Category for risk profile
+    portfolio: usdt
+    allocation_pct: 0.10  # 10% of USDT portfolio ($700)
+    description: "WaveTrend oscillator with tight USDT exits"
+
+    # Phase 31: Risk profile (mean reversion)
+    min_confidence: 0.40          # Higher threshold for counter-trend
+    stop_loss_pct: 0.012          # 1.2% stop
+    take_profit_pct: 0.018        # 1.8% target
+    max_hold_hours: 8             # Force exit after 8h
+
+    channel_length: 10
+    average_length: 21
+    ma_length: 4
+
+    overbought: 60
+    oversold: -60
+    extreme_overbought: 80
+    extreme_oversold: -80
+
+    require_zone_exit: true
+    use_divergence: true
+    divergence_lookback: 14
+
+    # USDT accumulation exits
+    take_profit_pct: 0.018      # 1.8% target
+    stop_loss_pct: 0.012        # 1.2% stop
+    max_hold_hours: 8           # Force exit after 8h
+
+    base_size_pct: 0.08
+    max_leverage: 4
+
+    symbols:
+      - "BTC/USDT"
+      - "XRP/USDT"
+
+  volume_profile:
+    enabled: true
+    category: mean_reversion      # Phase 31: Category for risk profile
+    portfolio: usdt
+    allocation_pct: 0.10  # 10% of USDT portfolio ($700)
+    description: "POC/VA mean reversion with USDT targets"
+
+    # Phase 31: Risk profile (mean reversion)
+    min_confidence: 0.40          # Counter-trend needs conviction
+    stop_loss_pct: 0.01           # 1% stop
+    take_profit_pct: 0.015        # 1.5% target
+    max_hold_hours: 16            # Force exit after 16h
+
+    lookback_bars: 100
+    num_bins: 50
+    value_area_pct: 0.70
+
+    poc_tolerance: 0.005
+    va_tolerance: 0.01
+
+    use_momentum_filter: true
+    momentum_period: 14
+
+    # USDT profit targets
+    take_profit_pct: 0.015      # 1.5% (to POC)
+    stop_loss_pct: 0.01         # 1% stop
+    max_hold_hours: 16          # Force exit after 16h
+
+    base_size_pct: 0.08
+    max_leverage: 3
+
+    symbols:
+      - "BTC/USDT"
+      - "XRP/USDT"
+
+  # ===== BREAKOUT with exits =====
+
+  volatility_breakout:
+    enabled: true
+    category: trend_following     # Phase 31: Category for risk profile (breakout = trend)
+    portfolio: usdt
+    allocation_pct: 0.10  # 10% of USDT portfolio ($700)
+    description: "Breakout scalping with quick USDT exits"
+
+    # Phase 31: Risk profile (trend/breakout - higher threshold)
+    min_confidence: 0.45          # Need conviction for breakouts
+    stop_loss_pct: 0.015          # 1.5% stop
+    take_profit_pct: 0.025        # 2.5% target
+    max_hold_hours: 6             # Breakouts are quick
+
+    donchian_period: 20
+    donchian_exit_period: 10
+
+    keltner_period: 20
+    keltner_atr_mult: 2.0
+
+    atr_period: 14
+    atr_breakout_mult: 0.5
+    atr_stop_mult: 1.5
+
+    require_dual_confirmation: true
+
+    adjust_for_volatility: true
+    low_vol_threshold: 1.0
+    high_vol_threshold: 3.0
+
+    # USDT profit targets
+    take_profit_pct: 0.025      # 2.5% target
+    stop_loss_pct: 0.015        # 1.5% stop
+    max_hold_hours: 6           # Force exit after 6h (breakouts are quick)
+
+    base_size_pct: 0.08
+    max_leverage: 4
+
+    symbols:
+      - "BTC/USDT"
+      - "XRP/USDT"
+
+# =============================================================================
+# CRYPTO ACCUMULATION STRATEGIES (30% of portfolio = $3,000)
+# Goal: Steadily accumulate BTC and XRP over time
+# =============================================================================
+
+  # ===== DCA - Core accumulation =====
+
+  enhanced_dca:
+    enabled: true
+    category: accumulation        # Phase 31: Category for risk profile
+    portfolio: crypto
+    allocation_pct: 0.50  # 50% of crypto portfolio ($1,500)
+    description: "Smart DCA to accumulate BTC/XRP during dips"
+
+    # Phase 31: Risk profile (accumulation - very low threshold, wide stops)
+    min_confidence: 0.10          # Very low - DCA is time-based
+    stop_loss_pct: 0.10           # 10% stop (wide for accumulation)
+    take_profit_pct: 0.15         # 15% target
+    max_hold_hours: 720           # 30 days - long term
+
+    base_amount_usd: 30         # $30 per interval (from $1,500 allocation)
+    dca_interval_hours: 24      # Daily
+
+    ma_period: 200
+    short_ma_period: 50
+
+    # Buy MORE when cheap (accumulation focus)
+    multipliers:
+      -0.30: 3.5                # 30% below MA = 3.5x buy
+      -0.20: 2.5
+      -0.10: 1.8
+      0.00: 1.0
+      0.10: 0.6
+      0.20: 0.3
+      0.30: 0.15                # 30% above MA = 0.15x buy
+
+    rsi_period: 14
+    rsi_extreme_oversold: 25
+    rsi_extreme_bonus: 0.6      # +60% on extreme oversold
+
+    # Allocation between BTC and XRP
+    allocations:
+      'BTC/USDT': 0.55          # 55% to BTC ($825)
+      'XRP/USDT': 0.45          # 45% to XRP ($675)
+
+    # NO exit targets - this is for accumulation
+    hold_indefinitely: true
+
+    symbols:
+      - "BTC/USDT"
+      - "XRP/USDT"
+
+  # ===== Dip Buying - Accumulate during fear =====
+
+  dip_detector:
+    enabled: true
+    category: accumulation        # Phase 31: Category for risk profile
+    portfolio: crypto
+    allocation_pct: 0.30  # 30% of crypto portfolio ($900)
+    description: "Buy dips for long-term accumulation"
+
+    # Phase 31: Risk profile (accumulation with trailing stop)
+    min_confidence: 0.25          # Low threshold - buy the dip
+    stop_loss_pct: 0.08           # 8% stop (wide for accumulation)
+    take_profit_pct: 0.15         # 15% target
+    max_hold_hours: 168           # 1 week
+    use_trailing_stop: true
+    trailing_activation_pct: 0.05  # Activate after 5% profit
+    trailing_distance_pct: 0.03    # Trail 3% from peak
+
+    symbols:
+      - "XRP/USDT"
+      - "BTC/USDT"
+    btc_symbol: "BTC/USDT"
+
+    rsi_period: 14
+    rsi_oversold: 35
+    rsi_overbought: 65
+    rsi_extreme_oversold: 25
+
+    use_divergence: true
+    divergence_lookback: 14
+
+    volume_lookback: 20
+    volume_surge_threshold: 1.5
+    volume_capitulation_threshold: 2.5
+
+    drawdown_lookback: 20
+    drawdown_threshold: -0.05
+    drawdown_strong: -0.08
+
+    atr_period: 14
+    max_atr_for_leverage: 0.08
+    min_atr_for_trade: 0.005
+
+    use_btc_filter: true
+    btc_stable_threshold: 0.02
+
+    use_mtf: true
+    mtf_rsi_threshold: 45
+
+    cooldown_minutes: 60
+    max_positions: 2
+
+    # Accumulation mode - hold for potential gains, but have safety stops
+    stop_loss_pct: 0.08         # 8% stop (wider for accumulation)
+    take_profit_pct: 0.15       # 15% target (or hold longer)
+    use_trailing_stop: true
+    trailing_stop_pct: 0.05     # 5% trailing stop to lock in gains
+
+    position_size_pct: 0.10
+    max_leverage: 3             # Lower leverage for accumulation
+
+  # ===== Defensive Yield - Park USDT, deploy on dips =====
+
+  defensive_yield:
+    enabled: true
+    category: accumulation        # Phase 31: Category for risk profile
+    portfolio: crypto
+    allocation_pct: 0.20  # 20% of crypto portfolio ($600)
+    description: "Earn yield on USDT, buy dips for accumulation"
+
+    # Phase 31: Risk profile (defensive/accumulation)
+    min_confidence: 0.30          # Low threshold - defensive mode
+    stop_loss_pct: 0.05           # 5% stop
+    take_profit_pct: 0.08         # 8% target
+    max_hold_hours: 168           # 1 week
+
+    max_leverage: 5
+
+    modes:
+      defensive_atr: 0.04       # ATR > 4% = park USDT
+      offensive_atr: 0.02       # ATR < 2% = deploy
+
+    yield:
+      usdt_apy: 0.065           # 6.5% APY on parked USDT
+
+    # When deploying, accumulate crypto
+    accumulation_mode: true
+    hold_crypto_positions: true # Don't auto-exit to USDT
+
+# =============================================================================
+# TREND FOLLOWING STRATEGIES (USDT Portfolio)
+# =============================================================================
+
+  ma_trend_follow:
+    enabled: true
+    category: trend_following
+    portfolio: usdt
+    allocation_pct: 0.08
+    description: "SMA-9 trend following with breakout detection"
+
+    # Phase 31: Risk profile
+    min_confidence: 0.50
+    stop_loss_pct: 0.02
+    take_profit_pct: 0.04
+    max_hold_hours: 48
+    use_trailing_stop: true
+    trailing_activation_pct: 0.02
+    trailing_distance_pct: 0.015
+
+    ma_period: 9
+    confirmation_candles: 1
+    max_leverage: 5
+
+    symbols:
+      - "BTC/USDT"
+      - "XRP/USDT"
+
+  supertrend:
+    enabled: true
+    category: trend_following
+    portfolio: usdt
+    allocation_pct: 0.08
+    description: "Supertrend indicator for trending markets"
+
+    # Phase 31: Risk profile
+    min_confidence: 0.50
+    stop_loss_pct: 0.02
+    take_profit_pct: 0.04
+    max_hold_hours: 72
+    use_trailing_stop: true
+
+    atr_period: 10
+    atr_multiplier: 3.0
+    use_double_supertrend: true
+    fast_period: 10
+    slow_period: 20
+    max_leverage: 4
+
+    symbols:
+      - "BTC/USDT"
+      - "XRP/USDT"
+
+  ichimoku_cloud:
+    enabled: true
+    category: trend_following
+    portfolio: usdt
+    allocation_pct: 0.06
+    description: "Ichimoku Cloud for strong trend confirmation"
+
+    # Phase 31: Risk profile
+    min_confidence: 0.55
+    stop_loss_pct: 0.025
+    take_profit_pct: 0.05
+    max_hold_hours: 96
+    use_trailing_stop: true
+
+    tenkan_period: 9
+    kijun_period: 26
+    senkou_span_b_period: 52
+    chikou_period: 26
+    use_kijun_stop: true
+    max_leverage: 4
+
+    symbols:
+      - "BTC/USDT"
+      - "XRP/USDT"
+
+  multi_indicator_confluence:
+    enabled: true
+    category: trend_following
+    portfolio: usdt
+    allocation_pct: 0.06
+    description: "Multi-indicator confluence for high-confidence entries"
+
+    # Phase 31: Risk profile
+    min_confidence: 0.55
+    stop_loss_pct: 0.02
+    take_profit_pct: 0.04
+    max_hold_hours: 24
+
+    min_indicators_agree: 3
+    use_rsi: true
+    use_macd: true
+    use_bb: true
+    use_ema: true
+    max_leverage: 4
+
+    symbols:
+      - "BTC/USDT"
+      - "XRP/USDT"
+
+# =============================================================================
+# PAIR TRADING STRATEGIES (USDT Portfolio)
+# =============================================================================
+
+  xrp_btc_pair_trading:
+    enabled: true
+    category: pair_trading
+    portfolio: usdt
+    allocation_pct: 0.08
+    description: "XRP/BTC cointegration stat arb"
+
+    # Phase 31: Risk profile
+    min_confidence: 0.35
+    stop_loss_pct: 0.02
+    take_profit_pct: 0.03
+    max_hold_hours: 48
+
+    xrp_symbol: "XRP/USDT"
+    btc_symbol: "BTC/USDT"
+    lookback: 336
+    entry_z: 1.8
+    exit_z: 0.5
+    stop_z: 3.0
+    max_leverage: 5
+
+  xrp_btc_leadlag:
+    enabled: true
+    category: pair_trading
+    portfolio: usdt
+    allocation_pct: 0.08
+    description: "XRP/BTC correlation lead-lag trading"
+
+    # Phase 31: Risk profile
+    min_confidence: 0.35
+    stop_loss_pct: 0.015
+    take_profit_pct: 0.025
+    max_hold_hours: 24
+    use_trailing_stop: true
+
+    # Correlation thresholds (relaxed to capture current 0.49 correlation)
+    corr_high: 0.45              # Lower to capture current market (was 0.50)
+    corr_low: 0.25               # Divergence mode threshold
+    breakout_leverage: 7
+    min_btc_move: 0.001          # 0.1% BTC move (very sensitive)
+    lookback: 50                 # Shorter lookback for faster response
+
+    # Disable strict gates that are blocking trades
+    use_cointegration: false     # Disable - statsmodels not installed
+    use_llr: false               # Disable - LLR check too strict
+    min_llr: 1.0                 # If re-enabled, lowered from 1.2
+    min_lag_correlation: 0.35    # Lowered from 0.5
+
+    # Keep useful features
+    use_dynamic_lag: true
+    use_volume_confirmation: true
+    use_mtf_confirmation: false  # Disable to reduce blocking
+    use_regime_adjustment: true
+
+    symbols:
+      - "XRP/USDT"
+      - "BTC/USDT"
+
+# =============================================================================
+# SENTIMENT & UTILITY STRATEGIES
+# =============================================================================
+
+  whale_sentiment:
+    enabled: true
+    category: sentiment
+    portfolio: usdt
+    allocation_pct: 0.05
+    description: "Whale wallet tracking and sentiment analysis"
+
+    # Phase 31: Risk profile
+    min_confidence: 0.50
+    stop_loss_pct: 0.03
+    take_profit_pct: 0.05
+    max_hold_hours: 24
+
+    large_tx_threshold: 100000
+    sentiment_lookback: 24
+    max_leverage: 3
+
+    symbols:
+      - "BTC/USDT"
+      - "XRP/USDT"
+
+  twap_accumulator:
+    enabled: true
+    category: accumulation
+    portfolio: crypto
+    allocation_pct: 0.10
+    description: "TWAP for gradual position building"
+
+    # Phase 31: Risk profile
+    min_confidence: 0.10
+    stop_loss_pct: 0.10
+    take_profit_pct: 0.10
+    max_hold_hours: 168
+
+    chunk_interval_minutes: 30
+    total_chunks: 10
+    max_slippage_pct: 0.002
+
+    symbols:
+      - "BTC/USDT"
+      - "XRP/USDT"
+
+  portfolio_rebalancer:
+    enabled: true
+    category: accumulation
+    portfolio: crypto
+    allocation_pct: 0.05
+    description: "Portfolio rebalancing to target weights"
+
+    # Phase 31: Risk profile
+    min_confidence: 0.15
+    stop_loss_pct: 0.10
+    take_profit_pct: 0.10
+    max_hold_hours: 720
+
+    target_weights:
+      BTC: 0.30
+      XRP: 0.30
+      USDT: 0.40
+    rebalance_threshold: 0.10
+    min_trade_size_usd: 50
+
+# =============================================================================
+# GRID STRATEGIES (USDT Portfolio)
+# =============================================================================
+
+  grid_arithmetic:
+    enabled: true
+    category: grid
+    portfolio: usdt
+    allocation_pct: 0.05
+    description: "Arithmetic grid for range-bound markets"
+
+    # Phase 31: Risk profile
+    min_confidence: 0.20
+    stop_loss_pct: 0.05
+    take_profit_pct: 0.01
+    max_hold_hours: 168
+
+    num_grids: 15
+    range_pct: 0.04
+    leverage: 1
+
+    symbols:
+      - "XRP/USDT"
+
+  grid_geometric:
+    enabled: true
+    category: grid
+    portfolio: usdt
+    allocation_pct: 0.05
+    description: "Geometric grid - percentage spacing"
+
+    # Phase 31: Risk profile
+    min_confidence: 0.20
+    stop_loss_pct: 0.05
+    take_profit_pct: 0.01
+    max_hold_hours: 168
+
+    num_grids: 15
+    grid_ratio: 1.008
+    leverage: 1
+
+    symbols:
+      - "XRP/USDT"
+
+  grid_rsi_reversion:
+    enabled: true
+    category: grid
+    portfolio: usdt
+    allocation_pct: 0.05
+    description: "RSI-enhanced mean reversion grid"
+
+    # Phase 31: Risk profile
+    min_confidence: 0.25
+    stop_loss_pct: 0.04
+    take_profit_pct: 0.015
+    max_hold_hours: 72
+
+    num_grids: 12
+    rsi_period: 14
+    rsi_oversold: 30
+    rsi_overbought: 70
+    leverage: 2
+
+    symbols:
+      - "XRP/USDT"
+
+# =============================================================================
+# EXPERIMENT PRESETS
+# =============================================================================
+
+experiments:
+  usdt_aggressive:
+    description: "Maximize USDT accumulation - all USDT strategies at higher allocation"
+    portfolio_split:
+      usdt: 0.85
+      crypto: 0.15
+    overrides:
+      scalping_1m5m:
+        allocation_pct: 0.20
+        max_leverage: 4
+      funding_rate_arb:
+        allocation_pct: 0.25
+
+  crypto_aggressive:
+    description: "Maximize crypto accumulation during bear market"
+    portfolio_split:
+      usdt: 0.50
+      crypto: 0.50
+    overrides:
+      enhanced_dca:
+        allocation_pct: 0.60
+        base_amount_usd: 50
+      dip_detector:
+        allocation_pct: 0.40
+        drawdown_threshold: -0.03  # Buy smaller dips
+
+  balanced:
+    description: "Default balanced approach"
+    portfolio_split:
+      usdt: 0.70
+      crypto: 0.30
+
+  usdt_only:
+    description: "100% USDT accumulation - no crypto holding"
+    portfolio_split:
+      usdt: 1.0
+      crypto: 0.0
+    disable:
+      - enhanced_dca
+      - dip_detector
+      - defensive_yield
+
+  crypto_only:
+    description: "100% crypto accumulation - DCA and dip buying"
+    portfolio_split:
+      usdt: 0.0
+      crypto: 1.0
+    enable_only:
+      - enhanced_dca
+      - dip_detector
+      - defensive_yield
+
+# =============================================================================
+# METRICS TRACKING
+# =============================================================================
+
+metrics:
+  # USDT Portfolio Metrics
+  usdt_portfolio:
+    - total_usdt_profit
+    - usdt_profit_today
+    - usdt_profit_this_week
+    - trade_count
+    - win_rate
+    - average_hold_time
+    - largest_win
+    - largest_loss
+
+  # Crypto Portfolio Metrics
+  crypto_portfolio:
+    - total_btc_accumulated
+    - total_xrp_accumulated
+    - btc_average_cost
+    - xrp_average_cost
+    - btc_current_value
+    - xrp_current_value
+    - unrealized_pnl
+
+  # Combined
+  overall:
+    - total_portfolio_value
+    - portfolio_high_water_mark
+    - max_drawdown
+    - sharpe_ratio
