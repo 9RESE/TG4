@@ -1,0 +1,51 @@
+# WebSocket Paper Trading Tester - Configuration
+# Default configuration file
+
+# General settings
+general:
+  duration_minutes: 60        # How long to run
+  interval_ms: 100           # Main loop interval
+  starting_capital: 100.0    # USD per strategy
+
+# Symbols to trade
+symbols:
+  - XRP/USD
+  - BTC/USD
+
+# Data source
+data:
+  source: kraken              # 'kraken' or 'simulated'
+  ws_url: wss://ws.kraken.com/v2
+  reconnect_delay: 1.0
+  max_reconnect_delay: 60.0
+
+# Execution settings
+execution:
+  fee_rate: 0.001            # 0.1%
+  slippage_rate: 0.0005      # 0.05%
+
+# Dashboard settings
+dashboard:
+  enabled: true
+  host: 0.0.0.0
+  port: 8080
+
+# Logging settings
+logging:
+  base_dir: logs
+  buffer_size: 100
+  enable_aggregated: true
+  console_output: true
+
+# Strategy overrides (optional)
+# Override default strategy config values
+strategy_overrides:
+  market_making:
+    min_spread_pct: 0.1
+    position_size_usd: 20
+  order_flow:
+    imbalance_threshold: 0.3
+    position_size_usd: 25
+  mean_reversion:
+    lookback_candles: 20
+    deviation_threshold: 0.5

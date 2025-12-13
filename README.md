@@ -1,12 +1,65 @@
 # TG4 - Local AI/ML Crypto Trading Platform
 
-**Phase 14: Live Launch + Dashboard + Final Opportunistic Tuning**
+**Current Phase**: Phase 21 - WebSocket Paper Tester + Unified Trading System
 
 **Goal**: Accumulate BTC (45%), XRP (35%), USDT (20%) starting with $1000 USDT + 500 XRP
 **Mode**: Paper trading only (no real funds)
 **Exchanges**: Kraken (10x margin), Bitrue (3x ETFs)
 **Hardware**: AMD Ryzen 9 7950X, 128GB DDR5, RX 6700 XT (ROCm-enabled)
-**Focus**: Bears flat/positive long-term via compounding yield + precision captures
+**Focus**: Strategy development and testing with real-time WebSocket data
+
+## Project Structure
+
+```
+grok-4_1/
+├── src/                      # Main Trading Platform (30+ strategies)
+│   ├── unified_trader.py     # Production paper trading orchestrator
+│   ├── strategies/           # Trading strategies library
+│   └── ...
+├── ws_paper_tester/          # NEW: WebSocket Paper Tester
+│   ├── ws_tester.py          # Lightweight strategy testing
+│   ├── strategies/           # Drop-in test strategies
+│   └── ...
+├── docs/                     # Documentation (Arc42 + Diataxis)
+└── config/                   # Configuration files
+```
+
+## Systems Overview
+
+### 1. WebSocket Paper Tester (NEW)
+
+Lightweight, WebSocket-native system for rapid strategy development:
+
+```bash
+cd ws_paper_tester
+pip install -r requirements.txt
+python ws_tester.py --simulated   # Test with simulated data
+python ws_tester.py               # Live Kraken WebSocket data
+```
+
+**Features:**
+- Real-time dashboard at http://localhost:8080
+- Isolated $100 portfolio per strategy
+- Auto-discovery of strategies (drop `.py` in `strategies/`)
+- 3 example strategies: market_making, order_flow, mean_reversion
+
+See [WebSocket Paper Tester Guide](docs/user/how-to/websocket-paper-tester.md)
+
+### 2. Unified Trading Platform (src/)
+
+Production-ready paper trading with 30+ strategies:
+
+```bash
+python src/unified_trader.py --mode paper
+```
+
+### 3. RL Training System
+
+Train reinforcement learning agents for trading:
+
+```bash
+python src/main.py --mode train-rl --timesteps 2000000
+```
 
 ## Phase 14 Features (Live Launch + Dashboard)
 - **LiveDashboard Class**: Real-time fear/greed display with regime visualization
