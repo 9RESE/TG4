@@ -4,18 +4,20 @@ Provides liquidity by placing orders on both sides of the spread.
 """
 
 from typing import Optional
-import sys
-from pathlib import Path
 
-# Add parent to path for imports
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-from ws_tester.types import DataSnapshot, Signal
+# Note: Types are imported by the strategy loader which handles the import path
+# These type hints are for documentation and IDE support only
+try:
+    from ws_tester.types import DataSnapshot, Signal
+except ImportError:
+    # Types will be available at runtime via strategy loader
+    DataSnapshot = None
+    Signal = None
 
 
 # Strategy metadata (required)
 STRATEGY_NAME = "market_making"
-STRATEGY_VERSION = "1.0.0"
+STRATEGY_VERSION = "1.0.1"
 SYMBOLS = ["XRP/USD"]
 
 # Configuration with defaults
@@ -29,7 +31,7 @@ CONFIG = {
 }
 
 
-def generate_signal(data: DataSnapshot, config: dict, state: dict) -> Optional[Signal]:
+def generate_signal(data, config: dict, state: dict):
     """
     Generate market making signal.
 
@@ -38,8 +40,20 @@ def generate_signal(data: DataSnapshot, config: dict, state: dict) -> Optional[S
     - Skew quotes based on inventory
     - Use stop-loss and take-profit
     """
-    symbol = "XRP/USD"
+    # Import Signal here to ensure it's available at runtime
+    from ws_tester.types import Signal
 
+    # Iterate over configured symbols
+    for symbol in SYMBOLS:
+        result = _evaluate_symbol(data, config, state, symbol, Signal)
+        if result is not None:
+            return result
+
+    return None
+
+
+def _evaluate_symbol(data, config: dict, state: dict, symbol: str, Signal):
+    """Evaluate a single symbol for market making opportunity."""
     # Get orderbook
     ob = data.orderbooks.get(symbol)
     if not ob or not ob.best_bid or not ob.best_ask:
@@ -54,6 +68,7 @@ def generate_signal(data: DataSnapshot, config: dict, state: dict) -> Optional[S
 
     # Store indicators for logging
     state['indicators'] = {
+        'symbol': symbol,
         'spread_pct': spread_pct,
         'best_bid': ob.best_bid,
         'best_ask': ob.best_ask,
@@ -66,8 +81,10 @@ def generate_signal(data: DataSnapshot, config: dict, state: dict) -> Optional[S
     if spread_pct < config['min_spread_pct']:
         return None
 
-    # Get current inventory (positive = long, negative = short)
-    inventory = state.get('inventory', 0)
+    # Get current inventory by symbol (positive = long, negative = short)
+    if 'inventory_by_symbol' not in state:
+        state['inventory_by_symbol'] = {}
+    inventory = state['inventory_by_symbol'].get(symbol, 0)
     max_inventory = config['max_inventory']
 
     # Calculate position size with inventory skew
@@ -131,17 +148,32 @@ def generate_signal(data: DataSnapshot, config: dict, state: dict) -> Optional[S
 
 
 def on_fill(fill: dict, state: dict) -> None:
-    """Update inventory on fill."""
+    """Update inventory on fill. MED-012: Track inventory by symbol."""
+    symbol = fill.get('symbol', 'XRP/USD')
     size_usd = fill.get('size', 0) * fill.get('price', 0)
-    if fill.get('side') == 'buy':
-        state['inventory'] = state.get('inventory', 0) + size_usd
-    else:
-        state['inventory'] = state.get('inventory', 0) - size_usd
 
+    # Initialize inventory tracking by symbol
+    if 'inventory_by_symbol' not in state:
+        state['inventory_by_symbol'] = {}
+
+    current_inventory = state['inventory_by_symbol'].get(symbol, 0)
+
+    if fill.get('side') == 'buy':
+        state['inventory_by_symbol'][symbol] = current_inventory + size_usd
+    elif fill.get('side') == 'sell':
+        state['inventory_by_symbol'][symbol] = current_inventory - size_usd
+    elif fill.get('side') == 'short':
+        state['inventory_by_symbol'][symbol] = current_inventory - size_usd
+    elif fill.get('side') == 'cover':
+        state['inventory_by_symbol'][symbol] = current_inventory + size_usd
+
+    # Keep legacy inventory for backward compatibility
+    state['inventory'] = sum(state['inventory_by_symbol'].values())
     state['last_fill'] = fill
 
 
 def on_start(config: dict, state: dict) -> None:
     """Initialize state."""
     state['inventory'] = 0
+    state['inventory_by_symbol'] = {}  # MED-012: Track by symbol
     state['indicators'] = {}

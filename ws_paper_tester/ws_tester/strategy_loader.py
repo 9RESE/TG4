@@ -1,15 +1,27 @@
 """
 Strategy auto-discovery and loading for WebSocket Paper Tester.
 Automatically discovers and loads strategies from the strategies/ directory.
+
+Security Features:
+- Whitelist of approved strategy files
+- SHA256 hash verification for known good strategies
+- Validation before loading
 """
 
+import hashlib
 import importlib
 import importlib.util
+import json
 import sys
 from pathlib import Path
-from typing import Dict, Any, Optional, List, Callable
+from typing import Dict, Any, Optional, List, Callable, Set
 
 from .types import DataSnapshot, Signal
+
+
+# Security configuration
+STRATEGY_SECURITY_FILE = "strategy_hashes.json"  # File containing approved hashes
+ALLOW_UNSIGNED_STRATEGIES = True  # Set to False in production to require hash verification
 
 
 class StrategyWrapper:
@@ -59,24 +71,30 @@ class StrategyWrapper:
         if self._on_fill:
             try:
                 self._on_fill(fill, self.state)
-            except Exception:
+            except Exception as e:
+                # Catch all exceptions from user-provided strategy code
                 self.errors += 1
+                print(f"[Strategy:{self.name}] on_fill error: {e}")
 
     def on_start(self):
         """Called when strategy starts."""
         if self._on_start:
             try:
                 self._on_start(self.config, self.state)
-            except Exception:
+            except Exception as e:
+                # Catch all exceptions from user-provided strategy code
                 self.errors += 1
+                print(f"[Strategy:{self.name}] on_start error: {e}")
 
     def on_stop(self):
         """Called when strategy stops."""
         if self._on_stop:
             try:
                 self._on_stop(self.state)
-            except Exception:
+            except Exception as e:
+                # Catch all exceptions from user-provided strategy code
                 self.errors += 1
+                print(f"[Strategy:{self.name}] on_stop error: {e}")
 
     def to_dict(self) -> dict:
         """Serialize strategy info."""
@@ -90,11 +108,98 @@ class StrategyWrapper:
         }
 
 
-def discover_strategies(strategies_dir: str = "strategies") -> Dict[str, StrategyWrapper]:
+def _calculate_file_hash(filepath: Path) -> str:
+    """Calculate SHA256 hash of a file."""
+    sha256_hash = hashlib.sha256()
+    with open(filepath, "rb") as f:
+        for byte_block in iter(lambda: f.read(4096), b""):
+            sha256_hash.update(byte_block)
+    return sha256_hash.hexdigest()
+
+
+def _load_strategy_hashes(strategies_dir: Path) -> Dict[str, str]:
+    """Load approved strategy hashes from security file."""
+    hash_file = strategies_dir / STRATEGY_SECURITY_FILE
+    if hash_file.exists():
+        try:
+            with open(hash_file, 'r') as f:
+                return json.load(f)
+        except (json.JSONDecodeError, IOError) as e:
+            print(f"[Loader] Warning: Could not load strategy hashes: {e}")
+    return {}
+
+
+def _save_strategy_hashes(strategies_dir: Path, hashes: Dict[str, str]) -> None:
+    """Save strategy hashes to security file."""
+    hash_file = strategies_dir / STRATEGY_SECURITY_FILE
+    try:
+        with open(hash_file, 'w') as f:
+            json.dump(hashes, f, indent=2)
+        print(f"[Loader] Strategy hashes saved to {hash_file}")
+    except IOError as e:
+        print(f"[Loader] Warning: Could not save strategy hashes: {e}")
+
+
+def verify_strategy_file(
+    filepath: Path,
+    approved_hashes: Dict[str, str],
+    allow_unsigned: bool = ALLOW_UNSIGNED_STRATEGIES
+) -> tuple[bool, str]:
+    """
+    Verify a strategy file against approved hashes.
+
+    Returns:
+        (is_valid, reason) tuple
+    """
+    filename = filepath.name
+    file_hash = _calculate_file_hash(filepath)
+
+    if filename in approved_hashes:
+        expected_hash = approved_hashes[filename]
+        if file_hash == expected_hash:
+            return True, "Hash verified"
+        else:
+            return False, f"Hash mismatch: expected {expected_hash[:16]}..., got {file_hash[:16]}..."
+
+    if allow_unsigned:
+        return True, f"Unsigned strategy (hash: {file_hash[:16]}...)"
+    else:
+        return False, "Strategy not in approved list (unsigned strategies disabled)"
+
+
+def generate_strategy_hashes(strategies_dir: str = "strategies") -> Dict[str, str]:
+    """
+    Generate hashes for all strategy files in a directory.
+    Useful for creating the initial strategy_hashes.json file.
+    """
+    strategies_path = Path(strategies_dir)
+    hashes = {}
+
+    if not strategies_path.exists():
+        return hashes
+
+    for file in strategies_path.glob("*.py"):
+        if file.name.startswith("_"):
+            continue
+        hashes[file.name] = _calculate_file_hash(file)
+
+    return hashes
+
+
+def discover_strategies(
+    strategies_dir: str = "strategies",
+    whitelist: Optional[Set[str]] = None,
+    verify_hashes: bool = True
+) -> Dict[str, StrategyWrapper]:
     """
     Auto-discover strategies from directory.
 
     Each .py file in strategies/ with STRATEGY_NAME is loaded.
+
+    Security:
+        - Optional whitelist of allowed strategy files
+        - Hash verification against approved_hashes file
+        - Set ALLOW_UNSIGNED_STRATEGIES=False to require verification
 
     Required module attributes:
         - STRATEGY_NAME: str - Unique strategy identifier
@@ -107,6 +212,11 @@ def discover_strategies(strategies_dir: str = "strategies") -> Dict[str, Strateg
         - on_fill(fill, state) - Called when an order is filled
         - on_start(config, state) - Called when strategy starts
         - on_stop(state) - Called when strategy stops
+
+    Args:
+        strategies_dir: Directory containing strategy files
+        whitelist: Optional set of allowed strategy filenames (e.g., {"market_making.py"})
+        verify_hashes: Whether to verify file hashes against approved list
     """
     strategies = {}
     strategies_path = Path(strategies_dir)
@@ -115,10 +225,12 @@ def discover_strategies(strategies_dir: str = "strategies") -> Dict[str, Strateg
         print(f"[Loader] Strategies directory '{strategies_dir}' not found")
         return strategies
 
-    # Add parent to Python path for imports
-    parent_path = str(strategies_path.parent.absolute())
-    if parent_path not in sys.path:
-        sys.path.insert(0, parent_path)
+    # Load approved hashes for verification
+    approved_hashes = {}
+    if verify_hashes:
+        approved_hashes = _load_strategy_hashes(strategies_path)
+        if approved_hashes:
+            print(f"[Loader] Loaded {len(approved_hashes)} approved strategy hashes")
 
     print(f"[Loader] Discovering strategies in {strategies_path.absolute()}")
 
@@ -126,9 +238,23 @@ def discover_strategies(strategies_dir: str = "strategies") -> Dict[str, Strateg
         if file.name.startswith("_"):
             continue
 
+        # Whitelist check
+        if whitelist is not None and file.name not in whitelist:
+            print(f"  - Skipping {file.name}: not in whitelist")
+            continue
+
+        # Security verification
+        if verify_hashes:
+            is_valid, reason = verify_strategy_file(file, approved_hashes)
+            if not is_valid:
+                print(f"  ! BLOCKED {file.name}: {reason}")
+                continue
+            else:
+                print(f"  * Verified {file.name}: {reason}")
+
         try:
-            # Load module
-            module_name = f"{strategies_dir}.{file.stem}"
+            # Load module using spec_from_file_location to avoid sys.path pollution
+            module_name = f"strategy_{file.stem}_{id(file)}"  # Unique module name
             spec = importlib.util.spec_from_file_location(module_name, file)
             if not spec or not spec.loader:
                 continue

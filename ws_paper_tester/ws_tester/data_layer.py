@@ -152,6 +152,10 @@ class DataManager:
     """
     Manages market data from WebSocket feed.
     Builds candles, maintains orderbooks, and creates snapshots.
+
+    Thread Safety (MED-007):
+    - Uses asyncio.Lock for candle building operations
+    - Provides thread-safe snapshots via copy
     """
 
     MAX_CANDLES = 100  # Keep last 100 candles per timeframe
@@ -179,6 +183,9 @@ class DataManager:
 
         # Last update timestamps
         self._last_update: float = 0
+
+        # Lock for thread-safe candle building (MED-007)
+        self._candle_lock = asyncio.Lock()
 
     async def on_message(self, data: dict):
         """Process incoming WebSocket message."""
@@ -215,7 +222,8 @@ class DataManager:
 
             try:
                 timestamp = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
-            except:
+            except (ValueError, AttributeError) as e:
+                # HIGH-007: Replace bare except with specific exceptions
                 timestamp = datetime.now()
 
             trade_obj = Trade(
@@ -228,8 +236,8 @@ class DataManager:
             self._trades[symbol].append(trade_obj)
             self._prices[symbol] = price
 
-            # Update building candles
-            self._update_building_candle(symbol, price, size, timestamp)
+            # Update building candles (async for thread safety - MED-007)
+            await self._update_building_candle_async(symbol, price, size, timestamp)
 
     async def _handle_ticker(self, data: dict):
         """Handle ticker message."""
@@ -302,7 +310,8 @@ class DataManager:
                 timestamp = datetime.fromisoformat(
                     candle.get('timestamp', '').replace('Z', '+00:00')
                 )
-            except:
+            except (ValueError, AttributeError, TypeError) as e:
+                # HIGH-007: Replace bare except with specific exceptions
                 timestamp = datetime.now()
 
             candle_obj = Candle(
@@ -322,6 +331,17 @@ class DataManager:
             # Update price
             self._prices[symbol] = candle_obj.close
 
+    async def _update_building_candle_async(
+        self,
+        symbol: str,
+        price: float,
+        volume: float,
+        timestamp: datetime
+    ):
+        """Update the currently building candle from trades. Thread-safe (MED-007)."""
+        async with self._candle_lock:
+            self._update_building_candle_internal(symbol, price, volume, timestamp)
+
     def _update_building_candle(
         self,
         symbol: str,
@@ -329,7 +349,17 @@ class DataManager:
         volume: float,
         timestamp: datetime
     ):
-        """Update the currently building candle from trades."""
+        """Update the currently building candle from trades (sync version for SimulatedDataManager)."""
+        self._update_building_candle_internal(symbol, price, volume, timestamp)
+
+    def _update_building_candle_internal(
+        self,
+        symbol: str,
+        price: float,
+        volume: float,
+        timestamp: datetime
+    ):
+        """Internal candle building logic."""
         # 1-minute candle
         minute_key = timestamp.replace(second=0, microsecond=0)
 
@@ -419,7 +449,50 @@ class DataManager:
                 candle['volume'] += volume
 
     def get_snapshot(self) -> Optional[DataSnapshot]:
-        """Create an immutable snapshot of current market data."""
+        """
+        Create an immutable snapshot of current market data.
+        Thread-safe copy of data (MED-007).
+        """
+        if not self._prices:
+            return None
+
+        # Build orderbook snapshots
+        orderbooks = {}
+        for symbol, ob in self._orderbooks.items():
+            orderbooks[symbol] = OrderbookSnapshot(
+                bids=tuple(tuple(b) for b in ob.get('bids', [])),
+                asks=tuple(tuple(a) for a in ob.get('asks', []))
+            )
+
+        # Build trade tuples (copy for thread safety)
+        trades = {}
+        for symbol, trade_deque in self._trades.items():
+            trades[symbol] = tuple(trade_deque)
+
+        # Build candle tuples (copy for thread safety - MED-007)
+        # Note: For full thread safety in async context, use get_snapshot_async()
+        candles_1m = {}
+        for symbol, candle_deque in self._candles_1m.items():
+            candles_1m[symbol] = tuple(candle_deque)
+
+        candles_5m = {}
+        for symbol, candle_deque in self._candles_5m.items():
+            candles_5m[symbol] = tuple(candle_deque)
+
+        return DataSnapshot(
+            timestamp=datetime.now(),
+            prices=dict(self._prices),
+            candles_1m=candles_1m,
+            candles_5m=candles_5m,
+            orderbooks=orderbooks,
+            trades=trades
+        )
+
+    async def get_snapshot_async(self) -> Optional[DataSnapshot]:
+        """
+        Create an immutable snapshot of current market data.
+        Fully thread-safe async version (MED-007).
+        """
         if not self._prices:
             return None
 
@@ -436,14 +509,15 @@ class DataManager:
         for symbol, trade_deque in self._trades.items():
             trades[symbol] = tuple(trade_deque)
 
-        # Build candle tuples
-        candles_1m = {}
-        for symbol, candle_deque in self._candles_1m.items():
-            candles_1m[symbol] = tuple(candle_deque)
+        # Build candle tuples under lock (MED-007)
+        async with self._candle_lock:
+            candles_1m = {}
+            for symbol, candle_deque in self._candles_1m.items():
+                candles_1m[symbol] = tuple(candle_deque)
 
-        candles_5m = {}
-        for symbol, candle_deque in self._candles_5m.items():
-            candles_5m[symbol] = tuple(candle_deque)
+            candles_5m = {}
+            for symbol, candle_deque in self._candles_5m.items():
+                candles_5m[symbol] = tuple(candle_deque)
 
         return DataSnapshot(
             timestamp=datetime.now(),

@@ -4,18 +4,18 @@ Trades based on trade tape analysis and buy/sell imbalance.
 """
 
 from typing import Optional
-import sys
-from pathlib import Path
 
-# Add parent to path for imports
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-from ws_tester.types import DataSnapshot, Signal
+# Note: Types are imported by the strategy loader which handles the import path
+try:
+    from ws_tester.types import DataSnapshot, Signal
+except ImportError:
+    DataSnapshot = None
+    Signal = None
 
 
 # Strategy metadata (required)
 STRATEGY_NAME = "order_flow"
-STRATEGY_VERSION = "1.0.0"
+STRATEGY_VERSION = "1.0.1"
 SYMBOLS = ["XRP/USD", "BTC/USD"]
 
 # Configuration with defaults
@@ -30,7 +30,7 @@ CONFIG = {
 }
 
 
-def generate_signal(data: DataSnapshot, config: dict, state: dict) -> Optional[Signal]:
+def generate_signal(data, config: dict, state: dict):
     """
     Generate order flow signal.
 
@@ -39,6 +39,8 @@ def generate_signal(data: DataSnapshot, config: dict, state: dict) -> Optional[S
     - Look for volume spikes
     - Trade in direction of order flow
     """
+    from ws_tester.types import Signal
+
     # Initialize state
     if 'last_signal_idx' not in state:
         state['last_signal_idx'] = 0
@@ -114,16 +116,37 @@ def generate_signal(data: DataSnapshot, config: dict, state: dict) -> Optional[S
             )
 
         # Strong sell pressure with volume spike
+        # HIGH-008 Fix: Use 'short' action instead of 'sell' when opening a new short position
+        # 'sell' should only be used when we have a long position to close
         elif imbalance < -config['imbalance_threshold'] and volume_spike > config['volume_spike_mult']:
-            signal = Signal(
-                action='sell',
-                symbol=symbol,
-                size=config['position_size_usd'],
-                price=current_price,
-                reason=f"OF: Sell pressure (imbal={imbalance:.2f}, vol_spike={volume_spike:.1f}x)",
-                stop_loss=current_price * (1 + config['stop_loss_pct'] / 100),
-                take_profit=current_price * (1 - config['take_profit_pct'] / 100),
-            )
+            # Check if we have a long position to sell, otherwise go short
+            has_long_position = state.get('position_side') == 'long' and state.get('position_size', 0) > 0
+
+            if has_long_position:
+                # Sell existing long position
+                signal = Signal(
+                    action='sell',
+                    symbol=symbol,
+                    size=min(config['position_size_usd'], state.get('position_size', config['position_size_usd'])),
+                    price=current_price,
+                    reason=f"OF: Close long on sell pressure (imbal={imbalance:.2f}, vol_spike={volume_spike:.1f}x)",
+                    # For closing a long, stop_loss protects against price going down further
+                    stop_loss=current_price * (1 - config['stop_loss_pct'] / 100),
+                    take_profit=current_price * (1 + config['take_profit_pct'] / 100),
+                )
+            else:
+                # Open a short position
+                signal = Signal(
+                    action='short',
+                    symbol=symbol,
+                    size=config['position_size_usd'],
+                    price=current_price,
+                    reason=f"OF: Short on sell pressure (imbal={imbalance:.2f}, vol_spike={volume_spike:.1f}x)",
+                    # For shorts, stop_loss is above entry (price going up is bad)
+                    stop_loss=current_price * (1 + config['stop_loss_pct'] / 100),
+                    # take_profit is below entry (price going down is good)
+                    take_profit=current_price * (1 - config['take_profit_pct'] / 100),
+                )
 
         # Buy pressure + price below VWAP (potential mean reversion)
         elif imbalance > config['imbalance_threshold'] * 0.7 and price_vs_vwap < -0.001:
@@ -145,11 +168,34 @@ def generate_signal(data: DataSnapshot, config: dict, state: dict) -> Optional[S
 
 
 def on_fill(fill: dict, state: dict) -> None:
-    """Track fills."""
+    """Track fills and position state. HIGH-008 fix: Add position awareness."""
     if 'fills' not in state:
         state['fills'] = []
     state['fills'].append(fill)
     state['fills'] = state['fills'][-20:]  # Keep last 20
+
+    # Track position state for proper sell/short decision
+    side = fill.get('side', '')
+    size_usd = fill.get('size', 0) * fill.get('price', 0)
+
+    if side == 'buy':
+        # Opening or adding to long position
+        state['position_side'] = 'long'
+        state['position_size'] = state.get('position_size', 0) + size_usd
+    elif side == 'sell':
+        # Closing long position
+        state['position_size'] = max(0, state.get('position_size', 0) - size_usd)
+        if state['position_size'] == 0:
+            state['position_side'] = None
+    elif side == 'short':
+        # Opening or adding to short position
+        state['position_side'] = 'short'
+        state['position_size'] = state.get('position_size', 0) + size_usd
+    elif side == 'cover':
+        # Closing short position
+        state['position_size'] = max(0, state.get('position_size', 0) - size_usd)
+        if state['position_size'] == 0:
+            state['position_side'] = None
 
 
 def on_start(config: dict, state: dict) -> None:
@@ -158,3 +204,5 @@ def on_start(config: dict, state: dict) -> None:
     state['total_trades_seen'] = 0
     state['fills'] = []
     state['indicators'] = {}
+    state['position_side'] = None  # 'long', 'short', or None
+    state['position_size'] = 0

@@ -4,18 +4,19 @@ Trades price deviations from moving average and VWAP.
 """
 
 from typing import Optional, List
-import sys
-from pathlib import Path
 
-# Add parent to path for imports
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-from ws_tester.types import DataSnapshot, Signal, Candle
+# Note: Types are imported by the strategy loader which handles the import path
+try:
+    from ws_tester.types import DataSnapshot, Signal, Candle
+except ImportError:
+    DataSnapshot = None
+    Signal = None
+    Candle = None
 
 
 # Strategy metadata (required)
 STRATEGY_NAME = "mean_reversion"
-STRATEGY_VERSION = "1.0.0"
+STRATEGY_VERSION = "1.0.1"
 SYMBOLS = ["XRP/USD"]
 
 # Configuration with defaults
@@ -40,14 +41,20 @@ def calculate_sma(candles: List[Candle], period: int) -> float:
 
 
 def calculate_rsi(candles: List[Candle], period: int = 14) -> float:
-    """Calculate RSI indicator."""
+    """
+    Calculate RSI indicator.
+
+    LOW-007: Fixed edge case where index could go negative.
+    """
     if len(candles) < period + 1:
         return 50.0  # Neutral
 
     gains = []
     losses = []
 
-    for i in range(len(candles) - period, len(candles)):
+    # LOW-007: Ensure we don't access negative indices
+    start_idx = max(1, len(candles) - period)
+    for i in range(start_idx, len(candles)):
         change = candles[i].close - candles[i-1].close
         if change > 0:
             gains.append(change)
@@ -56,8 +63,11 @@ def calculate_rsi(candles: List[Candle], period: int = 14) -> float:
             gains.append(0)
             losses.append(abs(change))
 
-    avg_gain = sum(gains) / period
-    avg_loss = sum(losses) / period
+    if not gains:
+        return 50.0  # Neutral if no data
+
+    avg_gain = sum(gains) / len(gains)
+    avg_loss = sum(losses) / len(losses)
 
     if avg_loss == 0:
         return 100.0
@@ -85,7 +95,7 @@ def calculate_bollinger_bands(candles: List[Candle], period: int = 20, std_dev: 
     return lower, sma, upper
 
 
-def generate_signal(data: DataSnapshot, config: dict, state: dict) -> Optional[Signal]:
+def generate_signal(data, config: dict, state: dict):
     """
     Generate mean reversion signal.
 
@@ -94,10 +104,20 @@ def generate_signal(data: DataSnapshot, config: dict, state: dict) -> Optional[S
     - Use RSI for confirmation
     - Trade when price deviates significantly from mean
     """
-    symbol = "XRP/USD"
+    from ws_tester.types import Signal
 
+    # Iterate over configured symbols
+    for symbol in SYMBOLS:
+        result = _evaluate_symbol(data, config, state, symbol, Signal)
+        if result is not None:
+            return result
+
+    return None
+
+
+def _evaluate_symbol(data, config: dict, state: dict, symbol: str, Signal):
+    """Evaluate a single symbol for mean reversion opportunity."""
     # Get candles
-    candles_1m = data.candles_1m.get(symbol, ())
     candles_5m = data.candles_5m.get(symbol, ())
 
     if len(candles_5m) < config['lookback_candles']:
@@ -123,6 +143,7 @@ def generate_signal(data: DataSnapshot, config: dict, state: dict) -> Optional[S
 
     # Store indicators
     state['indicators'] = {
+        'symbol': symbol,
         'sma': sma,
         'rsi': rsi,
         'deviation_pct': deviation_pct,
@@ -136,9 +157,6 @@ def generate_signal(data: DataSnapshot, config: dict, state: dict) -> Optional[S
     current_position = state.get('position', 0)
     max_position = config['max_position']
 
-    # Generate signals
-    signal = None
-
     # Oversold: Price below SMA and RSI oversold
     if (deviation_pct < -config['deviation_threshold'] and
         rsi < config['rsi_oversold'] and
@@ -146,7 +164,7 @@ def generate_signal(data: DataSnapshot, config: dict, state: dict) -> Optional[S
 
         # Extra confirmation: price near or below lower BB
         if current_price <= bb_lower * 1.005:
-            signal = Signal(
+            return Signal(
                 action='buy',
                 symbol=symbol,
                 size=config['position_size_usd'],
@@ -157,13 +175,13 @@ def generate_signal(data: DataSnapshot, config: dict, state: dict) -> Optional[S
             )
 
     # Overbought: Price above SMA and RSI overbought
-    elif (deviation_pct > config['deviation_threshold'] and
-          rsi > config['rsi_overbought'] and
-          current_position > -max_position):
+    if (deviation_pct > config['deviation_threshold'] and
+        rsi > config['rsi_overbought'] and
+        current_position > -max_position):
 
         # Extra confirmation: price near or above upper BB
         if current_price >= bb_upper * 0.995:
-            signal = Signal(
+            return Signal(
                 action='sell',
                 symbol=symbol,
                 size=config['position_size_usd'],
@@ -174,12 +192,12 @@ def generate_signal(data: DataSnapshot, config: dict, state: dict) -> Optional[S
             )
 
     # VWAP reversion opportunity
-    elif vwap:
+    if vwap:
         vwap_deviation = ((current_price - vwap) / vwap) * 100
 
         # Price significantly below VWAP with neutral RSI
         if vwap_deviation < -0.3 and 40 < rsi < 60 and current_position < max_position:
-            signal = Signal(
+            return Signal(
                 action='buy',
                 symbol=symbol,
                 size=config['position_size_usd'] * 0.5,  # Half size
@@ -189,7 +207,7 @@ def generate_signal(data: DataSnapshot, config: dict, state: dict) -> Optional[S
                 take_profit=vwap,
             )
 
-    return signal
+    return None
 
 
 def on_fill(fill: dict, state: dict) -> None:

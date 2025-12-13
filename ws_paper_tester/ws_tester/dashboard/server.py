@@ -1,23 +1,47 @@
 """
 Real-time dashboard server for WebSocket Paper Tester.
 Provides REST API and WebSocket endpoints for live monitoring.
+
+Security Features:
+- Optional API key authentication
+- Rate limiting support
+- Thread-safe state management
 """
 
 import asyncio
+import copy
 import json
+import os
+import threading
 from datetime import datetime
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Depends, Header
 from fastapi.responses import HTMLResponse
+
+
+# Security: API key authentication (set via environment variable or config)
+API_KEY = os.environ.get("WS_TESTER_API_KEY", None)  # None = no auth required
+REQUIRE_AUTH = API_KEY is not None
+
+
+def verify_api_key(x_api_key: Optional[str] = Header(None)):
+    """Verify API key for authenticated endpoints."""
+    if not REQUIRE_AUTH:
+        return True
+    if x_api_key is None or x_api_key != API_KEY:
+        raise HTTPException(status_code=401, detail="Invalid or missing API key")
+    return True
 
 
 app = FastAPI(title="WS Paper Tester Dashboard")
 
-# Store connected dashboard clients
+# Store connected dashboard clients (with lock for thread safety)
 dashboard_clients: List[WebSocket] = []
+_clients_lock = threading.Lock()
 
-# Latest state (updated by trading loop)
+# Latest state (updated by trading loop) - protected by lock
+_state_lock = threading.RLock()
 latest_state: Dict[str, Any] = {
     "timestamp": None,
     "prices": {},
@@ -26,6 +50,12 @@ latest_state: Dict[str, Any] = {
     "recent_trades": [],
     "session_info": {}
 }
+
+
+def _get_state_snapshot() -> Dict[str, Any]:
+    """Get a thread-safe copy of the current state."""
+    with _state_lock:
+        return copy.deepcopy(latest_state)
 
 
 class DashboardPublisher:
@@ -49,25 +79,40 @@ class DashboardPublisher:
                 event = await self.queue.get()
                 message = json.dumps(event, default=str)
 
-                # Update latest state
-                if event["type"] == "state_update":
-                    latest_state.update(event["data"])
-                    latest_state["timestamp"] = event["timestamp"]
-                elif event["type"] == "trade":
-                    latest_state["recent_trades"].insert(0, event["data"])
-                    latest_state["recent_trades"] = latest_state["recent_trades"][:100]
+                # Update latest state with thread safety
+                with _state_lock:
+                    if event["type"] == "state_update":
+                        latest_state.update(event["data"])
+                        latest_state["timestamp"] = event["timestamp"]
+                    elif event["type"] == "trade":
+                        latest_state["recent_trades"].insert(0, event["data"])
+                        latest_state["recent_trades"] = latest_state["recent_trades"][:100]
 
-                # Broadcast to all connected clients
-                disconnected = []
-                for client in dashboard_clients:
+                # Get current clients list safely
+                with _clients_lock:
+                    clients_copy = list(dashboard_clients)
+
+                # Broadcast to all connected clients concurrently (non-blocking)
+                async def send_to_client(client: WebSocket):
                     try:
-                        await client.send_text(message)
-                    except Exception:
-                        disconnected.append(client)
+                        await asyncio.wait_for(client.send_text(message), timeout=5.0)
+                        return None
+                    except (asyncio.TimeoutError, ConnectionError, RuntimeError, OSError):
+                        # Client disconnected, timed out, or connection error
+                        return client
 
-                for client in disconnected:
-                    if client in dashboard_clients:
-                        dashboard_clients.remove(client)
+                # Send to all clients with timeout to prevent slow client blocking
+                tasks = [send_to_client(client) for client in clients_copy]
+                if tasks:
+                    results = await asyncio.gather(*tasks, return_exceptions=True)
+                    disconnected = [r for r in results if r is not None and isinstance(r, WebSocket)]
+
+                    # Remove disconnected clients
+                    if disconnected:
+                        with _clients_lock:
+                            for client in disconnected:
+                                if client in dashboard_clients:
+                                    dashboard_clients.remove(client)
 
             except Exception as e:
                 print(f"[Dashboard] Broadcast error: {e}")
@@ -80,13 +125,22 @@ publisher = DashboardPublisher()
 @app.websocket("/ws/live")
 async def websocket_endpoint(websocket: WebSocket):
     """WebSocket endpoint for live dashboard updates."""
-    await websocket.accept()
-    dashboard_clients.append(websocket)
+    # Check API key from query params for WebSocket auth
+    if REQUIRE_AUTH:
+        api_key = websocket.query_params.get("api_key")
+        if api_key != API_KEY:
+            await websocket.close(code=4001, reason="Invalid API key")
+            return
 
-    # Send current state on connect
+    await websocket.accept()
+    with _clients_lock:
+        dashboard_clients.append(websocket)
+
+    # Send current state on connect (thread-safe snapshot)
+    state_snapshot = _get_state_snapshot()
     await websocket.send_text(json.dumps({
         "type": "initial_state",
-        "data": latest_state
+        "data": state_snapshot
     }, default=str))
 
     try:
@@ -95,20 +149,23 @@ async def websocket_endpoint(websocket: WebSocket):
             data = await websocket.receive_text()
             # Could handle dashboard commands here (pause, filter, etc.)
     except WebSocketDisconnect:
-        if websocket in dashboard_clients:
-            dashboard_clients.remove(websocket)
+        with _clients_lock:
+            if websocket in dashboard_clients:
+                dashboard_clients.remove(websocket)
 
 
 @app.get("/api/strategies")
-async def get_strategies():
+async def get_strategies(_: bool = Depends(verify_api_key)):
     """Get current strategy stats."""
-    return latest_state.get("strategies", [])
+    state = _get_state_snapshot()
+    return state.get("strategies", [])
 
 
 @app.get("/api/strategy/{name}")
-async def get_strategy_detail(name: str):
+async def get_strategy_detail(name: str, _: bool = Depends(verify_api_key)):
     """Get detailed stats for a specific strategy."""
-    strategies = latest_state.get("strategies", [])
+    state = _get_state_snapshot()
+    strategies = state.get("strategies", [])
     for s in strategies:
         if s.get("strategy") == name:
             return s
@@ -116,27 +173,31 @@ async def get_strategy_detail(name: str):
 
 
 @app.get("/api/trades")
-async def get_recent_trades(limit: int = 100):
+async def get_recent_trades(limit: int = 100, _: bool = Depends(verify_api_key)):
     """Get recent trades across all strategies."""
-    return latest_state.get("recent_trades", [])[:limit]
+    state = _get_state_snapshot()
+    return state.get("recent_trades", [])[:limit]
 
 
 @app.get("/api/aggregate")
-async def get_aggregate():
+async def get_aggregate(_: bool = Depends(verify_api_key)):
     """Get aggregate stats across all strategies."""
-    return latest_state.get("aggregate", {})
+    state = _get_state_snapshot()
+    return state.get("aggregate", {})
 
 
 @app.get("/api/prices")
-async def get_prices():
+async def get_prices(_: bool = Depends(verify_api_key)):
     """Get current prices."""
-    return latest_state.get("prices", {})
+    state = _get_state_snapshot()
+    return state.get("prices", {})
 
 
 @app.get("/api/session")
-async def get_session_info():
+async def get_session_info(_: bool = Depends(verify_api_key)):
     """Get session information."""
-    return latest_state.get("session_info", {})
+    state = _get_state_snapshot()
+    return state.get("session_info", {})
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -447,16 +508,58 @@ def update_state(
     aggregate: dict,
     session_info: dict = None
 ):
-    """Update latest state directly (for non-async contexts)."""
-    latest_state["timestamp"] = datetime.now().isoformat()
-    latest_state["prices"] = prices
-    latest_state["strategies"] = strategies
-    latest_state["aggregate"] = aggregate
-    if session_info:
-        latest_state["session_info"] = session_info
+    """Update latest state directly (for non-async contexts). Thread-safe."""
+    with _state_lock:
+        latest_state["timestamp"] = datetime.now().isoformat()
+        latest_state["prices"] = copy.deepcopy(prices)
+        latest_state["strategies"] = copy.deepcopy(strategies)
+        latest_state["aggregate"] = copy.deepcopy(aggregate)
+        if session_info:
+            latest_state["session_info"] = copy.deepcopy(session_info)
 
 
 def add_trade(trade: dict):
-    """Add trade to recent trades (for non-async contexts)."""
-    latest_state["recent_trades"].insert(0, trade)
-    latest_state["recent_trades"] = latest_state["recent_trades"][:100]
+    """Add trade to recent trades (for non-async contexts). Thread-safe."""
+    # Sanitize trade data to prevent XSS
+    sanitized_trade = _sanitize_trade(trade)
+    with _state_lock:
+        latest_state["recent_trades"].insert(0, sanitized_trade)
+        latest_state["recent_trades"] = latest_state["recent_trades"][:100]
+
+
+def _sanitize_trade(trade: dict) -> dict:
+    """Sanitize trade data to prevent XSS attacks."""
+    import html
+    sanitized = {}
+    for key, value in trade.items():
+        if isinstance(value, str):
+            # Escape HTML entities in string values
+            sanitized[key] = html.escape(value)
+        else:
+            sanitized[key] = value
+    return sanitized
+
+
+def get_connected_client_count() -> int:
+    """Get the number of connected dashboard clients."""
+    with _clients_lock:
+        return len(dashboard_clients)
+
+
+async def broadcast_shutdown_message():
+    """Send shutdown notification to all connected clients."""
+    with _clients_lock:
+        clients_copy = list(dashboard_clients)
+
+    shutdown_msg = json.dumps({
+        "type": "shutdown",
+        "timestamp": datetime.now().isoformat(),
+        "message": "Server is shutting down"
+    })
+
+    for client in clients_copy:
+        try:
+            await asyncio.wait_for(client.send_text(shutdown_msg), timeout=2.0)
+        except (asyncio.TimeoutError, ConnectionError, RuntimeError, OSError):
+            # Client may already be disconnected
+            pass

@@ -17,16 +17,29 @@ class PaperExecutor:
 
     Features:
     - Slippage simulation based on orderbook
-    - Fee calculation (0.1%)
+    - Fee calculation (configurable, default 0.1%)
     - Per-strategy position tracking
     - Auto stop-loss / take-profit
+    - Configurable short selling leverage limit
+    - Configurable slippage rate
     """
 
-    FEE_RATE = 0.001  # 0.1%
-    SLIPPAGE_RATE = 0.0005  # 0.05% slippage
+    DEFAULT_FEE_RATE = 0.001  # 0.1%
+    DEFAULT_SLIPPAGE_RATE = 0.0005  # 0.05% slippage
+    DEFAULT_MAX_SHORT_LEVERAGE = 2.0  # 2x leverage for shorts
 
-    def __init__(self, portfolio_manager: PortfolioManager):
+    def __init__(
+        self,
+        portfolio_manager: PortfolioManager,
+        max_short_leverage: float = None,
+        slippage_rate: float = None,
+        fee_rate: float = None,
+    ):
         self.portfolio_manager = portfolio_manager
+        # Configurable execution parameters
+        self.max_short_leverage = max_short_leverage if max_short_leverage is not None else self.DEFAULT_MAX_SHORT_LEVERAGE
+        self.slippage_rate = slippage_rate if slippage_rate is not None else self.DEFAULT_SLIPPAGE_RATE
+        self.fee_rate = fee_rate if fee_rate is not None else self.DEFAULT_FEE_RATE
 
     def execute(
         self,
@@ -45,14 +58,14 @@ class PaperExecutor:
         # Calculate execution price with slippage
         if signal.action in ['buy', 'cover']:
             if ob and ob.best_ask > 0:
-                execution_price = ob.best_ask * (1 + self.SLIPPAGE_RATE)
+                execution_price = ob.best_ask * (1 + self.slippage_rate)
             else:
-                execution_price = signal.price * (1 + self.SLIPPAGE_RATE)
+                execution_price = signal.price * (1 + self.slippage_rate)
         else:  # sell, short
             if ob and ob.best_bid > 0:
-                execution_price = ob.best_bid * (1 - self.SLIPPAGE_RATE)
+                execution_price = ob.best_bid * (1 - self.slippage_rate)
             else:
-                execution_price = signal.price * (1 - self.SLIPPAGE_RATE)
+                execution_price = signal.price * (1 - self.slippage_rate)
 
         # Calculate size in base asset
         if signal.size <= 0:
@@ -88,7 +101,7 @@ class PaperExecutor:
             return None
 
         if fill:
-            portfolio.fills.append(fill)
+            portfolio.add_fill(fill)
             portfolio.total_trades += 1
             portfolio.last_trade_at = data.timestamp
             portfolio.update_drawdown(data.prices)
@@ -105,17 +118,17 @@ class PaperExecutor:
         timestamp: datetime
     ) -> Optional[Fill]:
         """Execute a buy order."""
-        cost = base_size * execution_price * (1 + self.FEE_RATE)
+        cost = base_size * execution_price * (1 + self.fee_rate)
 
         if portfolio.usdt < cost:
             # Reduce size to available balance
-            available_for_trade = portfolio.usdt / (1 + self.FEE_RATE)
+            available_for_trade = portfolio.usdt / (1 + self.fee_rate)
             base_size = available_for_trade / execution_price
             cost = portfolio.usdt
             if base_size <= 0:
                 return None
 
-        fee = base_size * execution_price * self.FEE_RATE
+        fee = base_size * execution_price * self.fee_rate
 
         portfolio.usdt -= cost
         portfolio.assets[base_asset] = portfolio.assets.get(base_asset, 0) + base_size
@@ -184,8 +197,8 @@ class PaperExecutor:
             return None
 
         base_size = min(base_size, available)
-        proceeds = base_size * execution_price * (1 - self.FEE_RATE)
-        fee = base_size * execution_price * self.FEE_RATE
+        proceeds = base_size * execution_price * (1 - self.fee_rate)
+        fee = base_size * execution_price * self.fee_rate
 
         # Calculate P&L if closing position
         pnl = 0.0
@@ -245,18 +258,19 @@ class PaperExecutor:
         timestamp: datetime
     ) -> Optional[Fill]:
         """Execute a short sell order (borrow and sell)."""
-        # For paper trading, we allow shorting up to portfolio equity
+        # MED-006: Configurable short selling leverage limit
+        # For paper trading, we allow shorting up to portfolio equity * leverage
         equity = portfolio.usdt
-        max_short_value = equity * 2  # 2x leverage max
+        max_short_value = equity * self.max_short_leverage
 
         short_value = base_size * execution_price
         if short_value > max_short_value:
             base_size = max_short_value / execution_price
 
-        fee = base_size * execution_price * self.FEE_RATE
+        fee = base_size * execution_price * self.fee_rate
 
         # Credit USDT for short sale
-        proceeds = base_size * execution_price * (1 - self.FEE_RATE)
+        proceeds = base_size * execution_price * (1 - self.fee_rate)
         portfolio.usdt += proceeds
 
         # Track negative position
@@ -329,12 +343,12 @@ class PaperExecutor:
             return None
 
         base_size = min(base_size, pos.size)
-        cost = base_size * execution_price * (1 + self.FEE_RATE)
-        fee = base_size * execution_price * self.FEE_RATE
+        cost = base_size * execution_price * (1 + self.fee_rate)
+        fee = base_size * execution_price * self.fee_rate
 
         # Check if we have enough USDT to cover
         if portfolio.usdt < cost:
-            base_size = (portfolio.usdt / (1 + self.FEE_RATE)) / execution_price
+            base_size = (portfolio.usdt / (1 + self.fee_rate)) / execution_price
             cost = portfolio.usdt
             if base_size <= 0:
                 return None

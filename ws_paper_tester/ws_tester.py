@@ -9,20 +9,62 @@ Usage:
     python ws_tester.py --strategies mm,of      # Only specific strategies
     python ws_tester.py --simulated             # Use simulated data
     python ws_tester.py --no-dashboard          # Disable web dashboard
+    python ws_tester.py --config config.yaml    # Use specific config file
 """
 
 import asyncio
 import argparse
 import time
 import hashlib
-import signal
+import signal as signal_module  # Renamed to avoid conflict with Signal type
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Dict, Any
 
 # Add project root to path
 import sys
 sys.path.insert(0, str(Path(__file__).parent))
+
+# Try to import yaml for config loading
+try:
+    import yaml
+    YAML_AVAILABLE = True
+except ImportError:
+    YAML_AVAILABLE = False
+
+
+def load_config(config_path: str = None) -> Dict[str, Any]:
+    """
+    Load configuration from YAML file.
+
+    Args:
+        config_path: Path to config file. If None, looks for config.yaml in project root.
+
+    Returns:
+        Configuration dictionary
+    """
+    if not YAML_AVAILABLE:
+        print("[Config] Warning: PyYAML not installed. Using defaults.")
+        return {}
+
+    # Default config location
+    if config_path is None:
+        config_path = Path(__file__).parent / "config.yaml"
+    else:
+        config_path = Path(config_path)
+
+    if not config_path.exists():
+        print(f"[Config] Config file not found: {config_path}")
+        return {}
+
+    try:
+        with open(config_path, 'r') as f:
+            config = yaml.safe_load(f)
+            print(f"[Config] Loaded configuration from {config_path}")
+            return config or {}
+    except Exception as e:
+        print(f"[Config] Error loading config: {e}")
+        return {}
 
 from ws_tester.data_layer import KrakenWSClient, DataManager, SimulatedDataManager
 from ws_tester.strategy_loader import discover_strategies, get_all_symbols
@@ -43,6 +85,8 @@ class WebSocketPaperTester:
         starting_capital: float = STARTING_CAPITAL,
         enable_dashboard: bool = True,
         simulated: bool = False,
+        config: Dict[str, Any] = None,
+        strategy_overrides: Dict[str, Dict] = None,
     ):
         self.session_id = f"wst_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
         self.strategies_dir = strategies_dir
@@ -50,11 +94,18 @@ class WebSocketPaperTester:
         self.enable_dashboard = enable_dashboard
         self.simulated = simulated
         self._running = False
+        self.config = config or {}
 
-        # Initialize logger
+        # Initialize logger with config
+        logging_config = self.config.get('logging', {})
         self.logger = TesterLogger(
             self.session_id,
-            log_config or LogConfig(base_dir=str(Path(__file__).parent / "logs"))
+            log_config or LogConfig(
+                base_dir=logging_config.get('base_dir', str(Path(__file__).parent / "logs")),
+                buffer_size=logging_config.get('buffer_size', 100),
+                enable_aggregated=logging_config.get('enable_aggregated', True),
+                console_output=logging_config.get('console_output', True),
+            )
         )
 
         # Load strategies
@@ -65,24 +116,57 @@ class WebSocketPaperTester:
             print("[ERROR] No strategies loaded. Add strategy files to strategies/")
             return
 
-        # Determine symbols from strategies if not specified
+        # Apply strategy overrides from config (HIGH-003)
+        config_overrides = self.config.get('strategy_overrides', {})
+        all_overrides = {**config_overrides, **(strategy_overrides or {})}
+        self._apply_strategy_overrides(all_overrides)
+
+        # Determine symbols from config, strategies, or use defaults (LOW-003)
+        config_symbols = self.config.get('symbols', [])
         if symbols:
             self.symbols = symbols
+        elif config_symbols:
+            self.symbols = config_symbols
         else:
-            self.symbols = get_all_symbols(self.strategies) or ['XRP/USD', 'BTC/USD']
+            strategy_symbols = get_all_symbols(self.strategies)
+            if strategy_symbols:
+                self.symbols = strategy_symbols
+            else:
+                default_symbols = self.config.get('general', {}).get('default_symbols', ['XRP/USD', 'BTC/USD'])
+                print(f"[Config] Warning: Using fallback symbols {default_symbols}")
+                self.symbols = default_symbols
 
+        # Initialize all components (portfolio manager, data manager, executor)
+        self._initialize_components()
+
+    def _apply_strategy_overrides(self, overrides: Dict[str, Dict]):
+        """Apply configuration overrides to loaded strategies."""
+        for strategy_name, config_updates in overrides.items():
+            if strategy_name in self.strategies:
+                strategy = self.strategies[strategy_name]
+                strategy.config.update(config_updates)
+                print(f"[Config] Applied overrides to strategy '{strategy_name}': {list(config_updates.keys())}")
+
+    def _initialize_components(self):
+        """Initialize portfolio manager, data manager, executor, and stats."""
         # Initialize portfolio manager with all strategies
         strategy_names = list(self.strategies.keys())
-        self.portfolio_manager = PortfolioManager(strategy_names, starting_capital)
+        self.portfolio_manager = PortfolioManager(strategy_names, self.starting_capital)
 
         # Initialize data manager
-        if simulated:
+        if self.simulated:
             self.data_manager = SimulatedDataManager(self.symbols)
         else:
             self.data_manager = DataManager(self.symbols)
 
-        # Initialize executor
-        self.executor = PaperExecutor(self.portfolio_manager)
+        # Initialize executor with configurable parameters
+        executor_config = self.config.get('executor', {})
+        self.executor = PaperExecutor(
+            self.portfolio_manager,
+            max_short_leverage=executor_config.get('max_short_leverage', 2.0),
+            slippage_rate=executor_config.get('slippage_rate', 0.0005),
+            fee_rate=executor_config.get('fee_rate', 0.001),
+        )
 
         # Stats
         self.tick_count = 0
@@ -94,7 +178,7 @@ class WebSocketPaperTester:
             "count": len(self.strategies),
             "names": list(self.strategies.keys()),
             "symbols": self.symbols,
-            "starting_capital": starting_capital,
+            "starting_capital": self.starting_capital,
         })
 
     async def run(
@@ -124,10 +208,18 @@ class WebSocketPaperTester:
         dashboard_task = None
         broadcast_task = None
 
+        # LOW-002: Cache dashboard functions to avoid import inside loop
+        self._dashboard_add_trade = None
+        self._dashboard_update_state = None
+
         if self.enable_dashboard:
             try:
                 import uvicorn
-                from ws_tester.dashboard.server import app, publisher
+                from ws_tester.dashboard.server import app, publisher, add_trade, update_state
+
+                # LOW-002: Cache these functions to avoid repeated imports in loop
+                self._dashboard_add_trade = add_trade
+                self._dashboard_update_state = update_state
 
                 config = uvicorn.Config(
                     app,
@@ -191,8 +283,8 @@ class WebSocketPaperTester:
                 if self.simulated:
                     await self.data_manager.simulate_tick()
 
-                # Get immutable data snapshot
-                snapshot = self.data_manager.get_snapshot()
+                # Get immutable data snapshot (async for full thread safety)
+                snapshot = await self.data_manager.get_snapshot_async()
 
                 if not snapshot or not snapshot.prices:
                     await asyncio.sleep(interval_ms / 1000)
@@ -264,10 +356,9 @@ class WebSocketPaperTester:
                                 portfolio.to_dict(snapshot.prices) if portfolio else {},
                             )
 
-                            # Update dashboard
-                            if self.enable_dashboard:
-                                from ws_tester.dashboard.server import add_trade
-                                add_trade({
+                            # Update dashboard (LOW-002: imports moved outside loop)
+                            if self.enable_dashboard and self._dashboard_add_trade:
+                                self._dashboard_add_trade({
                                     'timestamp': fill.timestamp.isoformat(),
                                     'strategy': name,
                                     'symbol': fill.symbol,
@@ -278,10 +369,9 @@ class WebSocketPaperTester:
                                     'reason': fill.signal_reason,
                                 })
 
-                # Update dashboard state
-                if self.enable_dashboard and (time.time() - last_dashboard_update) > 1.0:
-                    from ws_tester.dashboard.server import update_state
-                    update_state(
+                # Update dashboard state (LOW-002: imports moved outside loop)
+                if self.enable_dashboard and (time.time() - last_dashboard_update) > 1.0 and self._dashboard_update_state:
+                    self._dashboard_update_state(
                         prices=snapshot.prices,
                         strategies=self.portfolio_manager.get_leaderboard(snapshot.prices),
                         aggregate=self.portfolio_manager.get_aggregate(snapshot.prices),
@@ -391,16 +481,18 @@ class WebSocketPaperTester:
 
 def main():
     parser = argparse.ArgumentParser(description="WebSocket Paper Trading Tester")
-    parser.add_argument('--duration', type=int, default=60,
-                       help='Duration in minutes (default: 60)')
-    parser.add_argument('--interval', type=int, default=100,
-                       help='Loop interval in ms (default: 100)')
+    parser.add_argument('--config', type=str, default=None,
+                       help='Path to config.yaml file (default: config.yaml in project root)')
+    parser.add_argument('--duration', type=int, default=None,
+                       help='Duration in minutes (default: from config or 60)')
+    parser.add_argument('--interval', type=int, default=None,
+                       help='Loop interval in ms (default: from config or 100)')
     parser.add_argument('--symbols', type=str, default=None,
-                       help='Comma-separated symbols (default: from strategies)')
+                       help='Comma-separated symbols (default: from config or strategies)')
     parser.add_argument('--strategies-dir', type=str, default='strategies',
                        help='Directory containing strategy files (default: strategies)')
-    parser.add_argument('--capital', type=float, default=100.0,
-                       help='Starting capital per strategy (default: $100)')
+    parser.add_argument('--capital', type=float, default=None,
+                       help='Starting capital per strategy (default: from config or $100)')
     parser.add_argument('--no-dashboard', action='store_true',
                        help='Disable web dashboard')
     parser.add_argument('--simulated', action='store_true',
@@ -408,27 +500,46 @@ def main():
 
     args = parser.parse_args()
 
+    # Load config file (HIGH-003)
+    config = load_config(args.config)
+
+    # CLI arguments take precedence over config file
+    general_config = config.get('general', {})
+
+    duration = args.duration or general_config.get('duration_minutes', 60)
+    interval = args.interval or general_config.get('interval_ms', 100)
+    capital = args.capital or general_config.get('starting_capital', 100.0)
+
     symbols = None
     if args.symbols:
         symbols = [s.strip() for s in args.symbols.split(',')]
 
+    # Determine simulated mode from config or CLI
+    data_config = config.get('data', {})
+    simulated = args.simulated or (data_config.get('source', 'kraken') == 'simulated')
+
+    # Determine dashboard setting from config or CLI
+    dashboard_config = config.get('dashboard', {})
+    enable_dashboard = not args.no_dashboard and dashboard_config.get('enabled', True)
+
     tester = WebSocketPaperTester(
         symbols=symbols,
         strategies_dir=args.strategies_dir,
-        starting_capital=args.capital,
-        enable_dashboard=not args.no_dashboard,
-        simulated=args.simulated,
+        starting_capital=capital,
+        enable_dashboard=enable_dashboard,
+        simulated=simulated,
+        config=config,
     )
 
     # Handle Ctrl+C gracefully
     def signal_handler(sig, frame):
         tester._running = False
 
-    signal.signal(signal.SIGINT, signal_handler)
+    signal_module.signal(signal_module.SIGINT, signal_handler)
 
     asyncio.run(tester.run(
-        duration_minutes=args.duration,
-        interval_ms=args.interval,
+        duration_minutes=duration,
+        interval_ms=interval,
     ))
 
 
