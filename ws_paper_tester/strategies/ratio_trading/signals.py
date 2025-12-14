@@ -25,6 +25,7 @@ from .risk import (
     is_trade_flow_aligned,
     check_spread,
     calculate_position_size,
+    check_fee_profitability,
 )
 from .tracking import (
     track_rejection,
@@ -230,6 +231,29 @@ def generate_signal(
             return None
     else:
         current_spread = 0.0
+
+    # REC-050: Explicit fee profitability check (v4.3.0)
+    use_fee_check = config.get('use_fee_profitability_check', True)
+    fee_rate = config.get('estimated_fee_rate', 0.0026)
+    min_net_profit = config.get('min_net_profit_pct', 0.10)
+    fee_profitable = True
+    net_profit_pct = tp_pct
+
+    if use_fee_check:
+        fee_profitable, net_profit_pct = check_fee_profitability(
+            tp_pct, fee_rate, min_net_profit
+        )
+        if not fee_profitable:
+            state['indicators'] = build_base_indicators(
+                symbol=symbol, status='fee_not_profitable', state=state, price=price
+            )
+            state['indicators']['take_profit_pct'] = round(tp_pct, 4)
+            state['indicators']['round_trip_fee_pct'] = round(fee_rate * 2 * 100, 4)
+            state['indicators']['net_profit_pct'] = round(net_profit_pct, 4)
+            state['indicators']['min_net_profit_pct'] = round(min_net_profit, 4)
+            if track_rejections:
+                track_rejection(state, RejectionReason.FEE_NOT_PROFITABLE, symbol)
+            return None
 
     # Calculate Bollinger Bands
     # REC-036: Optionally use wider bands for crypto volatility
@@ -443,6 +467,10 @@ def generate_signal(
         'correlation_slope': round(state.get('correlation_slope', 0.0), 6),
         'correlation_trend': state.get('correlation_trend_direction', 'stable'),
         'correlation_trend_warnings': state.get('correlation_trend_warnings', 0),
+        # REC-050: Fee profitability check (v4.3.0)
+        'use_fee_profitability_check': use_fee_check,
+        'estimated_fee_rate': round(fee_rate, 6),
+        'net_profit_pct': round(net_profit_pct, 4),
     }
 
     # Position limit check

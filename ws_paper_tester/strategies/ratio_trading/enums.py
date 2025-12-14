@@ -30,6 +30,7 @@ class RejectionReason(Enum):
     NO_SIGNAL_CONDITIONS = "no_signal_conditions"
     CORRELATION_TOO_LOW = "correlation_too_low"  # REC-021
     CORRELATION_DECLINING = "correlation_declining"  # REC-037
+    FEE_NOT_PROFITABLE = "fee_not_profitable"  # REC-050
 
 
 class ExitReason(Enum):

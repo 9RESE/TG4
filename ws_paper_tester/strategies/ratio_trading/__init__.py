@@ -1,5 +1,5 @@
 """
-Ratio Trading Strategy v4.2.1
+Ratio Trading Strategy v4.3.0
 
 Mean reversion strategy for XRP/BTC pair accumulation.
 Trades the XRP/BTC ratio to grow holdings of both assets.
@@ -134,6 +134,25 @@ Version History:
          - Compliance: Maintained 100% with Guide v2.0
          - Status: Production ready - no code changes required
          - Refactored: Split into modular subfolder structure for maintainability
+- 4.3.0: Deep review v9.0 recommendations (December 2025)
+         - REC-050: Added explicit fee profitability check
+           - New config: use_fee_profitability_check, estimated_fee_rate (0.26% Kraken XRP/BTC),
+             min_net_profit_pct (0.10%)
+           - Ensures trades remain profitable after round-trip fees
+           - New RejectionReason: FEE_NOT_PROFITABLE
+         - Raised correlation_warning_threshold from 0.6 to 0.7 for earlier warning
+           - Proactive detection given ongoing XRP structural changes (ETF ecosystem, regulatory clarity)
+         - Increased position_decay_minutes from 5 to 10
+           - Research suggests allowing more time for mean reversion in crypto pairs
+           - Previous 5-min decay was too aggressive relative to typical half-life
+         - REC-041/042: Ongoing correlation monitoring confirmed critical
+         - REC-043: Weekly performance review recommended for first month of production
+         - REC-044/045/046: Document ADF/Johansen/GHE as future enhancements (HIGH priority)
+           - Formal cointegration testing would strengthen theoretical foundation
+           - Currently uses correlation as proxy (acceptable but not optimal)
+         - REC-047/048/049: Document half-life calc, multi-pair support, session awareness
+         - Compliance: Maintained 100% with Guide v2.0
+         - Status: Production ready with enhanced fee protection
 """
 
 # Strategy metadata

@@ -1,5 +1,5 @@
 """
-Ratio Trading Strategy v4.2.1 - Compatibility Shim
+Ratio Trading Strategy v4.3.0 - Compatibility Shim
 
 This file maintains backward compatibility by re-exporting from the
 ratio_trading/ module package.

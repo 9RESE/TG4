@@ -10,7 +10,7 @@ from typing import Dict, Any, List
 # Strategy Metadata
 # =============================================================================
 STRATEGY_NAME = "ratio_trading"
-STRATEGY_VERSION = "4.2.1"
+STRATEGY_VERSION = "4.3.0"
 SYMBOLS = ["XRP/BTC"]
 
 
@@ -108,9 +108,11 @@ CONFIG = {
 
     # ==========================================================================
     # Position Decay (from mean reversion patterns)
+    # v4.3.0: Increased decay_minutes from 5 to 10 per review v9.0 recommendation
+    # Research suggests allowing more time for mean reversion in crypto pairs
     # ==========================================================================
     'use_position_decay': True,       # Enable position decay
-    'position_decay_minutes': 5,      # Start decay after 5 minutes
+    'position_decay_minutes': 10,     # Start decay after 10 minutes (was 5, review v9.0)
     'position_decay_tp_mult': 0.5,    # Reduce TP target to 50% after decay
 
     # ==========================================================================
@@ -120,10 +122,12 @@ CONFIG = {
 
     # ==========================================================================
     # Correlation Monitoring - REC-021
+    # v4.3.0: Raised warning threshold to 0.7 per review v9.0 recommendation
+    # Earlier warning given ongoing XRP structural changes (ETF, regulatory clarity)
     # ==========================================================================
     'use_correlation_monitoring': True,   # Enable correlation monitoring
     'correlation_lookback': 20,           # Periods for correlation calculation
-    'correlation_warning_threshold': 0.6, # REC-024: Warn if correlation below this (raised from 0.5)
+    'correlation_warning_threshold': 0.7, # v4.3.0: Raised to 0.7 (was 0.6) for earlier warning
     'correlation_pause_threshold': 0.4,   # REC-024: Pause trading if below this (raised from 0.3)
     'correlation_pause_enabled': True,    # REC-023: Enabled by default for declining XRP/BTC correlation
 
@@ -147,6 +151,14 @@ CONFIG = {
     # ==========================================================================
     'use_hedge_ratio': False,         # Enable hedge ratio optimization
     'hedge_ratio_lookback': 50,       # Periods for hedge ratio calculation
+
+    # ==========================================================================
+    # Fee Profitability Check - REC-050 (v4.3.0)
+    # Explicit fee check to complement spread filter per review v9.0
+    # ==========================================================================
+    'use_fee_profitability_check': True,  # Enable explicit fee check
+    'estimated_fee_rate': 0.0026,         # Kraken XRP/BTC taker fee (0.26%)
+    'min_net_profit_pct': 0.10,           # Minimum net profit after round-trip fees
 
     # ==========================================================================
     # Rebalancing (for future implementation)

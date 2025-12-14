@@ -104,3 +104,32 @@ def calculate_position_size(
         actual_size = 0.0
 
     return actual_size, available
+
+
+def check_fee_profitability(
+    take_profit_pct: float,
+    fee_rate: float,
+    min_net_profit_pct: float
+) -> Tuple[bool, float]:
+    """
+    Check if trade is profitable after fees.
+
+    REC-050: Explicit fee profitability check per review v9.0.
+
+    Args:
+        take_profit_pct: Expected take profit percentage
+        fee_rate: Fee rate per side (e.g., 0.0026 for 0.26%)
+        min_net_profit_pct: Minimum required net profit after fees
+
+    Returns:
+        (is_profitable, net_profit_pct)
+    """
+    # Round-trip fees (entry + exit)
+    round_trip_fee_pct = fee_rate * 2 * 100  # Convert to percentage
+
+    # Net profit after fees
+    net_profit_pct = take_profit_pct - round_trip_fee_pct
+
+    is_profitable = net_profit_pct >= min_net_profit_pct
+
+    return is_profitable, net_profit_pct

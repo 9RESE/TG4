@@ -44,8 +44,12 @@ def on_start(config: Dict[str, Any], state: Dict[str, Any]) -> None:
     bollinger_std = config.get('bollinger_std_crypto', 2.5) if config.get('use_crypto_bollinger_std', False) else config.get('bollinger_std', 2.0)
     print(f"[ratio_trading] v4.1 Features: CryptoBollingerStd={config.get('use_crypto_bollinger_std', False)} "
           f"(std={bollinger_std})")
+    # REC-050: Fee profitability check
+    fee_rate = config.get('estimated_fee_rate', 0.0026)
+    print(f"[ratio_trading] v4.3 Features: FeeProfitabilityCheck={config.get('use_fee_profitability_check', True)}, "
+          f"FeeRate={fee_rate*100:.2f}%, DecayMinutes={config.get('position_decay_minutes', 10)}")
     if config.get('use_correlation_monitoring', True):
-        print(f"[ratio_trading] Correlation (REC-023/024): warn<{config.get('correlation_warning_threshold', 0.6)}, "
+        print(f"[ratio_trading] Correlation (v4.3.0): warn<{config.get('correlation_warning_threshold', 0.7)}, "
               f"pause<{config.get('correlation_pause_threshold', 0.4)} "
               f"(pause_enabled={config.get('correlation_pause_enabled', True)})")
     print(f"[ratio_trading] Position sizing: {config.get('position_size_usd', 15.0)} USD, "
