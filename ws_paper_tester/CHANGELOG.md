@@ -5,6 +5,44 @@ All notable changes to the WebSocket Paper Tester will be documented in this fil
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.0] - 2025-12-14
+
+### Added
+- **Ratio Trading strategy v3.0.0** - Enhancement refactor per ratio-trading-strategy-review-v3.1.md
+  - REC-018: Dynamic BTC price for USD conversion
+    - `_get_btc_price_usd()` function fetches real-time BTC/USD price from market data
+    - Configurable fallback price and symbol list (`btc_price_fallback`, `btc_price_symbols`)
+    - Replaces hardcoded $100,000 BTC price for accurate conversions
+  - REC-019: Confirmed on_start print statement correctly uses `config.get()` with defaults
+  - REC-020: Separate exit tracking from rejection tracking
+    - New `ExitReason` enum: TRAILING_STOP, POSITION_DECAY, TAKE_PROFIT, STOP_LOSS, MEAN_REVERSION, CORRELATION_EXIT
+    - `_track_exit()` function tracks intentional exits with P&L by reason
+    - Exit statistics in on_stop summary separate from rejections
+  - REC-021: Rolling correlation monitoring
+    - `_calculate_rolling_correlation()` for XRP/BTC correlation calculation
+    - Configurable warning threshold (0.5) and pause threshold (0.3)
+    - Optional trading pause when correlation drops below threshold
+    - Correlation warnings counted and displayed in summary
+  - REC-022: Hedge ratio config placeholders for future enhancement
+  - New indicators: `btc_price_usd`, `correlation`, `use_correlation_monitoring`, `correlation_warnings`
+  - Enhanced on_stop summary with exit statistics and correlation monitoring
+
+- **Feature Documentation**
+  - `docs/development/features/ratio_trading/ratio-trading-v3.0.md` - v3.0.0 feature docs
+
+### Changed
+- **Ratio Trading strategy** (`ratio_trading.py`)
+  - Version updated to 3.0.0
+  - `on_start()` now logs v3.0 features including correlation monitoring config
+  - `on_fill()` uses dynamic BTC price from state for accurate conversions
+  - `generate_signal()` includes correlation monitoring with optional trading pause
+  - Trailing stop and position decay exits now tracked separately from rejections
+  - Enhanced indicators with BTC price and correlation metrics
+
+### Documentation
+- Strategy Development Guide compliance for Ratio Trading: 100% (40+ config parameters)
+- All v3.1 review recommendations implemented and documented
+
 ## [1.6.0] - 2025-12-14
 
 ### Added

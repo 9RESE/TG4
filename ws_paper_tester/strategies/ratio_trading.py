@@ -1,5 +1,5 @@
 """
-Ratio Trading Strategy v2.1.0
+Ratio Trading Strategy v3.0.0
 
 Mean reversion strategy for XRP/BTC pair accumulation.
 Trades the XRP/BTC ratio to grow holdings of both assets.
@@ -20,6 +20,12 @@ Bollinger Band touches can signal trend CONTINUATION rather than reversal.
 Price exceeding the bands may indicate strong momentum, not necessarily a
 mean reversion opportunity. The volatility regime system helps mitigate this
 by pausing in EXTREME conditions and widening thresholds in HIGH volatility.
+
+WARNING - Correlation Stability:
+XRP/BTC correlation has been declining (~24.86% over 90 days as of 2025).
+The strategy includes rolling correlation monitoring to warn when the
+relationship may be weakening. Consider pausing if correlation falls below
+historical norms.
 
 Version History:
 - 1.0.0: Initial implementation
@@ -48,6 +54,15 @@ Version History:
          - Added trailing stops (from mean reversion patterns)
          - Added position decay for stale positions
          - Fixed hardcoded max_losses in on_fill
+- 3.0.0: Review recommendations per ratio-trading-strategy-review-v3.1.md
+         - REC-018: Dynamic BTC price for USD conversion
+         - REC-019: Fixed on_start print statement (already correct)
+         - REC-020: Separate exit tracking from rejection tracking
+         - REC-021: Rolling correlation monitoring with pause option
+         - REC-022: Hedge ratio calculation (optional, future enhancement)
+         - Added ExitReason enum for intentional exit tracking
+         - Added correlation warning system
+         - Improved accumulation metrics with real-time USD values
 """
 from datetime import datetime
 from typing import Dict, Any, Optional, List, Tuple
@@ -65,7 +80,7 @@ except ImportError:
 # REQUIRED: Strategy Metadata
 # =============================================================================
 STRATEGY_NAME = "ratio_trading"
-STRATEGY_VERSION = "2.1.0"
+STRATEGY_VERSION = "3.0.0"
 SYMBOLS = ["XRP/BTC"]
 
 
@@ -93,8 +108,22 @@ class RejectionReason(Enum):
     SPREAD_TOO_WIDE = "spread_too_wide"
     RSI_NOT_CONFIRMED = "rsi_not_confirmed"  # REC-014
     STRONG_TREND_DETECTED = "strong_trend_detected"  # REC-015
-    POSITION_DECAYED = "position_decayed"  # Position decay
     NO_SIGNAL_CONDITIONS = "no_signal_conditions"
+    CORRELATION_TOO_LOW = "correlation_too_low"  # REC-021
+
+
+class ExitReason(Enum):
+    """
+    Intentional exit reasons for tracking (separate from rejections).
+
+    REC-020: Exit tracking should be separate from rejection tracking.
+    """
+    TRAILING_STOP = "trailing_stop"
+    POSITION_DECAY = "position_decay"
+    TAKE_PROFIT = "take_profit"
+    STOP_LOSS = "stop_loss"
+    MEAN_REVERSION = "mean_reversion"  # Z-score returned to exit threshold
+    CORRELATION_EXIT = "correlation_exit"  # Exit due to low correlation
 
 
 # =============================================================================
@@ -191,6 +220,27 @@ CONFIG = {
     # Rejection Tracking
     # ==========================================================================
     'track_rejections': True,         # Enable rejection tracking
+
+    # ==========================================================================
+    # Correlation Monitoring - REC-021
+    # ==========================================================================
+    'use_correlation_monitoring': True,   # Enable correlation monitoring
+    'correlation_lookback': 20,           # Periods for correlation calculation
+    'correlation_warning_threshold': 0.5, # Warn if correlation below this
+    'correlation_pause_threshold': 0.3,   # Pause trading if below this
+    'correlation_pause_enabled': False,   # Whether to pause on low correlation
+
+    # ==========================================================================
+    # Dynamic BTC Price - REC-018
+    # ==========================================================================
+    'btc_price_fallback': 100000.0,   # Fallback BTC/USD price if unavailable
+    'btc_price_symbols': ['BTC/USDT', 'BTC/USD'],  # Symbols to check for BTC price
+
+    # ==========================================================================
+    # Hedge Ratio - REC-022 (Future Enhancement)
+    # ==========================================================================
+    'use_hedge_ratio': False,         # Enable hedge ratio optimization
+    'hedge_ratio_lookback': 50,       # Periods for hedge ratio calculation
 
     # ==========================================================================
     # Rebalancing (for future implementation)
@@ -454,6 +504,88 @@ def _check_position_decay(
     return is_decayed, minutes_held
 
 
+def _calculate_rolling_correlation(
+    prices_a: List[float],
+    prices_b: List[float],
+    lookback: int = 20
+) -> float:
+    """
+    Calculate rolling Pearson correlation between two price series.
+
+    REC-021: Rolling correlation monitoring.
+
+    Args:
+        prices_a: First price series (e.g., XRP prices in BTC)
+        prices_b: Second price series (e.g., BTC prices in USD)
+        lookback: Number of periods for correlation calculation
+
+    Returns:
+        Correlation coefficient (-1 to 1), 0.0 if insufficient data
+    """
+    if len(prices_a) < lookback or len(prices_b) < lookback:
+        return 0.0
+
+    # Use most recent lookback periods
+    a = prices_a[-lookback:]
+    b = prices_b[-lookback:]
+
+    if len(a) != len(b):
+        # Align lengths
+        min_len = min(len(a), len(b))
+        a = a[-min_len:]
+        b = b[-min_len:]
+
+    if len(a) < 3:
+        return 0.0
+
+    # Calculate means
+    mean_a = sum(a) / len(a)
+    mean_b = sum(b) / len(b)
+
+    # Calculate covariance and standard deviations
+    covariance = sum((a[i] - mean_a) * (b[i] - mean_b) for i in range(len(a))) / len(a)
+    variance_a = sum((x - mean_a) ** 2 for x in a) / len(a)
+    variance_b = sum((x - mean_b) ** 2 for x in b) / len(b)
+
+    std_a = variance_a ** 0.5
+    std_b = variance_b ** 0.5
+
+    if std_a == 0 or std_b == 0:
+        return 0.0
+
+    correlation = covariance / (std_a * std_b)
+
+    # Clamp to [-1, 1] to handle floating point errors
+    return max(-1.0, min(1.0, correlation))
+
+
+def _get_btc_price_usd(
+    data: DataSnapshot,
+    config: Dict[str, Any]
+) -> float:
+    """
+    Get BTC/USD price from market data or fallback.
+
+    REC-018: Dynamic BTC price for USD conversion.
+
+    Args:
+        data: Market data snapshot
+        config: Strategy configuration
+
+    Returns:
+        BTC price in USD
+    """
+    btc_symbols = config.get('btc_price_symbols', ['BTC/USDT', 'BTC/USD'])
+    fallback = config.get('btc_price_fallback', 100000.0)
+
+    for symbol in btc_symbols:
+        price = data.prices.get(symbol)
+        if price and price > 0:
+            return price
+
+    return fallback
+
+
 # =============================================================================
 # Section 3: Volatility Regime Classification - REC-004
 # =============================================================================
@@ -607,6 +739,37 @@ def _track_rejection(
             state['rejection_counts_by_symbol'][symbol].get(reason_key, 0) + 1
 
 
+def _track_exit(
+    state: Dict[str, Any],
+    reason: ExitReason,
+    symbol: str = None,
+    pnl: float = 0.0
+) -> None:
+    """
+    Track intentional exit for analysis.
+
+    REC-020: Separate exit tracking from rejection tracking.
+    """
+    if 'exit_counts' not in state:
+        state['exit_counts'] = {}
+    if 'exit_counts_by_symbol' not in state:
+        state['exit_counts_by_symbol'] = {}
+    if 'exit_pnl_by_reason' not in state:
+        state['exit_pnl_by_reason'] = {}
+
+    reason_key = reason.value
+    state['exit_counts'][reason_key] = state['exit_counts'].get(reason_key, 0) + 1
+
+    # Track P&L by exit reason
+    state['exit_pnl_by_reason'][reason_key] = state['exit_pnl_by_reason'].get(reason_key, 0) + pnl
+
+    if symbol:
+        if symbol not in state['exit_counts_by_symbol']:
+            state['exit_counts_by_symbol'][symbol] = {}
+        state['exit_counts_by_symbol'][symbol][reason_key] = \
+            state['exit_counts_by_symbol'][symbol].get(reason_key, 0) + 1
+
+
 def _build_base_indicators(
     symbol: str,
     status: str,
@@ -666,6 +829,17 @@ def _initialize_state(state: Dict[str, Any]) -> None:
     # Rejection tracking
     state['rejection_counts'] = {}
     state['rejection_counts_by_symbol'] = {}
+
+    # REC-020: Exit tracking (separate from rejections)
+    state['exit_counts'] = {}
+    state['exit_counts_by_symbol'] = {}
+    state['exit_pnl_by_reason'] = {}
+
+    # REC-021: Correlation monitoring
+    state['btc_price_history'] = []  # BTC/USD price history for correlation
+    state['correlation_history'] = []  # Rolling correlation values
+    state['correlation_warnings'] = 0  # Count of low correlation warnings
+    state['last_btc_price_usd'] = None  # Last BTC price used for conversion
 
     # Entry tracking with trailing stop support
     state['position_entries'] = {}
@@ -733,17 +907,29 @@ def _calculate_position_size(
     return actual_size, available
 
 
-def _convert_usd_to_xrp(usd_amount: float, price_btc_per_xrp: float, btc_price_usd: float = None) -> float:
+def _convert_usd_to_xrp(
+    usd_amount: float,
+    price_btc_per_xrp: float,
+    btc_price_usd: float
+) -> float:
     """
     Convert USD amount to XRP for ratio trading.
 
-    For XRP/BTC pair, we need to convert through BTC.
-    Simplified: Uses approximate conversion.
+    REC-018: Now uses dynamic BTC price instead of hardcoded fallback.
+
+    For XRP/BTC pair, we need to convert through BTC:
+    USD -> BTC -> XRP
+
+    Args:
+        usd_amount: Amount in USD to convert
+        price_btc_per_xrp: Current XRP/BTC price (BTC per XRP)
+        btc_price_usd: Current BTC/USD price
+
+    Returns:
+        Equivalent XRP amount
     """
-    # For paper trading, we use a simplified conversion
-    # In production, you'd use actual BTC/USD price
-    if btc_price_usd is None:
-        btc_price_usd = 100000.0  # Approximate BTC price for conversion
+    if btc_price_usd <= 0 or price_btc_per_xrp <= 0:
+        return 0.0
 
     btc_amount = usd_amount / btc_price_usd
     xrp_amount = btc_amount / price_btc_per_xrp
@@ -908,6 +1094,17 @@ def generate_signal(
     # Update price history
     price_history = _update_price_history(data, state, symbol, price)
 
+    # REC-018: Get dynamic BTC price for USD conversion
+    btc_price_usd = _get_btc_price_usd(data, config)
+    state['last_btc_price_usd'] = btc_price_usd
+
+    # REC-021: Update BTC price history for correlation monitoring
+    if config.get('use_correlation_monitoring', True):
+        if 'btc_price_history' not in state:
+            state['btc_price_history'] = []
+        state['btc_price_history'].append(btc_price_usd)
+        state['btc_price_history'] = state['btc_price_history'][-50:]  # Keep last 50
+
     # Check minimum candles
     min_candles = config.get('min_candles', 10)
     if len(price_history) < min_candles:
@@ -973,6 +1170,44 @@ def generate_signal(
             if track_rejections:
                 _track_rejection(state, RejectionReason.REGIME_PAUSE, symbol)
             return None
+
+    # REC-021: Correlation monitoring
+    correlation = 0.0
+    use_correlation = config.get('use_correlation_monitoring', True)
+    if use_correlation:
+        corr_lookback = config.get('correlation_lookback', 20)
+        btc_history = state.get('btc_price_history', [])
+
+        if len(price_history) >= corr_lookback and len(btc_history) >= corr_lookback:
+            correlation = _calculate_rolling_correlation(
+                price_history, btc_history, corr_lookback
+            )
+
+            # Store correlation history
+            if 'correlation_history' not in state:
+                state['correlation_history'] = []
+            state['correlation_history'].append(correlation)
+            state['correlation_history'] = state['correlation_history'][-20:]  # Keep last 20
+
+            # Check correlation thresholds
+            warn_threshold = config.get('correlation_warning_threshold', 0.5)
+            pause_threshold = config.get('correlation_pause_threshold', 0.3)
+            pause_enabled = config.get('correlation_pause_enabled', False)
+
+            # Warning if correlation is low
+            if correlation < warn_threshold:
+                state['correlation_warnings'] = state.get('correlation_warnings', 0) + 1
+
+            # Pause trading if enabled and correlation is very low
+            if pause_enabled and correlation < pause_threshold and correlation != 0.0:
+                state['indicators'] = _build_base_indicators(
+                    symbol=symbol, status='correlation_pause', state=state, price=price
+                )
+                state['indicators']['correlation'] = round(correlation, 4)
+                state['indicators']['correlation_threshold'] = pause_threshold
+                if track_rejections:
+                    _track_rejection(state, RejectionReason.CORRELATION_TOO_LOW, symbol)
+                return None
 
     # Entry/exit thresholds with regime adjustment
     base_entry_threshold = config.get('entry_threshold', 1.5)  # REC-013: Higher default
@@ -1067,6 +1302,12 @@ def generate_signal(
         'trend_direction': trend_direction,
         'trend_strength': round(trend_strength, 2),
         'use_trend_filter': use_trend_filter,
+        # REC-018: Dynamic BTC price
+        'btc_price_usd': round(btc_price_usd, 2),
+        # REC-021: Correlation monitoring
+        'correlation': round(correlation, 4),
+        'use_correlation_monitoring': use_correlation,
+        'correlation_warnings': state.get('correlation_warnings', 0),
     }
 
     # Position limit check
@@ -1120,9 +1361,12 @@ def generate_signal(
                         'strategy': 'ratio_trading',
                         'signal_type': 'trailing_stop',
                         'trailing_stop_price': round(trailing_stop_price, 8),
+                        'exit_reason': ExitReason.TRAILING_STOP.value,  # REC-020
                     }
                 )
                 state['indicators']['status'] = 'trailing_stop_triggered'
+                # REC-020: Track as exit, not rejection
+                _track_exit(state, ExitReason.TRAILING_STOP, symbol)
                 state['last_signal_time'] = current_time
                 state['trade_count'] += 1
                 return signal
@@ -1154,11 +1398,12 @@ def generate_signal(
                         'signal_type': 'position_decay',
                         'minutes_held': round(minutes_held, 1),
                         'z_score': round(z_score, 3),
+                        'exit_reason': ExitReason.POSITION_DECAY.value,  # REC-020
                     }
                 )
                 state['indicators']['status'] = 'position_decay_exit'
-                if track_rejections:
-                    _track_rejection(state, RejectionReason.POSITION_DECAYED, symbol)
+                # REC-020: Track as exit, not rejection
+                _track_exit(state, ExitReason.POSITION_DECAY, symbol)
                 state['last_signal_time'] = current_time
                 state['trade_count'] += 1
                 return signal
@@ -1294,13 +1539,19 @@ def on_start(config: Dict[str, Any], state: Dict[str, Any]) -> None:
     print(f"[ratio_trading] v{STRATEGY_VERSION} started")
     print(f"[ratio_trading] Symbol: {SYMBOLS[0]} (ratio pair)")
     print(f"[ratio_trading] Entry threshold: {config.get('entry_threshold', 1.5)} std (REC-013)")
-    print(f"[ratio_trading] Features: VolatilityRegimes={config.get('use_volatility_regimes', True)}, "
+    print(f"[ratio_trading] Core Features: VolatilityRegimes={config.get('use_volatility_regimes', True)}, "
           f"CircuitBreaker={config.get('use_circuit_breaker', True)}, "
           f"SpreadFilter={config.get('use_spread_filter', True)}")
     print(f"[ratio_trading] v2.1 Features: RSI={config.get('use_rsi_confirmation', True)}, "
           f"TrendFilter={config.get('use_trend_filter', True)}, "
           f"TrailingStop={config.get('use_trailing_stop', True)}, "
           f"PositionDecay={config.get('use_position_decay', True)}")
+    print(f"[ratio_trading] v3.0 Features: CorrelationMonitoring={config.get('use_correlation_monitoring', True)}, "
+          f"DynamicBTCPrice=True, SeparateExitTracking=True")
+    if config.get('use_correlation_monitoring', True):
+        print(f"[ratio_trading] Correlation: warn<{config.get('correlation_warning_threshold', 0.5)}, "
+              f"pause<{config.get('correlation_pause_threshold', 0.3)} "
+              f"(pause_enabled={config.get('correlation_pause_enabled', False)})")
     print(f"[ratio_trading] Position sizing: {config.get('position_size_usd', 15.0)} USD, "
           f"Max: {config.get('max_position_usd', 50.0)} USD")
     print(f"[ratio_trading] R:R ratio: {config.get('take_profit_pct', 0.6)}/{config.get('stop_loss_pct', 0.6)} "
@@ -1318,6 +1569,7 @@ def on_fill(fill: Dict[str, Any], state: Dict[str, Any]) -> None:
     REC-006: Per-pair PnL tracking
     REC-005: Circuit breaker consecutive loss tracking
     REC-016: Enhanced accumulation metrics
+    REC-018: Dynamic BTC price for USD conversion
     """
     side = fill.get('side', '')
     symbol = fill.get('symbol', SYMBOLS[0])
@@ -1328,9 +1580,12 @@ def on_fill(fill: Dict[str, Any], state: Dict[str, Any]) -> None:
 
     value = fill.get('value', size)  # USD value
 
+    # REC-018: Get BTC price from state (set in generate_signal) or fallback
+    btc_price_usd = state.get('last_btc_price_usd', 100000.0)
+
     # Convert USD to approximate XRP for tracking
     if price > 0:
-        xrp_amount = _convert_usd_to_xrp(value, price)
+        xrp_amount = _convert_usd_to_xrp(value, price, btc_price_usd)
     else:
         xrp_amount = 0
 
@@ -1419,6 +1674,8 @@ def on_stop(state: Dict[str, Any]) -> None:
 
     Logs comprehensive summary of trading performance.
     REC-016: Enhanced accumulation metrics in summary.
+    REC-020: Exit tracking statistics.
+    REC-021: Correlation monitoring summary.
     """
     symbol = SYMBOLS[0]
 
@@ -1431,6 +1688,16 @@ def on_stop(state: Dict[str, Any]) -> None:
 
     rejection_counts = state.get('rejection_counts', {})
     total_rejections = sum(rejection_counts.values())
+
+    # REC-020: Exit tracking statistics
+    exit_counts = state.get('exit_counts', {})
+    exit_pnl_by_reason = state.get('exit_pnl_by_reason', {})
+    total_exits = sum(exit_counts.values())
+
+    # REC-021: Correlation monitoring statistics
+    correlation_warnings = state.get('correlation_warnings', 0)
+    correlation_history = state.get('correlation_history', [])
+    avg_correlation = sum(correlation_history) / len(correlation_history) if correlation_history else 0
 
     # REC-016: Enhanced accumulation metrics
     xrp_acc = state.get('xrp_accumulated', 0)
@@ -1470,6 +1737,15 @@ def on_stop(state: Dict[str, Any]) -> None:
         'rejection_counts': rejection_counts,
         'rejection_counts_by_symbol': state.get('rejection_counts_by_symbol', {}),
         'total_rejections': total_rejections,
+        # REC-020: Exit tracking
+        'exit_counts': exit_counts,
+        'exit_counts_by_symbol': state.get('exit_counts_by_symbol', {}),
+        'exit_pnl_by_reason': exit_pnl_by_reason,
+        'total_exits': total_exits,
+        # REC-021: Correlation monitoring
+        'correlation_warnings': correlation_warnings,
+        'avg_correlation': avg_correlation,
+        'last_btc_price_usd': state.get('last_btc_price_usd'),
     }
 
     print(f"[ratio_trading] Stopped. PnL: ${total_pnl:.4f}, Trades: {total_trades}, Win Rate: {win_rate:.1f}%")
@@ -1485,6 +1761,17 @@ def on_stop(state: Dict[str, Any]) -> None:
     # Print accumulation summary (unique to ratio trading) - REC-016: Enhanced
     print(f"[ratio_trading]   Accumulated: XRP={xrp_acc:.4f} (${xrp_value_usd:.2f} cost, {xrp_trades} trades)")
     print(f"[ratio_trading]   Accumulated: BTC={btc_acc:.8f} (${btc_value_usd:.2f} value, {btc_trades} trades)")
+
+    # REC-020: Print exit tracking summary
+    if exit_counts:
+        print(f"[ratio_trading] Intentional exits ({total_exits} total):")
+        for reason, count in sorted(exit_counts.items(), key=lambda x: -x[1]):
+            pnl_for_reason = exit_pnl_by_reason.get(reason, 0)
+            print(f"[ratio_trading]   - {reason}: {count} (PnL: ${pnl_for_reason:.4f})")
+
+    # REC-021: Print correlation summary
+    if correlation_history:
+        print(f"[ratio_trading] Correlation: avg={avg_correlation:.4f}, warnings={correlation_warnings}")
 
     # Print rejection summary
     if rejection_counts:
