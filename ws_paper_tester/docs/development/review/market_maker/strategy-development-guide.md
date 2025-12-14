@@ -1,10 +1,13 @@
 # Strategy Development Guide
 
-**Version:** 1.1
+**Version:** 2.0
 **Target Platform:** WebSocket Paper Tester v1.4.0+
 **Supported Pairs:** XRP/USDT, BTC/USDT, XRP/BTC (Kraken)
+**Last Updated:** 2025-12-14
 
 This guide provides comprehensive instructions for developing trading strategies that integrate seamlessly with the WebSocket Paper Tester platform.
+
+> **Version 2.0 Note:** This guide has been significantly enhanced based on lessons learned from 15+ strategy review cycles across order_flow, mean_reversion, ratio_trading, and market_making strategies. New sections cover volatility regime classification, circuit breakers, signal rejection tracking, and other patterns that emerged as essential during development.
 
 ---
 
@@ -24,6 +27,21 @@ This guide provides comprehensive instructions for developing trading strategies
 12. [Performance Considerations](#12-performance-considerations)
 13. [Per-Pair PnL Tracking](#13-per-pair-pnl-tracking) *(v1.4.0+)*
 14. [Advanced Features](#14-advanced-features) *(v1.4.0+)*
+
+### **Version 2.0: Lessons Learned from Production Strategies**
+
+15. [Volatility Regime Classification](#15-volatility-regime-classification) *(v2.0)*
+16. [Circuit Breaker Protection](#16-circuit-breaker-protection) *(v2.0)*
+17. [Signal Rejection Tracking](#17-signal-rejection-tracking) *(v2.0)*
+18. [Trade Flow Confirmation](#18-trade-flow-confirmation) *(v2.0)*
+19. [Trend Filtering](#19-trend-filtering) *(v2.0)*
+20. [Session & Time-of-Day Awareness](#20-session--time-of-day-awareness) *(v2.0)*
+21. [Position Decay](#21-position-decay) *(v2.0)*
+22. [Per-Symbol Configuration (SYMBOL_CONFIGS)](#22-per-symbol-configuration) *(v2.0)*
+23. [Fee Profitability Checks](#23-fee-profitability-checks) *(v2.0)*
+24. [Correlation Monitoring](#24-correlation-monitoring) *(v2.0)*
+25. [Research-Backed Parameters](#25-research-backed-parameters) *(v2.0)*
+26. [Strategy Scope Documentation](#26-strategy-scope-documentation) *(v2.0)*
 
 ---
 
@@ -1457,6 +1475,947 @@ CONFIG = {
 
 ---
 
-**Document Version:** 1.1
-**Last Updated:** 2025-12-13
+## 15. Volatility Regime Classification
+
+*Added in v2.0 - Learned from order_flow v3.0+, mean_reversion v2.0+*
+
+### Why Volatility Regimes Matter
+
+Cryptocurrency markets exhibit extreme volatility variations. Fixed parameters fail because:
+- **Low volatility**: Thresholds too wide, missing opportunities
+- **High volatility**: Thresholds too tight, generating false signals
+- **Extreme volatility**: Market conditions unsuitable for trading
+
+### Standard Regime Classification
+
+```python
+from enum import Enum
+
+class VolatilityRegime(Enum):
+    LOW = "low"           # < 0.3% volatility
+    MEDIUM = "medium"     # 0.3% - 0.8%
+    HIGH = "high"         # 0.8% - 1.5%
+    EXTREME = "extreme"   # > 1.5%
+
+def _get_volatility_regime(volatility_pct: float, config: dict) -> VolatilityRegime:
+    """Classify current volatility into regime."""
+    low_thresh = config.get('regime_low_threshold', 0.3)
+    medium_thresh = config.get('regime_medium_threshold', 0.8)
+    high_thresh = config.get('regime_high_threshold', 1.5)
+
+    if volatility_pct < low_thresh:
+        return VolatilityRegime.LOW
+    elif volatility_pct < medium_thresh:
+        return VolatilityRegime.MEDIUM
+    elif volatility_pct < high_thresh:
+        return VolatilityRegime.HIGH
+    else:
+        return VolatilityRegime.EXTREME
+```
+
+### Regime Adjustment Multipliers
+
+| Regime | Threshold Multiplier | Size Multiplier | Notes |
+|--------|---------------------|-----------------|-------|
+| LOW | 0.8 - 0.9 | 1.0 | Tighter thresholds, normal size |
+| MEDIUM | 1.0 | 1.0 | Baseline parameters |
+| HIGH | 1.2 - 1.3 | 0.7 - 0.8 | Wider thresholds, reduced size |
+| EXTREME | N/A | 0.0 | **Pause trading** |
+
+### Configuration Pattern
+
+```python
+CONFIG = {
+    # Volatility regime settings
+    'use_volatility_regimes': True,
+    'base_volatility_pct': 0.5,        # Baseline volatility
+    'volatility_lookback': 20,          # Candles for calculation
+
+    # Regime thresholds
+    'regime_low_threshold': 0.3,
+    'regime_medium_threshold': 0.8,
+    'regime_high_threshold': 1.5,
+    'regime_extreme_pause': True,       # Pause in EXTREME
+
+    # Regime multipliers
+    'regime_low_threshold_mult': 0.9,
+    'regime_high_threshold_mult': 1.3,
+    'regime_high_size_mult': 0.8,
+    'regime_extreme_size_mult': 0.0,    # No trading
+}
+```
+
+### Key Lesson Learned
+
+> **From order_flow v3.1 review**: "The strategy uses fixed thresholds regardless of market volatility. Research indicates mean reversion needs wider thresholds in high volatility and tighter in low volatility."
+
+---
+
+## 16. Circuit Breaker Protection
+
+*Added in v2.0 - Learned from all strategy reviews*
+
+### Why Circuit Breakers Are Essential
+
+Without circuit breakers, strategies can:
+- Continue losing during adverse market conditions
+- Compound losses during regime changes
+- Fail to recognize when assumptions are invalid
+
+### Standard Implementation
+
+```python
+def _check_circuit_breaker(state: dict, config: dict) -> bool:
+    """Returns True if circuit breaker is active (should NOT trade)."""
+    if not config.get('use_circuit_breaker', True):
+        return False
+
+    max_losses = config.get('max_consecutive_losses', 3)
+    cooldown_minutes = config.get('circuit_breaker_minutes', 15)
+
+    consecutive_losses = state.get('consecutive_losses', 0)
+
+    # Check if in cooldown period
+    cb_triggered_time = state.get('circuit_breaker_triggered_time')
+    if cb_triggered_time:
+        elapsed = (datetime.now() - cb_triggered_time).total_seconds() / 60
+        if elapsed < cooldown_minutes:
+            return True  # Still in cooldown
+        else:
+            # Cooldown complete, reset
+            state['circuit_breaker_triggered_time'] = None
+            state['consecutive_losses'] = 0
+            return False
+
+    # Check if should trigger
+    if consecutive_losses >= max_losses:
+        state['circuit_breaker_triggered_time'] = datetime.now()
+        return True
+
+    return False
+```
+
+### Tracking in on_fill()
+
+```python
+def on_fill(fill: dict, state: dict) -> None:
+    pnl = fill.get('pnl', 0)
+
+    if pnl < 0:
+        state['consecutive_losses'] = state.get('consecutive_losses', 0) + 1
+    elif pnl > 0:
+        state['consecutive_losses'] = 0  # Reset on win
+```
+
+### Configuration Pattern
+
+```python
+CONFIG = {
+    'use_circuit_breaker': True,
+    'max_consecutive_losses': 3,
+    'circuit_breaker_minutes': 15,
+}
+```
+
+### Key Lesson Learned
+
+> **From mean_reversion v1.0 review**: "No protection against consecutive losses. Can continue losing during adverse conditions. May experience significant drawdown."
+
+---
+
+## 17. Signal Rejection Tracking
+
+*Added in v2.0 - Learned from mean_reversion v2.0+, order_flow v3.0+*
+
+### Why Track Rejections
+
+Tracking why signals are NOT generated is as important as tracking signals:
+- Identifies parameter tuning opportunities
+- Reveals market condition patterns
+- Enables strategy optimization
+
+### Standard Rejection Categories
+
+```python
+from enum import Enum
+
+class RejectionReason(Enum):
+    NO_SIGNAL_CONDITIONS = "no_signal_conditions"
+    TIME_COOLDOWN = "time_cooldown"
+    TRADE_COOLDOWN = "trade_cooldown"
+    WARMING_UP = "warming_up"
+    TRADE_FLOW_NOT_ALIGNED = "trade_flow_not_aligned"
+    REGIME_PAUSE = "regime_pause"
+    CIRCUIT_BREAKER = "circuit_breaker"
+    MAX_POSITION = "max_position"
+    INSUFFICIENT_SIZE = "insufficient_size"
+    NO_PRICE_DATA = "no_price_data"
+    TRENDING_MARKET = "trending_market"     # For mean reversion
+    HIGH_VPIN = "high_vpin"                 # For order flow
+    SPREAD_TOO_WIDE = "spread_too_wide"     # For market making
+    LOW_CORRELATION = "low_correlation"      # For ratio trading
+```
+
+### Tracking Implementation
+
+```python
+def _track_rejection(state: dict, reason: RejectionReason, symbol: str) -> None:
+    """Track why a signal was rejected."""
+    if not state.get('track_rejections', True):
+        return
+
+    if 'rejection_counts' not in state:
+        state['rejection_counts'] = {}
+
+    key = reason.value
+    state['rejection_counts'][key] = state['rejection_counts'].get(key, 0) + 1
+```
+
+### Logging in on_stop()
+
+```python
+def on_stop(state: dict) -> None:
+    """Log rejection statistics in session summary."""
+    rejection_counts = state.get('rejection_counts', {})
+    if rejection_counts:
+        print(f"\n[{STRATEGY_NAME}] Signal Rejection Summary:")
+        for reason, count in sorted(rejection_counts.items(),
+                                    key=lambda x: -x[1]):
+            print(f"  {reason}: {count}")
+```
+
+### Key Lesson Learned
+
+> **From order_flow v2.2 review**: "Cannot debug why signals aren't generated. No visibility into market conditions. Production monitoring impossible."
+
+---
+
+## 18. Trade Flow Confirmation
+
+*Added in v2.0 - Learned from order_flow v2.2+, mean_reversion v2.0+*
+
+### Why Confirm with Trade Flow
+
+Technical indicator signals can be invalidated by actual market microstructure. Trade flow confirmation:
+- Validates that the market "agrees" with your signal
+- Reduces false signals in momentum strategies
+- Confirms mean reversion opportunities
+
+### Implementation Pattern
+
+```python
+def _is_trade_flow_aligned(
+    data: DataSnapshot,
+    direction: str,       # 'buy' or 'sell'
+    symbol: str,
+    config: dict
+) -> bool:
+    """Check if trade flow supports signal direction."""
+    if not config.get('use_trade_flow_confirmation', True):
+        return True  # Skip check if disabled
+
+    threshold = config.get('trade_flow_threshold', 0.10)
+    lookback = config.get('trade_flow_lookback', 50)
+
+    trade_flow = data.get_trade_imbalance(symbol, lookback)
+    if trade_flow is None:
+        return True  # No data, allow signal
+
+    if direction == 'buy':
+        return trade_flow > threshold  # More buy pressure
+    elif direction == 'sell':
+        return trade_flow < -threshold  # More sell pressure
+
+    return True
+```
+
+### Configuration Pattern
+
+```python
+CONFIG = {
+    'use_trade_flow_confirmation': True,
+    'trade_flow_threshold': 0.10,
+    'trade_flow_lookback': 50,
+}
+```
+
+### Strategy-Specific Considerations
+
+| Strategy Type | Trade Flow Usage | Notes |
+|---------------|------------------|-------|
+| Momentum (order_flow) | Confirm direction | Flow should match signal |
+| Mean Reversion | Confirm reversal starting | Flow should be turning |
+| Market Making | Optional | Check before adding to position |
+| Ratio Trading | Cross-check both assets | Ensure both moving as expected |
+
+---
+
+## 19. Trend Filtering
+
+*Added in v2.0 - Learned from mean_reversion v3.0+*
+
+### Why Filter Trends
+
+Mean reversion strategies perform poorly in trending markets. Trend filtering:
+- Blocks signals during strong directional moves
+- Allows "band walks" to continue without losses
+- Focuses on ranging market opportunities
+
+### Linear Regression Slope Method
+
+```python
+def _calculate_trend_slope(candles: list, period: int) -> float:
+    """Calculate trend slope using linear regression."""
+    if len(candles) < period:
+        return 0.0
+
+    recent = candles[-period:]
+    closes = [c.close for c in recent]
+
+    # Simple linear regression
+    n = len(closes)
+    x_mean = (n - 1) / 2
+    y_mean = sum(closes) / n
+
+    numerator = sum((i - x_mean) * (closes[i] - y_mean) for i in range(n))
+    denominator = sum((i - x_mean) ** 2 for i in range(n))
+
+    if denominator == 0:
+        return 0.0
+
+    slope = numerator / denominator
+
+    # Convert to percentage
+    return (slope / y_mean) * 100
+
+def _is_trending(slope: float, threshold: float) -> bool:
+    """Determine if market is trending based on slope."""
+    return abs(slope) > threshold
+```
+
+### Trend Confirmation Period
+
+```python
+# Lesson: Single evaluation can flip trend status incorrectly
+# Use confirmation period to avoid false positives in choppy markets
+
+def _check_trend_with_confirmation(
+    current_slope: float,
+    state: dict,
+    config: dict
+) -> bool:
+    """Returns True if market is confirmed trending."""
+    threshold = config.get('trend_slope_threshold', 0.05)
+    confirmation_periods = config.get('trend_confirmation_periods', 3)
+
+    is_trending_now = abs(current_slope) > threshold
+
+    if is_trending_now:
+        state['trend_confirmation_count'] = state.get('trend_confirmation_count', 0) + 1
+    else:
+        state['trend_confirmation_count'] = 0
+
+    return state['trend_confirmation_count'] >= confirmation_periods
+```
+
+### Key Lesson Learned
+
+> **From mean_reversion v4.0 review**: "The trend filter uses linear regression slope with 0.05% threshold. May trigger in choppy markets. Added confirmation period (3 consecutive trending evaluations) to prevent false positives."
+
+---
+
+## 20. Session & Time-of-Day Awareness
+
+*Added in v2.0 - Learned from order_flow v4.0*
+
+### Why Session Awareness Matters
+
+Cryptocurrency markets show distinct patterns by trading session:
+- **Asian Session**: Lower liquidity, higher volatility
+- **European Session**: Increasing volume, moderate volatility
+- **US Session**: Highest volume, often directional moves
+- **Overlap Periods**: Highest activity, best opportunities
+
+### Session Classification
+
+```python
+from enum import Enum
+
+class TradingSession(Enum):
+    ASIA = "asia"
+    EUROPE = "europe"
+    US = "us"
+    US_EUROPE_OVERLAP = "us_europe_overlap"
+    OFF_HOURS = "off_hours"
+
+def _get_trading_session(hour_utc: int) -> TradingSession:
+    """Classify current hour into trading session."""
+    # Note: These are approximations; adjust for DST
+    if 0 <= hour_utc < 8:
+        return TradingSession.ASIA
+    elif 8 <= hour_utc < 14:
+        return TradingSession.EUROPE
+    elif 14 <= hour_utc < 17:
+        return TradingSession.US_EUROPE_OVERLAP
+    elif 17 <= hour_utc < 22:
+        return TradingSession.US
+    else:
+        return TradingSession.OFF_HOURS
+```
+
+### Session Adjustment Multipliers
+
+| Session | Threshold Mult | Size Mult | Notes |
+|---------|---------------|-----------|-------|
+| ASIA | 1.2 | 0.8 | Lower liquidity, be conservative |
+| EUROPE | 1.0 | 1.0 | Baseline |
+| US_EUROPE_OVERLAP | 0.85 | 1.1 | High activity, lower thresholds |
+| US | 1.0 | 1.0 | Baseline |
+| OFF_HOURS | 1.3 | 0.6 | Very conservative |
+
+### Configuration Pattern
+
+```python
+CONFIG = {
+    'use_session_awareness': True,
+    'session_asia_threshold_mult': 1.2,
+    'session_asia_size_mult': 0.8,
+    'session_overlap_threshold_mult': 0.85,
+    'session_overlap_size_mult': 1.1,
+}
+```
+
+---
+
+## 21. Position Decay
+
+*Added in v2.0 - Learned from mean_reversion v3.0+, order_flow v4.0*
+
+### Why Position Decay
+
+Positions that haven't hit take profit may still be profitable:
+- Time erodes edge in momentum strategies
+- Holding costs (opportunity cost) accumulate
+- Earlier exit with smaller profit often beats waiting
+
+### Timing Considerations
+
+> **Key Lesson from mean_reversion v4.0 review**: "The 3-minute decay start with aggressive multipliers may force premature exits. With 5-minute candles used for signals, decay begins before even one new candle completes."
+
+**Recommended timing for different strategies:**
+
+| Strategy Type | Decay Start | Decay Interval | Notes |
+|---------------|-------------|----------------|-------|
+| Scalping | 5-10 min | 2-3 min | Fast decay acceptable |
+| Mean Reversion | 15-30 min | 5 min | Allow time for reversion |
+| Momentum | 10-15 min | 3-5 min | Balance edge vs time |
+
+### Implementation Pattern
+
+```python
+def _get_decayed_take_profit(
+    entry_time: datetime,
+    original_tp_pct: float,
+    config: dict
+) -> float:
+    """Calculate decayed take profit based on position age."""
+    if not config.get('use_position_decay', True):
+        return original_tp_pct
+
+    decay_start = config.get('decay_start_minutes', 15.0)
+    decay_interval = config.get('decay_interval_minutes', 5.0)
+    decay_multipliers = config.get('decay_multipliers', [1.0, 0.85, 0.70, 0.50])
+
+    age_minutes = (datetime.now() - entry_time).total_seconds() / 60
+
+    if age_minutes < decay_start:
+        return original_tp_pct
+
+    # Calculate decay stage
+    stages_elapsed = int((age_minutes - decay_start) / decay_interval)
+    stage_index = min(stages_elapsed, len(decay_multipliers) - 1)
+
+    multiplier = decay_multipliers[stage_index]
+    return original_tp_pct * multiplier
+```
+
+### Recommended Configuration
+
+```python
+CONFIG = {
+    'use_position_decay': True,
+    'decay_start_minutes': 15.0,        # Conservative start
+    'decay_interval_minutes': 5.0,      # Gentle progression
+    'decay_multipliers': [1.0, 0.85, 0.70, 0.50],  # Gradual reduction
+}
+```
+
+---
+
+## 22. Per-Symbol Configuration (SYMBOL_CONFIGS)
+
+*Added in v2.0 - Learned from all multi-symbol strategies*
+
+### Why Per-Symbol Configuration
+
+Different trading pairs have different characteristics:
+- **BTC/USDT**: Lower volatility, tighter thresholds
+- **XRP/USDT**: Higher volatility, wider thresholds
+- **XRP/BTC**: Ratio behavior, different sizing
+
+### Standard Pattern
+
+```python
+SYMBOLS = ["XRP/USDT", "BTC/USDT", "XRP/BTC"]
+
+# Global defaults
+CONFIG = {
+    'position_size_usd': 20.0,
+    'stop_loss_pct': 0.5,
+    'take_profit_pct': 0.5,
+    'cooldown_seconds': 10.0,
+    # ... other defaults
+}
+
+# Per-symbol overrides
+SYMBOL_CONFIGS = {
+    'XRP/USDT': {
+        'deviation_threshold': 0.5,
+        'position_size_usd': 20.0,
+        'rsi_oversold': 35,
+        'rsi_overbought': 65,
+        'cooldown_seconds': 10.0,
+    },
+    'BTC/USDT': {
+        'deviation_threshold': 0.3,     # Tighter for lower volatility
+        'position_size_usd': 50.0,      # Larger for BTC liquidity
+        'rsi_oversold': 30,
+        'rsi_overbought': 70,
+        'cooldown_seconds': 5.0,        # Faster for liquid BTC
+    },
+    'XRP/BTC': {
+        'deviation_threshold': 1.0,     # Wider for ratio volatility
+        'position_size_usd': 15.0,      # Smaller for lower liquidity
+        'rsi_oversold': 35,
+        'rsi_overbought': 65,
+        'cooldown_seconds': 20.0,       # Slower for ratio trades
+    },
+}
+```
+
+### Merging Configuration
+
+```python
+def _get_symbol_config(symbol: str, base_config: dict) -> dict:
+    """Get merged config for specific symbol."""
+    symbol_overrides = SYMBOL_CONFIGS.get(symbol, {})
+    merged = {**base_config, **symbol_overrides}
+    return merged
+```
+
+### Usage in generate_signal()
+
+```python
+def generate_signal(data, config, state):
+    for symbol in SYMBOLS:
+        # Get symbol-specific config
+        sym_config = _get_symbol_config(symbol, config)
+
+        # Use sym_config instead of config for all parameters
+        threshold = sym_config['deviation_threshold']
+        position_size = sym_config['position_size_usd']
+        # ...
+```
+
+---
+
+## 23. Fee Profitability Checks
+
+*Added in v2.0 - Learned from order_flow v2.2+, market_making v1.4+*
+
+### Why Check Fee Profitability
+
+With typical crypto fees (0.1% maker/taker), round-trip costs are ~0.2%:
+- A 0.3% take profit leaves only 0.1% profit after fees
+- In tight spread conditions, trades may be unprofitable
+
+### Implementation Pattern
+
+```python
+def _check_fee_profitability(
+    expected_profit_pct: float,
+    fee_rate: float,
+    min_profit_pct: float = 0.05
+) -> tuple[bool, float]:
+    """
+    Check if trade is profitable after fees.
+
+    Returns:
+        (is_profitable, net_profit_pct)
+    """
+    round_trip_fee_pct = fee_rate * 2 * 100  # Both entry and exit
+    net_profit_pct = expected_profit_pct - round_trip_fee_pct
+
+    return net_profit_pct >= min_profit_pct, net_profit_pct
+```
+
+### Configuration Pattern
+
+```python
+CONFIG = {
+    'check_fee_profitability': True,
+    'estimated_fee_rate': 0.001,        # 0.1% per side
+    'min_net_profit_pct': 0.05,         # Minimum after fees
+}
+```
+
+### Key Lesson Learned
+
+> **From order_flow v2.2 review**: "The strategy doesn't calculate whether trades are profitable after fees. With 0.1% maker/taker fees, a 0.2% round-trip cost can significantly impact profitability."
+
+---
+
+## 24. Correlation Monitoring
+
+*Added in v2.0 - Learned from ratio_trading v3.0+, order_flow v4.0*
+
+### Why Monitor Correlation
+
+For multi-asset strategies:
+- **Ratio trading**: Requires assets to maintain equilibrium relationship
+- **Cross-pair exposure**: Avoid overexposure to correlated assets
+- **Market regime detection**: Correlation spikes during stress
+
+### Correlation Warning for Ratio Trading
+
+```python
+def _calculate_rolling_correlation(
+    prices_a: list,
+    prices_b: list,
+    window: int = 20
+) -> float:
+    """Calculate Pearson correlation coefficient."""
+    if len(prices_a) < window or len(prices_b) < window:
+        return 1.0  # Assume correlated if insufficient data
+
+    a = prices_a[-window:]
+    b = prices_b[-window:]
+
+    mean_a = sum(a) / len(a)
+    mean_b = sum(b) / len(b)
+
+    covariance = sum((a[i] - mean_a) * (b[i] - mean_b) for i in range(window)) / window
+    std_a = (sum((x - mean_a) ** 2 for x in a) / window) ** 0.5
+    std_b = (sum((x - mean_b) ** 2 for x in b) / window) ** 0.5
+
+    if std_a == 0 or std_b == 0:
+        return 1.0
+
+    return covariance / (std_a * std_b)
+
+def _check_correlation_pause(
+    correlation: float,
+    config: dict
+) -> tuple[bool, bool]:
+    """
+    Check if correlation is problematic.
+
+    Returns:
+        (should_pause, should_warn)
+    """
+    warning_threshold = config.get('correlation_warning_threshold', 0.5)
+    pause_threshold = config.get('correlation_pause_threshold', 0.3)
+    pause_enabled = config.get('correlation_pause_enabled', True)
+
+    should_warn = correlation < warning_threshold
+    should_pause = pause_enabled and correlation < pause_threshold
+
+    return should_pause, should_warn
+```
+
+### Cross-Pair Exposure Management
+
+```python
+def _check_correlation_exposure(
+    current_positions: dict,
+    new_signal_direction: str,
+    max_same_direction_exposure: float = 150.0
+) -> float:
+    """
+    Reduce position size if multiple correlated pairs in same direction.
+
+    Returns adjusted position size multiplier (0.0 to 1.0).
+    """
+    total_long = sum(v for v in current_positions.values() if v > 0)
+    total_short = sum(abs(v) for v in current_positions.values() if v < 0)
+
+    if new_signal_direction == 'buy' and total_long > max_same_direction_exposure * 0.5:
+        return 0.75  # Reduce by 25%
+    elif new_signal_direction == 'sell' and total_short > max_same_direction_exposure * 0.5:
+        return 0.75
+
+    return 1.0
+```
+
+### Key Lesson Learned
+
+> **From ratio_trading v5.0 review**: "XRP/BTC Correlation at Historical Lows - The correlation between XRP and BTC has dropped to ~0.40, making it the altcoin with the highest degree of independence. This fundamentally challenges the viability of pairs trading."
+
+---
+
+## 25. Research-Backed Parameters
+
+*Added in v2.0 - Learned from all deep strategy reviews*
+
+### Why Research Matters
+
+Academic research provides optimized parameter starting points:
+- Reduces trial-and-error optimization time
+- Provides theoretical justification for decisions
+- Establishes baseline performance expectations
+
+### Key Research-Backed Parameters
+
+#### Bollinger Bands for Crypto
+
+| Parameter | Common Default | Research Optimized | Notes |
+|-----------|---------------|-------------------|-------|
+| Period | 20 | 20 | Standard across assets |
+| Std Dev | 2.0 | 2.5-3.0 for crypto | Wider for volatile markets |
+
+> **Source**: Research suggests crypto markets benefit from wider bands to avoid false signals.
+
+#### Z-Score Thresholds (Pairs Trading)
+
+| Parameter | Common Default | Research Optimized | Notes |
+|-----------|---------------|-------------------|-------|
+| Entry Threshold | 2.0 std | 1.42 std | Lower entry for more signals |
+| Exit Threshold | 1.0 std | 0.37 std | Exit closer to mean |
+
+> **Source**: ArXiv paper 2412.12555v1 optimization study.
+
+#### RSI Settings
+
+| Market Condition | Oversold | Overbought | Notes |
+|------------------|----------|------------|-------|
+| Standard | 30 | 70 | Traditional settings |
+| High Volatility | 25 | 75 | More extreme for crypto |
+| Conservative | 35 | 65 | Fewer signals, higher quality |
+
+#### Risk-Reward Ratios
+
+| Strategy Type | Minimum R:R | Recommended R:R | Win Rate Required |
+|---------------|-------------|-----------------|-------------------|
+| Mean Reversion | 1:1 | 1:1 | 50% for breakeven |
+| Momentum | 1.5:1 | 2:1 | 33% for breakeven |
+| Scalping | 1:1 | 1:1 | 50% for breakeven |
+
+### Key Lesson Learned
+
+> **From mean_reversion v4.0 review**: "Research indicates trailing stops are designed for trend-following strategies, not mean reversion. Mean reversion anticipates price returning to a specific level, making fixed take profit more appropriate."
+
+---
+
+## 26. Strategy Scope Documentation
+
+*Added in v2.0 - Learned from ratio_trading reviews*
+
+### Why Document Strategy Scope
+
+Each strategy is designed for specific:
+- Market conditions (trending vs ranging)
+- Asset pairs (crypto/crypto vs crypto/stablecoin)
+- Timeframes (scalping vs swing)
+
+### Documentation Template
+
+Include at the top of your strategy file:
+
+```python
+"""
+Strategy Name: Your Strategy Name
+Version: X.Y.Z
+
+SCOPE AND LIMITATIONS:
+- Asset Types: [List applicable asset types]
+- Market Conditions: [Ranging/Trending/Both]
+- Timeframe: [Scalping/Intraday/Swing]
+- NOT Suitable For: [Explicitly list exclusions]
+
+THEORETICAL BASIS:
+- [Brief description of the trading theory]
+- [Key academic references]
+
+KEY ASSUMPTIONS:
+- [List assumptions that must hold for strategy to work]
+- [Conditions that would invalidate the strategy]
+"""
+```
+
+### Example: Ratio Trading Scope
+
+```python
+"""
+Ratio Trading Strategy v3.0.0
+
+SCOPE AND LIMITATIONS:
+- Asset Types: Crypto-to-crypto pairs ONLY (e.g., XRP/BTC)
+- Market Conditions: Mean-reverting ratio relationships
+- NOT Suitable For: USDT-denominated pairs (XRP/USDT, BTC/USDT)
+
+THEORETICAL BASIS:
+- Pairs trading / statistical arbitrage
+- Requires cointegrated relationship between assets
+- Trades relative value, not absolute direction
+
+KEY ASSUMPTIONS:
+- XRP and BTC maintain cointegrated relationship
+- Correlation remains above 0.5
+- Ratio reverts to mean within reasonable timeframe
+
+WHEN TO PAUSE:
+- Correlation drops below 0.4
+- Major regulatory news affecting one asset
+- Extreme market volatility (VPIN > 0.7)
+"""
+```
+
+### Key Lesson Learned
+
+> **From ratio_trading v1.0 review**: "Fundamental Design Mismatch - The user requested analysis for XRP/USDT, BTC/USDT, and XRP/BTC pairs. However, ratio trading is fundamentally incompatible with USDT pairs. USDT is a stable quote currency - there is no 'ratio' to mean-revert."
+
+---
+
+## Appendix D: Strategy Development Checklist
+
+*Added in v2.0*
+
+Use this checklist before marking a strategy as production-ready:
+
+### Required Components ✓
+
+- [ ] `STRATEGY_NAME` (lowercase with underscores)
+- [ ] `STRATEGY_VERSION` (semantic versioning)
+- [ ] `SYMBOLS` list
+- [ ] `CONFIG` with all parameters
+- [ ] `generate_signal()` function
+- [ ] `on_start()` callback
+- [ ] `on_fill()` callback
+- [ ] `on_stop()` callback
+
+### Risk Management ✓
+
+- [ ] R:R ratio >= 1:1
+- [ ] Circuit breaker protection
+- [ ] Position limits enforced
+- [ ] Cooldown mechanisms
+- [ ] Fee profitability check
+
+### Volatility Handling ✓
+
+- [ ] Volatility regime classification
+- [ ] EXTREME regime pause
+- [ ] Dynamic threshold adjustments
+- [ ] Dynamic position sizing
+
+### Logging & Debugging ✓
+
+- [ ] Indicators always populated (including early returns)
+- [ ] Signal rejection tracking
+- [ ] Per-pair PnL tracking
+- [ ] Configuration validation on startup
+
+### Research Alignment ✓
+
+- [ ] Strategy scope documented
+- [ ] Parameters research-backed
+- [ ] Theoretical basis documented
+- [ ] Limitations explicitly stated
+
+---
+
+## Appendix E: Common Patterns Reference
+
+*Added in v2.0*
+
+### Pattern: Always Populate Indicators
+
+```python
+def generate_signal(data, config, state):
+    symbol = 'XRP/USDT'
+    price = data.prices.get(symbol)
+
+    # ALWAYS set base indicators first
+    state['indicators'] = {
+        'symbol': symbol,
+        'price': price,
+        'status': 'evaluating',
+    }
+
+    if not price:
+        state['indicators']['status'] = 'no_price'
+        return None
+
+    # Continue with logic, updating indicators as you go
+    state['indicators']['status'] = 'active'
+    # ...
+```
+
+### Pattern: Config Validation
+
+```python
+def on_start(config, state):
+    errors = _validate_config(config)
+    if errors:
+        for e in errors:
+            print(f"[{STRATEGY_NAME}] Warning: {e}")
+
+    # Log enabled features
+    features = []
+    if config.get('use_volatility_regimes'):
+        features.append('volatility_regimes')
+    if config.get('use_circuit_breaker'):
+        features.append('circuit_breaker')
+    print(f"[{STRATEGY_NAME}] Enabled features: {features}")
+```
+
+### Pattern: Comprehensive on_stop()
+
+```python
+def on_stop(state):
+    print(f"\n{'='*50}")
+    print(f"[{STRATEGY_NAME}] Session Summary")
+    print(f"{'='*50}")
+
+    # Per-pair stats
+    for symbol in SYMBOLS:
+        pnl = state.get('pnl_by_symbol', {}).get(symbol, 0)
+        trades = state.get('trades_by_symbol', {}).get(symbol, 0)
+        print(f"  {symbol}: PnL ${pnl:.2f} ({trades} trades)")
+
+    # Rejection analysis
+    rejections = state.get('rejection_counts', {})
+    if rejections:
+        print(f"\nRejection Analysis:")
+        for reason, count in sorted(rejections.items(), key=lambda x: -x[1]):
+            print(f"  {reason}: {count}")
+
+    # Circuit breaker activations
+    cb_count = state.get('circuit_breaker_activations', 0)
+    if cb_count:
+        print(f"\nCircuit breaker activated: {cb_count} times")
+```
+
+---
+
+**Document Version:** 2.0
+**Last Updated:** 2025-12-14
 **Platform Version:** WebSocket Paper Tester v1.4.0+
+
+### Version History
+
+| Version | Date | Changes |
+|---------|------|---------|
+| 1.0 | 2025-12-12 | Initial guide |
+| 1.1 | 2025-12-13 | Added v1.4.0+ features |
+| 2.0 | 2025-12-14 | Major update with lessons learned from 15+ strategy review cycles |
