@@ -4,6 +4,10 @@ Market Making Strategy - Signal Generation
 Main signal generation logic and helper functions for building signals.
 
 Version History:
+v2.2.0 (2025-12-14) - Session Awareness & Correlation Monitoring:
+- REC-002: Session awareness with time-of-day threshold/size adjustments
+- REC-003: XRP/BTC correlation monitoring with automatic pause on breakdown
+
 v2.1.0 (2025-12-14) - Deep Review v3.0 Implementation:
 - REC-001: Populate indicators on early returns (NO_ORDERBOOK, NO_PRICE paths)
   for improved observability and debugging
@@ -34,6 +38,12 @@ from .calculations import (
     get_volatility_regime,
     calculate_trend_slope,
     check_circuit_breaker,
+    # v2.2.0: Session awareness (REC-002)
+    get_session_multipliers,
+    # v2.2.0: Correlation monitoring (REC-003)
+    calculate_rolling_correlation,
+    check_correlation_pause,
+    get_correlation_prices,
 )
 
 
@@ -380,6 +390,39 @@ def _evaluate_symbol(
     # Apply regime-based threshold adjustment
     effective_threshold *= regime_threshold_mult
 
+    # v2.2.0 REC-002: Session awareness - apply time-of-day multipliers
+    hour_utc = current_time.hour if current_time else 12  # Default to noon if no time
+    session_threshold_mult, session_size_mult, session_name = get_session_multipliers(
+        hour_utc, config
+    )
+    effective_threshold *= session_threshold_mult
+
+    # v2.2.0 REC-003: Correlation monitoring for XRP/BTC
+    correlation = None
+    correlation_warning = False
+    correlation_paused = False
+
+    if is_cross_pair and config.get('use_correlation_monitoring', True):
+        corr_lookback = config.get('correlation_lookback', 20)
+        xrp_prices, btc_prices = get_correlation_prices(data, corr_lookback)
+        correlation = calculate_rolling_correlation(xrp_prices, btc_prices, corr_lookback)
+        correlation_paused, correlation_warning, correlation = check_correlation_pause(
+            correlation, config
+        )
+
+        if correlation_paused:
+            track_rejection(state, RejectionReason.LOW_CORRELATION)
+            state['indicators'] = {
+                'symbol': symbol,
+                'volatility_pct': round(volatility, 4),
+                'volatility_regime': regime_name,
+                'session_name': session_name,
+                'correlation': round(correlation, 4) if correlation else None,
+                'paused': True,
+                'paused_reason': 'low_correlation',
+            }
+            return None
+
     # MM-E02: Calculate optimal spread if enabled
     use_optimal = config.get('use_optimal_spread', False)
     optimal_spread = 0.0
@@ -504,6 +547,13 @@ def _evaluate_symbol(
         # v2.0.0: Circuit breaker (MM-C01)
         'consecutive_losses': state.get('consecutive_losses', 0),
         'circuit_breaker_active': state.get('circuit_breaker_triggered_time') is not None,
+        # v2.2.0: Session awareness (REC-002)
+        'session_name': session_name,
+        'session_threshold_mult': round(session_threshold_mult, 2),
+        'session_size_mult': round(session_size_mult, 2),
+        # v2.2.0: Correlation monitoring (REC-003)
+        'correlation': round(correlation, 4) if correlation else None,
+        'correlation_warning': correlation_warning,
     }
 
     # Check minimum spread (with volatility adjustment)
@@ -518,8 +568,9 @@ def _evaluate_symbol(
 
     # Calculate position size with inventory skew
     # v2.0.0: Apply regime size multiplier (MM-H01)
+    # v2.2.0: Apply session size multiplier (REC-002)
     skew_factor = 1.0 - abs(inventory / max_inventory) * config.get('inventory_skew', 0.5)
-    position_size = base_size * max(skew_factor, 0.1) * regime_size_mult
+    position_size = base_size * max(skew_factor, 0.1) * regime_size_mult * session_size_mult
 
     # Minimum trade size check (in USD)
     min_size = 5.0

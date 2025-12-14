@@ -4,6 +4,10 @@ Market Making Strategy - Lifecycle Callbacks
 Handles on_start, on_fill, and on_stop lifecycle events.
 
 Version History:
+v2.2.0 (2025-12-14) - Session Awareness & Correlation Monitoring:
+- REC-002: Session awareness logging in on_stop
+- REC-003: Correlation warning tracking and logging
+
 v2.1.0 (2025-12-14) - Deep Review v3.0 Implementation:
 - No lifecycle changes in this version (changes in signals.py and config.py)
 

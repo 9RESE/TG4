@@ -4,6 +4,13 @@ Market Making Strategy - Calculations
 Pure calculation functions for market making signals.
 All functions are stateless and side-effect free.
 
+Version History:
+v2.2.0 (2025-12-14) - Session Awareness & Correlation Monitoring:
+- get_trading_session: Classify current hour into trading session (REC-002)
+- get_session_multipliers: Get threshold/size multipliers for session (REC-002)
+- calculate_rolling_correlation: Pearson correlation for price series (REC-003)
+- check_correlation_pause: Determine if XRP/BTC should pause (REC-003)
+
 v2.0.0 additions:
 - get_volatility_regime: Volatility regime classification (MM-H01)
 - calculate_trend_slope: Linear regression slope for trending detection (MM-H02)
@@ -455,3 +462,195 @@ def update_circuit_breaker_on_fill(
         state['consecutive_losses'] = 0
 
     return False
+
+
+# =============================================================================
+# v2.2.0: Session Awareness (REC-002, Guide v2.0 Section 20)
+# =============================================================================
+
+def get_trading_session(hour_utc: int) -> str:
+    """
+    Classify current UTC hour into trading session (REC-002).
+
+    Trading sessions based on global forex market activity:
+    - ASIA: 00:00-08:00 UTC - Lower liquidity, wider spreads
+    - EUROPE: 08:00-14:00 UTC - Increasing volume
+    - US_EUROPE_OVERLAP: 14:00-17:00 UTC - Highest activity
+    - US: 17:00-22:00 UTC - High volume, often directional
+    - OFF_HOURS: 22:00-00:00 UTC - Low liquidity
+
+    Args:
+        hour_utc: Current hour in UTC (0-23)
+
+    Returns:
+        Session name: 'ASIA', 'EUROPE', 'US_EUROPE_OVERLAP', 'US', or 'OFF_HOURS'
+    """
+    if 0 <= hour_utc < 8:
+        return "ASIA"
+    elif 8 <= hour_utc < 14:
+        return "EUROPE"
+    elif 14 <= hour_utc < 17:
+        return "US_EUROPE_OVERLAP"
+    elif 17 <= hour_utc < 22:
+        return "US"
+    else:
+        return "OFF_HOURS"
+
+
+def get_session_multipliers(
+    hour_utc: int,
+    config: Dict[str, Any]
+) -> Tuple[float, float, str]:
+    """
+    Get threshold and size multipliers for current trading session (REC-002).
+
+    Session adjustments optimize trading for market conditions:
+    - Asia: Conservative (wider thresholds, smaller size)
+    - Europe/US: Baseline
+    - Overlap: Aggressive (tighter thresholds, larger size)
+    - Off-hours: Very conservative
+
+    Args:
+        hour_utc: Current hour in UTC (0-23)
+        config: Strategy configuration
+
+    Returns:
+        Tuple of (threshold_mult, size_mult, session_name)
+    """
+    if not config.get('use_session_awareness', True):
+        return 1.0, 1.0, "DISABLED"
+
+    session = get_trading_session(hour_utc)
+
+    if session == "ASIA":
+        return (
+            config.get('session_asia_threshold_mult', 1.2),
+            config.get('session_asia_size_mult', 0.8),
+            session
+        )
+    elif session == "US_EUROPE_OVERLAP":
+        return (
+            config.get('session_overlap_threshold_mult', 0.85),
+            config.get('session_overlap_size_mult', 1.1),
+            session
+        )
+    elif session == "OFF_HOURS":
+        return (
+            config.get('session_off_hours_threshold_mult', 1.3),
+            config.get('session_off_hours_size_mult', 0.6),
+            session
+        )
+    else:
+        # EUROPE, US - baseline
+        return 1.0, 1.0, session
+
+
+# =============================================================================
+# v2.2.0: Correlation Monitoring (REC-003, Guide v2.0 Section 24)
+# =============================================================================
+
+def calculate_rolling_correlation(
+    prices_a: list,
+    prices_b: list,
+    window: int = 20
+) -> Optional[float]:
+    """
+    Calculate Pearson correlation coefficient between two price series (REC-003).
+
+    Used for XRP/BTC correlation monitoring to detect when the
+    dual-accumulation strategy may underperform.
+
+    Formula: r = Cov(A,B) / (StdDev(A) * StdDev(B))
+
+    Args:
+        prices_a: First price series (e.g., XRP/USDT closes)
+        prices_b: Second price series (e.g., BTC/USDT closes)
+        window: Lookback window for correlation calculation
+
+    Returns:
+        Correlation coefficient (-1.0 to 1.0) or None if insufficient data
+    """
+    if len(prices_a) < window or len(prices_b) < window:
+        return None
+
+    # Use most recent 'window' prices
+    a = prices_a[-window:]
+    b = prices_b[-window:]
+
+    # Calculate means
+    mean_a = sum(a) / len(a)
+    mean_b = sum(b) / len(b)
+
+    # Calculate covariance and standard deviations
+    covariance = sum((a[i] - mean_a) * (b[i] - mean_b) for i in range(window)) / window
+    var_a = sum((x - mean_a) ** 2 for x in a) / window
+    var_b = sum((x - mean_b) ** 2 for x in b) / window
+
+    std_a = var_a ** 0.5
+    std_b = var_b ** 0.5
+
+    # Avoid division by zero
+    if std_a == 0 or std_b == 0:
+        return None
+
+    correlation = covariance / (std_a * std_b)
+
+    # Clamp to [-1, 1] to handle floating point errors
+    return max(-1.0, min(1.0, correlation))
+
+
+def check_correlation_pause(
+    correlation: Optional[float],
+    config: Dict[str, Any]
+) -> Tuple[bool, bool, Optional[float]]:
+    """
+    Check if XRP/BTC trading should pause due to low correlation (REC-003).
+
+    Correlation breakdown detection:
+    - Below warning threshold: Log warning, continue trading
+    - Below pause threshold: Pause XRP/BTC trading
+
+    Args:
+        correlation: Current XRP-BTC correlation (-1.0 to 1.0) or None
+        config: Strategy configuration
+
+    Returns:
+        Tuple of (should_pause, should_warn, correlation_value)
+    """
+    if not config.get('use_correlation_monitoring', True):
+        return False, False, correlation
+
+    if correlation is None:
+        # Insufficient data - don't pause, but flag as unknown
+        return False, False, None
+
+    warning_threshold = config.get('correlation_warning_threshold', 0.6)
+    pause_threshold = config.get('correlation_pause_threshold', 0.5)
+
+    should_warn = correlation < warning_threshold
+    should_pause = correlation < pause_threshold
+
+    return should_pause, should_warn, correlation
+
+
+def get_correlation_prices(
+    data: 'DataSnapshot',
+    lookback: int = 20
+) -> Tuple[list, list]:
+    """
+    Extract price series for XRP and BTC from candle data (REC-003).
+
+    Args:
+        data: Market data snapshot
+        lookback: Number of candles to extract
+
+    Returns:
+        Tuple of (xrp_prices, btc_prices) as lists of closing prices
+    """
+    xrp_candles = data.candles_1m.get('XRP/USDT', ())
+    btc_candles = data.candles_1m.get('BTC/USDT', ())
+
+    xrp_prices = [c.close for c in xrp_candles[-(lookback + 1):]] if xrp_candles else []
+    btc_prices = [c.close for c in btc_candles[-(lookback + 1):]] if btc_candles else []
+
+    return xrp_prices, btc_prices

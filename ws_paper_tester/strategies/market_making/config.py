@@ -4,10 +4,13 @@ Market Making Strategy - Configuration
 Strategy metadata, default configuration, and per-symbol overrides.
 
 Version History:
+v2.2.0 (2025-12-14) - Session Awareness & Correlation Monitoring:
+- REC-002: Session awareness with time-of-day adjustments (Guide v2.0 Section 20)
+- REC-003: XRP/BTC correlation monitoring with pause thresholds (Guide v2.0 Section 24)
+
 v2.1.0 (2025-12-14) - Deep Review v3.0 Implementation:
 - REC-001: Added indicator population on early returns (signals.py)
 - REC-004: Raised BTC/USDT min_spread_pct from 0.03% to 0.05%
-- Deferred: REC-002 (session awareness), REC-003 (correlation monitoring)
 
 v2.0.0 Changes (MM-C01, MM-H01, MM-H02, MM-M01):
 - Added circuit breaker protection (Guide v2.0 Section 16)
@@ -23,7 +26,7 @@ from enum import Enum
 # Strategy Metadata
 # =============================================================================
 STRATEGY_NAME = "market_making"
-STRATEGY_VERSION = "2.1.0"
+STRATEGY_VERSION = "2.2.0"
 SYMBOLS = ["XRP/USDT", "BTC/USDT", "XRP/BTC"]
 
 
@@ -51,6 +54,16 @@ class RejectionReason(Enum):
     CIRCUIT_BREAKER = "circuit_breaker"
     EXTREME_VOLATILITY = "extreme_volatility"
     TRENDING_MARKET = "trending_market"
+    LOW_CORRELATION = "low_correlation"  # REC-003: v2.2.0
+
+
+class TradingSession(Enum):
+    """Trading session classification (REC-002, Guide v2.0 Section 20)."""
+    ASIA = "asia"                    # 00:00-08:00 UTC - Lower liquidity
+    EUROPE = "europe"                # 08:00-14:00 UTC - Moderate
+    US_EUROPE_OVERLAP = "overlap"    # 14:00-17:00 UTC - Highest activity
+    US = "us"                        # 17:00-22:00 UTC - High volume
+    OFF_HOURS = "off_hours"          # 22:00-00:00 UTC - Low liquidity
 
 
 # =============================================================================
@@ -130,6 +143,21 @@ CONFIG = {
     'trend_slope_threshold': 0.05,       # Skip entries if |slope| > this %
     'trend_lookback_candles': 20,        # Candles for trend calculation
     'trend_confirmation_periods': 3,     # Require N consecutive trending signals
+
+    # v2.2.0: Session awareness (REC-002, Guide v2.0 Section 20)
+    'use_session_awareness': True,       # Enable session-based adjustments
+    'session_asia_threshold_mult': 1.2,  # Wider thresholds during Asia session
+    'session_asia_size_mult': 0.8,       # Smaller size during low liquidity
+    'session_overlap_threshold_mult': 0.85,  # Tighter thresholds during overlap
+    'session_overlap_size_mult': 1.1,    # Slightly larger size during high activity
+    'session_off_hours_threshold_mult': 1.3,  # Very wide thresholds during off-hours
+    'session_off_hours_size_mult': 0.6,  # Conservative size during off-hours
+
+    # v2.2.0: Correlation monitoring for XRP/BTC (REC-003, Guide v2.0 Section 24)
+    'use_correlation_monitoring': True,  # Enable correlation monitoring
+    'correlation_warning_threshold': 0.6,  # Warn when correlation drops below
+    'correlation_pause_threshold': 0.5,  # Pause XRP/BTC trading when below this
+    'correlation_lookback': 20,          # Candles to use for correlation calculation
 }
 
 # Per-symbol configurations (MM-009: adjusted R:R ratios)
@@ -253,5 +281,29 @@ def validate_config(config: Dict[str, Any]) -> List[str]:
     trend_slope = config.get('trend_slope_threshold', 0.05)
     if trend_slope < 0.01 or trend_slope > 0.5:
         errors.append(f"trend_slope_threshold should be between 0.01 and 0.5, got {trend_slope}")
+
+    # v2.2.0: Validate session awareness settings (REC-002)
+    session_mults = [
+        ('session_asia_threshold_mult', 0.5, 2.0),
+        ('session_asia_size_mult', 0.1, 1.5),
+        ('session_overlap_threshold_mult', 0.5, 1.5),
+        ('session_overlap_size_mult', 0.5, 2.0),
+        ('session_off_hours_threshold_mult', 0.5, 2.0),
+        ('session_off_hours_size_mult', 0.1, 1.0),
+    ]
+    for key, min_val, max_val in session_mults:
+        val = config.get(key)
+        if val is not None and (val < min_val or val > max_val):
+            errors.append(f"{key} should be between {min_val} and {max_val}, got {val}")
+
+    # v2.2.0: Validate correlation monitoring settings (REC-003)
+    corr_warn = config.get('correlation_warning_threshold', 0.6)
+    corr_pause = config.get('correlation_pause_threshold', 0.5)
+    if not (0 <= corr_pause < corr_warn <= 1.0):
+        errors.append(f"Correlation thresholds must satisfy: 0 <= pause < warning <= 1.0 (pause={corr_pause}, warning={corr_warn})")
+
+    corr_lookback = config.get('correlation_lookback', 20)
+    if corr_lookback < 5 or corr_lookback > 100:
+        errors.append(f"correlation_lookback should be between 5 and 100, got {corr_lookback}")
 
     return errors
