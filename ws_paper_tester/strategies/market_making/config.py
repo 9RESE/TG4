@@ -3,6 +3,12 @@ Market Making Strategy - Configuration
 
 Strategy metadata, default configuration, and per-symbol overrides.
 
+Version History:
+v2.1.0 (2025-12-14) - Deep Review v3.0 Implementation:
+- REC-001: Added indicator population on early returns (signals.py)
+- REC-004: Raised BTC/USDT min_spread_pct from 0.03% to 0.05%
+- Deferred: REC-002 (session awareness), REC-003 (correlation monitoring)
+
 v2.0.0 Changes (MM-C01, MM-H01, MM-H02, MM-M01):
 - Added circuit breaker protection (Guide v2.0 Section 16)
 - Added volatility regime classification and EXTREME pause (Guide v2.0 Section 15)
@@ -17,7 +23,7 @@ from enum import Enum
 # Strategy Metadata
 # =============================================================================
 STRATEGY_NAME = "market_making"
-STRATEGY_VERSION = "2.0.0"
+STRATEGY_VERSION = "2.1.0"
 SYMBOLS = ["XRP/USDT", "BTC/USDT", "XRP/BTC"]
 
 
@@ -141,7 +147,9 @@ SYMBOL_CONFIGS = {
         # BTC/USDT market making - high liquidity pair
         # - Very tight spreads, high volume
         # - Larger position sizes (BTC trades bigger)
-        'min_spread_pct': 0.03,       # Tighter min spread (more liquid)
+        # REC-004: Raised min_spread_pct from 0.03% to 0.05% for better
+        # profitability after 0.2% round-trip fees
+        'min_spread_pct': 0.05,       # REC-004: raised from 0.03 for profitability
         'position_size_usd': 50,      # Larger size for BTC
         'max_inventory': 200,         # Higher max inventory
         'imbalance_threshold': 0.08,  # Lower threshold (more liquid)

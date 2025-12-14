@@ -3,6 +3,11 @@ Market Making Strategy - Signal Generation
 
 Main signal generation logic and helper functions for building signals.
 
+Version History:
+v2.1.0 (2025-12-14) - Deep Review v3.0 Implementation:
+- REC-001: Populate indicators on early returns (NO_ORDERBOOK, NO_PRICE paths)
+  for improved observability and debugging
+
 v2.0.0 additions:
 - Circuit breaker check before signal generation (MM-C01)
 - Volatility regime classification with EXTREME pause (MM-H01)
@@ -262,11 +267,26 @@ def _evaluate_symbol(
     # Get orderbook
     ob = data.orderbooks.get(symbol)
     if not ob or not ob.best_bid or not ob.best_ask:
+        # REC-001: Populate indicators on early return for observability
+        state['indicators'] = {
+            'symbol': symbol,
+            'status': 'no_orderbook',
+            'timestamp': current_time.isoformat() if current_time else None,
+        }
         track_rejection(state, RejectionReason.NO_ORDERBOOK)
         return None
 
     price = data.prices.get(symbol, 0)
     if not price:
+        # REC-001: Populate indicators on early return for observability
+        state['indicators'] = {
+            'symbol': symbol,
+            'status': 'no_price',
+            'best_bid': round(ob.best_bid, 8) if ob.best_bid else None,
+            'best_ask': round(ob.best_ask, 8) if ob.best_ask else None,
+            'spread_pct': round(ob.spread_pct, 4) if ob.spread_pct else None,
+            'timestamp': current_time.isoformat() if current_time else None,
+        }
         track_rejection(state, RejectionReason.NO_PRICE)
         return None
 
