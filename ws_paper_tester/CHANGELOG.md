@@ -5,6 +5,54 @@ All notable changes to the WebSocket Paper Tester will be documented in this fil
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.0] - 2025-12-14
+
+### Added
+- **Ratio Trading strategy v2.0.0** - Major refactor per ratio-trading-strategy-review-v1.0.md
+  - REC-002: USD-based position sizing (`position_size_usd`, `max_position_usd`)
+  - REC-003: Fixed R:R ratio to 1:1 (0.6%/0.6%, was 0.5%/0.6%)
+  - REC-004: Volatility regime classification (LOW/MEDIUM/HIGH/EXTREME)
+  - REC-005: Circuit breaker protection (3 consecutive losses = 15min pause)
+  - REC-006: Per-pair PnL tracking (`pnl_by_symbol`, `trades_by_symbol`, etc.)
+  - REC-007: Configuration validation on startup
+  - REC-008: Spread monitoring with `max_spread_pct` filter
+  - REC-010: Optional trade flow confirmation
+  - Signal metadata with strategy, signal_type, z-score, regime
+  - Rejection tracking for all signal rejection reasons
+  - Comprehensive `on_stop()` summary with accumulation stats
+
+- **Deep Strategy Reviews**
+  - `docs/development/review/ratio_trading/ratio-trading-strategy-review-v1.0.md`
+    - Academic research on pairs/ratio trading and cointegration
+    - XRP/BTC pair analysis with correlation/volatility data
+    - Strategy Development Guide compliance analysis (was ~55%)
+    - 12 recommendations prioritized by severity
+  - `docs/development/review/mean_reversion/mean-reversion-deep-review-v2.0.md`
+    - Extended analysis for mean reversion strategy patterns
+
+- **Feature Documentation**
+  - `docs/development/features/ratio_trading/ratio-trading-v1.0.md` - Initial version docs
+  - `docs/development/features/ratio_trading/ratio-trading-v2.0.md` - v2.0.0 feature docs
+
+### Changed
+- **Ratio Trading strategy** (`ratio_trading.py`)
+  - Version updated to 2.0.0
+  - Refactored monolithic `generate_signal()` into modular helper functions
+  - Take profit now uses price-based percentage instead of SMA target
+  - Dual tracking: USD position for compliance + XRP position for ratio logic
+  - Enhanced indicators with 25+ metrics including regime and spread info
+  - `on_start()` validates config and logs feature flags
+  - `on_fill()` tracks per-pair metrics and circuit breaker state
+  - `on_stop()` logs comprehensive summary with rejections
+
+### Documentation
+- Reorganized ratio trading docs from `features/ratio/` to `features/ratio_trading/`
+- All strategy reviews now follow consistent format with:
+  - Executive summary with compliance scores
+  - Academic research references
+  - Pair-specific analysis
+  - Prioritized recommendations with effort/impact matrix
+
 ## [1.4.0] - 2025-12-13
 
 ### Added
