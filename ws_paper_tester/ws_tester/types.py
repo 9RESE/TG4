@@ -144,7 +144,8 @@ class DataSnapshot:
         if not trades:
             return None
 
-        trades = trades[:n_trades]
+        # FIX: Use negative index to get NEWEST trades (CRIT-NEW-001)
+        trades = trades[-n_trades:]
         total_value = sum(t.price * t.size for t in trades)
         total_volume = sum(t.size for t in trades)
 
@@ -156,7 +157,8 @@ class DataSnapshot:
         if not trades:
             return 0.0
 
-        trades = trades[:n_trades]
+        # FIX: Use negative index to get NEWEST trades (CRIT-NEW-001)
+        trades = trades[-n_trades:]
         buy_volume = sum(t.size for t in trades if t.side == 'buy')
         sell_volume = sum(t.size for t in trades if t.side == 'sell')
         total = buy_volume + sell_volume
