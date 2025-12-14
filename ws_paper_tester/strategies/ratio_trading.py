@@ -1,5 +1,5 @@
 """
-Ratio Trading Strategy v4.1.0
+Ratio Trading Strategy v4.2.0
 
 Mean reversion strategy for XRP/BTC pair accumulation.
 Trades the XRP/BTC ratio to grow holdings of both assets.
@@ -21,19 +21,19 @@ Price exceeding the bands may indicate strong momentum, not necessarily a
 mean reversion opportunity. The volatility regime system helps mitigate this
 by pausing in EXTREME conditions and widening thresholds in HIGH volatility.
 
-CRITICAL WARNING - XRP/BTC Correlation Crisis (December 2025):
-XRP/BTC correlation has declined to ~0.40-0.54, representing a ~37-53% drop from
-historical norms (~0.85). This fundamentally challenges pairs trading viability.
-The strategy now enables correlation_pause_enabled by default (v4.0.0) which will
-auto-pause trading when correlation drops below 0.4. Monitor correlation closely
-and consider the following options:
+CRITICAL WARNING - XRP/BTC Correlation Status (December 2025):
+XRP/BTC 3-month correlation has recovered to ~0.84 (up from crisis lows of ~0.40).
+However, structural factors (XRP independence, ETF ecosystem, regulatory clarity)
+suggest ongoing monitoring is essential. The strategy enables correlation_pause_enabled
+by default (v4.0.0) and now includes correlation trend detection (v4.2.0) for
+proactive protection.
 
 - CONSERVATIVE: Pause XRP/BTC trading until correlation stabilizes above 0.6
 - MODERATE: Use v4.0.0+ correlation protection (enabled by default)
 - AGGRESSIVE: Lower correlation_pause_threshold to 0.3 (more trading, higher risk)
 
 ALTERNATIVE PAIRS (REC-033):
-If XRP/BTC correlation remains low, consider evaluating alternative pairs:
+If XRP/BTC correlation deteriorates, consider evaluating alternative pairs:
 - ETH/BTC: Stronger historical cointegration (~0.80 correlation), higher liquidity
 - LTC/BTC: Classical pairs candidate (~0.80 correlation)
 - BCH/BTC: Bitcoin fork relationship (~0.75 correlation)
@@ -44,6 +44,8 @@ FUTURE ENHANCEMENTS:
   H < 0.5 = mean-reverting (good), H >= 0.5 = trending (pause)
 - REC-035: ADF Cointegration Test for formal cointegration validation
   Currently uses correlation as proxy; formal testing would be more robust
+- REC-038: Half-Life Calculation for position management optimization
+  Calculate spread half-life via Ornstein-Uhlenbeck process to adjust position decay
 
 Version History:
 - 1.0.0: Initial implementation
@@ -101,6 +103,20 @@ Version History:
              regimes) may make this unnecessary per review assessment
          - Compliance: Maintained 100% with Guide v2.0
          - Status: Production ready with correlation monitoring critical
+- 4.2.0: Deep review v7.0 recommendations
+         - REC-037: Correlation trend detection for proactive protection
+           - New config: use_correlation_trend_detection, correlation_trend_lookback,
+             correlation_trend_threshold, correlation_trend_level, correlation_trend_pause_enabled
+           - Calculates slope of correlation over time via linear regression
+           - Detects declining correlation trends before hitting absolute thresholds
+           - Emits warnings when slope is negative and correlation < 0.7
+           - Optional pause mode (disabled by default) for conservative operation
+           - New RejectionReason: CORRELATION_DECLINING
+           - New indicators: correlation_slope, correlation_trend, correlation_trend_warnings
+         - REC-038: Document half-life calculation as future enhancement
+         - Updated docstring with current XRP/BTC correlation recovery (~0.84 3-month)
+         - Compliance: Maintained 100% with Guide v2.0
+         - Status: Production ready with enhanced correlation monitoring
 """
 from datetime import datetime
 from typing import Dict, Any, Optional, List, Tuple
@@ -118,7 +134,7 @@ except ImportError:
 # REQUIRED: Strategy Metadata
 # =============================================================================
 STRATEGY_NAME = "ratio_trading"
-STRATEGY_VERSION = "4.1.0"
+STRATEGY_VERSION = "4.2.0"
 SYMBOLS = ["XRP/BTC"]
 
 
@@ -148,6 +164,7 @@ class RejectionReason(Enum):
     STRONG_TREND_DETECTED = "strong_trend_detected"  # REC-015
     NO_SIGNAL_CONDITIONS = "no_signal_conditions"
     CORRELATION_TOO_LOW = "correlation_too_low"  # REC-021
+    CORRELATION_DECLINING = "correlation_declining"  # REC-037
 
 
 class ExitReason(Enum):
@@ -276,6 +293,15 @@ CONFIG = {
     'correlation_warning_threshold': 0.6, # REC-024: Warn if correlation below this (raised from 0.5)
     'correlation_pause_threshold': 0.4,   # REC-024: Pause trading if below this (raised from 0.3)
     'correlation_pause_enabled': True,    # REC-023: Enabled by default for declining XRP/BTC correlation
+
+    # ==========================================================================
+    # Correlation Trend Detection - REC-037
+    # ==========================================================================
+    'use_correlation_trend_detection': True,   # Enable correlation trend monitoring
+    'correlation_trend_lookback': 10,          # Periods for trend calculation
+    'correlation_trend_threshold': -0.02,      # Slope threshold for declining trend
+    'correlation_trend_level': 0.7,            # Only warn if correlation below this level
+    'correlation_trend_pause_enabled': False,  # Optional: pause on declining trend (conservative)
 
     # ==========================================================================
     # Dynamic BTC Price - REC-018
@@ -606,6 +632,57 @@ def _calculate_rolling_correlation(
     return max(-1.0, min(1.0, correlation))
 
 
+def _calculate_correlation_trend(
+    correlation_history: List[float],
+    lookback: int = 10
+) -> Tuple[float, bool, str]:
+    """
+    Calculate correlation trend (slope) to detect deteriorating relationship.
+
+    REC-037: Correlation trend monitoring for proactive protection.
+
+    Args:
+        correlation_history: Historical correlation values
+        lookback: Number of periods for trend calculation
+
+    Returns:
+        (slope, is_declining, trend_direction)
+        - slope: Linear regression slope of correlation (-1 to 1 per period)
+        - is_declining: True if slope is significantly negative
+        - trend_direction: 'declining', 'stable', or 'improving'
+    """
+    if len(correlation_history) < lookback:
+        return 0.0, False, 'stable'
+
+    recent = correlation_history[-lookback:]
+    n = len(recent)
+
+    # Simple linear regression: y = mx + b
+    x_mean = (n - 1) / 2
+    y_mean = sum(recent) / n
+
+    numerator = sum((i - x_mean) * (recent[i] - y_mean) for i in range(n))
+    denominator = sum((i - x_mean) ** 2 for i in range(n))
+
+    if denominator == 0:
+        return 0.0, False, 'stable'
+
+    slope = numerator / denominator
+
+    # Classify trend direction
+    if slope < -0.01:
+        trend_direction = 'declining'
+        is_declining = True
+    elif slope > 0.01:
+        trend_direction = 'improving'
+        is_declining = False
+    else:
+        trend_direction = 'stable'
+        is_declining = False
+
+    return slope, is_declining, trend_direction
+
+
 def _get_btc_price_usd(
     data: DataSnapshot,
     config: Dict[str, Any]
@@ -887,6 +964,11 @@ def _initialize_state(state: Dict[str, Any]) -> None:
     state['correlation_history'] = []  # Rolling correlation values
     state['correlation_warnings'] = 0  # Count of low correlation warnings
     state['last_btc_price_usd'] = None  # Last BTC price used for conversion
+
+    # REC-037: Correlation trend detection
+    state['correlation_slope'] = 0.0  # Current correlation slope
+    state['correlation_trend_direction'] = 'stable'  # 'declining', 'stable', 'improving'
+    state['correlation_trend_warnings'] = 0  # Count of declining trend warnings
 
     # Entry tracking with trailing stop support
     state['position_entries'] = {}
@@ -1260,6 +1342,38 @@ def generate_signal(
                     _track_rejection(state, RejectionReason.CORRELATION_TOO_LOW, symbol)
                 return None
 
+            # REC-037: Correlation trend detection
+            use_trend_detection = config.get('use_correlation_trend_detection', True)
+            if use_trend_detection and len(state.get('correlation_history', [])) >= 5:
+                trend_lookback = config.get('correlation_trend_lookback', 10)
+                trend_threshold = config.get('correlation_trend_threshold', -0.02)
+                trend_level = config.get('correlation_trend_level', 0.7)
+                trend_pause_enabled = config.get('correlation_trend_pause_enabled', False)
+
+                corr_slope, is_declining, corr_trend_direction = _calculate_correlation_trend(
+                    state.get('correlation_history', []), trend_lookback
+                )
+
+                # Store trend info in state
+                state['correlation_slope'] = corr_slope
+                state['correlation_trend_direction'] = corr_trend_direction
+
+                # Track declining trend warnings
+                if is_declining and corr_slope < trend_threshold and correlation < trend_level:
+                    state['correlation_trend_warnings'] = state.get('correlation_trend_warnings', 0) + 1
+
+                    # Optional: Pause on declining trend (conservative mode)
+                    if trend_pause_enabled:
+                        state['indicators'] = _build_base_indicators(
+                            symbol=symbol, status='correlation_trend_pause', state=state, price=price
+                        )
+                        state['indicators']['correlation'] = round(correlation, 4)
+                        state['indicators']['correlation_slope'] = round(corr_slope, 6)
+                        state['indicators']['correlation_trend'] = corr_trend_direction
+                        if track_rejections:
+                            _track_rejection(state, RejectionReason.CORRELATION_DECLINING, symbol)
+                        return None
+
     # Entry/exit thresholds with regime adjustment
     base_entry_threshold = config.get('entry_threshold', 1.5)  # REC-013: Higher default
     effective_entry_threshold = base_entry_threshold * regime_adjustments['threshold_mult']
@@ -1360,6 +1474,10 @@ def generate_signal(
         'correlation': round(correlation, 4),
         'use_correlation_monitoring': use_correlation,
         'correlation_warnings': state.get('correlation_warnings', 0),
+        # REC-037: Correlation trend detection
+        'correlation_slope': round(state.get('correlation_slope', 0.0), 6),
+        'correlation_trend': state.get('correlation_trend_direction', 'stable'),
+        'correlation_trend_warnings': state.get('correlation_trend_warnings', 0),
     }
 
     # Position limit check
