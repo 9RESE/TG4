@@ -8,7 +8,7 @@ Technical reference for all trading strategies in the WebSocket Paper Tester.
 |----------|---------|-------|------|-------------|
 | [Mean Reversion](#mean-reversion) | 4.3.0 | XRP/USDT, BTC/USDT, XRP/BTC | Counter-trend | Trades price deviations from moving average |
 | [Ratio Trading](#ratio-trading) | 4.3.1 | XRP/BTC | Statistical arbitrage | Trades ratio deviations between correlated pairs |
-| [Order Flow](#order-flow) | 4.1.1 | XRP/USDT, BTC/USDT | Momentum | Trades based on order book imbalance |
+| [Order Flow](#order-flow) | 5.0.0 | XRP/USDT, BTC/USDT, XRP/BTC | Momentum | Trades based on order book imbalance |
 | [Market Making](#market-making) | 1.5.0 | XRP/USDT, BTC/USDT, XRP/BTC | Liquidity provision | Provides liquidity with bid-ask spreads |
 
 ---
@@ -204,6 +204,7 @@ Momentum strategy based on trade tape analysis and buy/sell imbalance. Enhanced 
 |------|---------------|-------------|-----------|-------|
 | XRP/USDT | $25 | 1.0% | 0.5% | Primary pair |
 | BTC/USDT | $50 | 0.8% | 0.4% | Higher liquidity |
+| XRP/BTC | $15 | 1.5% | 0.75% | Ratio pair, wider spreads (v4.4.0) |
 
 ### Key Configuration
 
@@ -223,11 +224,19 @@ CONFIG = {
     'take_profit_pct': 1.0,
     'stop_loss_pct': 0.5,
 
-    # VPIN
+    # VPIN (v5.0.0: Session-specific thresholds)
     'use_vpin': True,
     'vpin_bucket_count': 50,
-    'vpin_high_threshold': 0.7,
-    'vpin_pause_on_high': True,
+    'vpin_high_threshold': 0.7,  # Fallback
+    'use_session_vpin_thresholds': True,
+    'session_vpin_thresholds': {
+        'ASIA': 0.65, 'EUROPE': 0.70, 'US': 0.70,
+        'US_EUROPE_OVERLAP': 0.75, 'OFF_HOURS': 0.60,
+    },
+
+    # Volume Anomaly Detection (v5.0.0)
+    'use_volume_anomaly_detection': True,
+    'volume_anomaly_pause_on_detect': True,
 
     # Volatility Regimes
     'use_volatility_regimes': True,
@@ -241,7 +250,7 @@ CONFIG = {
 
     # Position Decay
     'use_position_decay': True,
-    'position_decay_stages': [(180, 0.90), (240, 0.75), (300, 0.50), (360, 0.0)],
+    'position_decay_stages': [(300, 0.90), (360, 0.75), (420, 0.50), (480, 0.0)],
 
     # Correlation Management
     'use_correlation_management': True,
@@ -252,9 +261,10 @@ CONFIG = {
 
 ### Key Features
 
-- **VPIN**: Detects informed trading activity, pauses when high
+- **VPIN**: Detects informed trading activity, pauses when high (v5.0.0: session-specific thresholds)
+- **Volume Anomaly Detection** (v5.0.0): Detects wash trading patterns via volume consistency, repetitive trades, and volume-price divergence
 - **Volatility Regimes**: Adjusts thresholds and sizes based on market conditions
-- **Session Awareness**: Different parameters for Asia/Europe/US/Overlap sessions
+- **Session Awareness**: Different parameters for Asia/Europe/US/Overlap/OFF_HOURS sessions
 - **Position Decay**: Progressive TP reduction for stale positions
 - **Correlation Management**: Cross-pair exposure limits
 
@@ -262,11 +272,13 @@ CONFIG = {
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 5.0.0 | 2025-12-14 | Session-specific VPIN thresholds (REC-006), volume anomaly detection (REC-005) |
+| 4.4.0 | 2025-12-14 | XRP/BTC ratio pair support with research-backed configuration |
+| 4.3.0 | 2025-12-14 | Deep review v7.0: OFF_HOURS session, trade flow for VWAP shorts |
+| 4.2.0 | 2025-12-14 | Deep review v5.0: per-symbol position limits, decay timing |
 | 4.1.1 | 2025-12-14 | Refactored into modular package structure |
 | 4.1.0 | 2025-12-11 | Signal rejection logging, config validation, enhanced decay |
 | 4.0.0 | 2025-12-11 | VPIN, volatility regimes, session awareness, correlation mgmt |
-| 3.1.0 | 2025-12-10 | Bug fixes and asymmetric thresholds |
-| 3.0.0 | 2025-12-10 | Per-pair PnL, trade flow confirmation, circuit breaker |
 
 ---
 
@@ -372,6 +384,8 @@ All rejected signals are tracked by reason for analysis:
 - `CIRCUIT_BREAKER` - Circuit breaker active
 - `TIME_COOLDOWN` - Cooldown between signals
 - `REGIME_PAUSE` - Extreme volatility
+- `VPIN_PAUSE` - High VPIN (informed trading detected)
+- `VOLUME_ANOMALY` - Wash trading pattern detected (v5.0.0)
 - `TRENDING_MARKET` - Market unsuitable for mean reversion
 - `LOW_CORRELATION` - Correlation below threshold
 
@@ -391,4 +405,4 @@ For strategy reviews and research, see:
 
 ---
 
-*Last updated: 2025-12-14 - Strategy modular refactoring (Order Flow v4.1.1, Market Making v1.5.0)*
+*Last updated: 2025-12-14 - Order Flow v5.0.0 (Session VPIN thresholds, Volume Anomaly Detection)*

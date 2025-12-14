@@ -12,7 +12,7 @@ from .config import (
     SYMBOLS, VolatilityRegime, TradingSession, RejectionReason,
     get_symbol_config
 )
-from .indicators import calculate_volatility, calculate_micro_price, calculate_vpin
+from .indicators import calculate_volatility, calculate_micro_price, calculate_vpin, check_volume_anomaly
 from .regimes import (
     classify_volatility_regime, get_regime_adjustments,
     classify_trading_session, get_session_adjustments
@@ -231,14 +231,22 @@ def _evaluate_symbol(
         return None
 
     # Calculate VPIN
+    # REC-006 (v5.0.0): Session-specific VPIN thresholds
     vpin_value = 0.0
     vpin_pause = False
+    vpin_threshold = config.get('vpin_high_threshold', 0.7)  # Default fallback
+
+    # Get session-specific VPIN threshold if enabled
+    if config.get('use_session_vpin_thresholds', True):
+        session_vpin_thresholds = config.get('session_vpin_thresholds', {})
+        vpin_threshold = session_vpin_thresholds.get(session.name, vpin_threshold)
+
     if config.get('use_vpin', True):
         vpin_lookback = config.get('vpin_lookback_trades', 200)
         vpin_trades = trades[-vpin_lookback:] if len(trades) >= vpin_lookback else trades
         vpin_value = calculate_vpin(vpin_trades, config.get('vpin_bucket_count', 50))
 
-        if vpin_value >= config.get('vpin_high_threshold', 0.7):
+        if vpin_value >= vpin_threshold:
             if config.get('vpin_pause_on_high', True):
                 vpin_pause = True
 
@@ -247,9 +255,43 @@ def _evaluate_symbol(
             symbol=symbol, trade_count=len(trades), status='vpin_pause', state=state
         )
         state['indicators']['vpin'] = round(vpin_value, 4)
-        state['indicators']['vpin_threshold'] = config.get('vpin_high_threshold', 0.7)
+        state['indicators']['vpin_threshold'] = vpin_threshold
+        state['indicators']['vpin_session_aware'] = config.get('use_session_vpin_thresholds', True)
+        state['indicators']['trading_session'] = session.name
         if track_rejections:
             track_rejection(state, RejectionReason.VPIN_PAUSE, symbol)
+        return None
+
+    # REC-005 (v5.0.0): Volume anomaly detection
+    volume_anomaly_result = {'anomaly_detected': False, 'anomaly_types': [], 'confidence_score': 0.0}
+    volume_anomaly_pause = False
+
+    if config.get('use_volume_anomaly_detection', True):
+        # Get previous price from candles for volume-price divergence check
+        previous_price = 0.0
+        if candles and len(candles) >= 2:
+            previous_price = candles[-2].close
+
+        current_price_check = data.prices.get(symbol, 0)
+        volume_anomaly_result = check_volume_anomaly(
+            trades=trades,
+            config=config,
+            current_price=current_price_check,
+            previous_price=previous_price
+        )
+
+        if volume_anomaly_result['anomaly_detected']:
+            if config.get('volume_anomaly_pause_on_detect', True):
+                volume_anomaly_pause = True
+
+    if volume_anomaly_pause:
+        state['indicators'] = build_base_indicators(
+            symbol=symbol, trade_count=len(trades), status='volume_anomaly_pause', state=state
+        )
+        state['indicators']['volume_anomaly'] = volume_anomaly_result
+        state['indicators']['trading_session'] = session.name
+        if track_rejections:
+            track_rejection(state, RejectionReason.VOLUME_ANOMALY, symbol)
         return None
 
     # Calculate buy/sell imbalance
@@ -400,7 +442,12 @@ def _evaluate_symbol(
         'effective_sell_threshold': round(effective_sell_threshold, 4),
         'adjusted_lookback': lookback,
         'vpin': round(vpin_value, 4),
-        'vpin_threshold': config.get('vpin_high_threshold', 0.7),
+        'vpin_threshold': vpin_threshold,  # REC-006 (v5.0.0): Session-aware threshold
+        'vpin_session_aware': config.get('use_session_vpin_thresholds', True),
+        # REC-005 (v5.0.0): Volume anomaly detection
+        'volume_anomaly_detected': volume_anomaly_result.get('anomaly_detected', False),
+        'volume_anomaly_types': volume_anomaly_result.get('anomaly_types', []),
+        'volume_anomaly_confidence': volume_anomaly_result.get('confidence_score', 0.0),
         'trade_flow': round(trade_flow, 4),
         'trade_flow_threshold': round(trade_flow_threshold, 4),
         'use_trade_flow': use_trade_flow,

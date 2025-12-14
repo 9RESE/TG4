@@ -11,8 +11,9 @@ from typing import Dict, Any
 # Strategy Metadata
 # =============================================================================
 STRATEGY_NAME = "order_flow"
-STRATEGY_VERSION = "4.4.0"
+STRATEGY_VERSION = "5.0.0"
 # REC-003 (v4.4.0): Added XRP/BTC ratio pair
+# v5.0.0: Added REC-005 Volume Anomaly Detection, REC-006 Session VPIN Thresholds
 SYMBOLS = ["XRP/USDT", "BTC/USDT", "XRP/BTC"]
 
 
@@ -53,6 +54,8 @@ class RejectionReason(Enum):
     TRADE_FLOW_NOT_ALIGNED = "trade_flow_not_aligned"
     CORRELATION_LIMIT = "correlation_limit"
     NO_SIGNAL_CONDITIONS = "no_signal_conditions"
+    # REC-005 (v5.0.0): Volume anomaly detection
+    VOLUME_ANOMALY = "volume_anomaly"
 
 
 # =============================================================================
@@ -102,9 +105,38 @@ CONFIG: Dict[str, Any] = {
     # ==========================================================================
     'use_vpin': True,                   # Enable VPIN calculation
     'vpin_bucket_count': 50,            # Number of volume buckets
-    'vpin_high_threshold': 0.7,         # High VPIN = potential informed trading
+    'vpin_high_threshold': 0.7,         # High VPIN = potential informed trading (fallback)
     'vpin_pause_on_high': True,         # Pause trading when VPIN > threshold
     'vpin_lookback_trades': 200,        # Trades for VPIN calculation
+    # REC-006 (v5.0.0): Session-specific VPIN thresholds
+    # Rationale: VPIN effectiveness varies with liquidity conditions
+    # - Lower thresholds (more conservative) during thin liquidity periods
+    # - Higher thresholds (allow more signals) during deep liquidity periods
+    'use_session_vpin_thresholds': True,  # Enable session-specific VPIN thresholds
+    'session_vpin_thresholds': {
+        'ASIA': 0.65,                   # More conservative during thin liquidity
+        'EUROPE': 0.70,                 # Standard threshold
+        'US': 0.70,                     # Standard threshold
+        'US_EUROPE_OVERLAP': 0.75,      # Allow more signals during deep liquidity
+        'OFF_HOURS': 0.60,              # Most conservative for thinnest liquidity
+    },
+
+    # ==========================================================================
+    # REC-005 (v5.0.0): Volume Anomaly Detection
+    # Basic wash trading indicators to filter manipulated signals
+    # ==========================================================================
+    'use_volume_anomaly_detection': True,  # Enable volume anomaly detection
+    'volume_anomaly_pause_on_detect': True,  # Pause trading when anomaly detected
+    # Volume consistency check: flag if current volume is abnormally different from rolling avg
+    'volume_anomaly_low_ratio': 0.2,      # Flag if volume < 20% of rolling avg (suspiciously quiet)
+    'volume_anomaly_high_ratio': 5.0,     # Flag if volume > 5x rolling avg (potential manipulation)
+    # Repetitive trade detection: flag if too many trades have identical sizes
+    'volume_anomaly_repetitive_threshold': 0.4,  # Flag if >40% of trades have same size
+    'volume_anomaly_repetitive_tolerance': 0.001,  # Size match tolerance (0.1%)
+    # Volume-price divergence: flag volume spike without corresponding price movement
+    'volume_anomaly_price_move_threshold': 0.001,  # Minimum price move (0.1%) expected with volume spike
+    'volume_anomaly_volume_spike_threshold': 3.0,  # Volume spike multiplier to trigger check
+    'volume_anomaly_lookback_trades': 100,  # Trades to analyze for anomaly detection
 
     # ==========================================================================
     # Volatility Regime Classification

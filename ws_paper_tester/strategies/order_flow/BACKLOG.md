@@ -1,6 +1,6 @@
 # Order Flow Strategy Backlog
 
-**Strategy Version:** 4.4.0
+**Strategy Version:** 5.0.0
 **Last Updated:** 2025-12-14
 **Created From:** Deep Review v7.0
 
@@ -44,56 +44,71 @@ Added XRP/BTC ratio pair support with research-backed configuration parameters.
 
 ---
 
-## Deferred Recommendations
+## Implemented Recommendations (v5.0.0)
 
-### REC-005: Volume Anomaly Detection
+### REC-005: Volume Anomaly Detection - IMPLEMENTED v5.0.0
 
-**Priority:** LOW | **Effort:** MEDIUM | **Status:** Future Enhancement
+**Priority:** LOW | **Effort:** MEDIUM | **Status:** IMPLEMENTED
 
 **Description:**
-Add basic wash trading indicators to filter manipulated signals during low-liquidity periods.
+Added basic wash trading indicators to filter manipulated signals during low-liquidity periods.
 
-**Proposed Implementation:**
+**Implementation (indicators.py):**
 ```python
-def check_volume_anomaly(trades: List[Trade], config: Dict) -> Dict:
+def check_volume_anomaly(trades: Tuple, config: Dict, current_price: float, previous_price: float) -> Dict:
     """
     Detect potential wash trading patterns.
 
     Indicators:
-    1. Volume consistency vs rolling 24h average
-    2. Repetitive exact-size trades (suspicious)
-    3. Volume spike without corresponding price movement
+    1. Volume consistency vs rolling average - detects abnormal volume levels
+    2. Repetitive exact-size trades - detects potential wash trading patterns
+    3. Volume spike without corresponding price movement - detects fake volume
 
     Returns:
-        Dict with anomaly_detected, anomaly_type, confidence_score
+        Dict with anomaly_detected, anomaly_types, confidence_score, details
     """
 ```
 
-**Location:** indicators.py
+**Configuration (config.py):**
+```python
+'use_volume_anomaly_detection': True,
+'volume_anomaly_pause_on_detect': True,
+'volume_anomaly_low_ratio': 0.2,        # Flag if volume < 20% of rolling avg
+'volume_anomaly_high_ratio': 5.0,       # Flag if volume > 5x rolling avg
+'volume_anomaly_repetitive_threshold': 0.4,  # Flag if >40% trades same size
+'volume_anomaly_repetitive_tolerance': 0.001,  # Size match tolerance (0.1%)
+'volume_anomaly_price_move_threshold': 0.001,  # Min price move (0.1%)
+'volume_anomaly_volume_spike_threshold': 3.0,  # Volume spike multiplier
+'volume_anomaly_lookback_trades': 100,
+```
 
 **Research Background:**
 - $2.57B suspected wash trading activity (Chainalysis 2025)
 - Wash trading intensifies during low legitimate volume periods
 - Power law distribution analysis can detect anomalies
 
-**Current Mitigations:**
-- VPIN pause on high toxicity (PARTIAL)
-- Volume spike requirement (PARTIAL)
-- Session awareness with size reduction (PARTIAL)
-
-**Deferral Reason:**
-Medium effort implementation. Current VPIN and session awareness provide partial protection. Implement after paper testing data reveals manipulation patterns.
-
 ---
 
-### REC-006: Session-Specific VPIN Thresholds
+### REC-006: Session-Specific VPIN Thresholds - IMPLEMENTED v5.0.0
 
-**Priority:** LOW | **Effort:** MEDIUM | **Status:** Future Enhancement
+**Priority:** LOW | **Effort:** MEDIUM | **Status:** IMPLEMENTED
 
 **Description:**
-Implement session-aware VPIN thresholds since VPIN effectiveness varies with liquidity conditions.
+Implemented session-aware VPIN thresholds since VPIN effectiveness varies with liquidity conditions.
 
-**Proposed Thresholds:**
+**Implementation (config.py):**
+```python
+'use_session_vpin_thresholds': True,
+'session_vpin_thresholds': {
+    'ASIA': 0.65,           # More conservative during thin liquidity
+    'EUROPE': 0.70,         # Standard threshold
+    'US': 0.70,             # Standard threshold
+    'US_EUROPE_OVERLAP': 0.75,  # Allow more signals during deep liquidity
+    'OFF_HOURS': 0.60,      # Most conservative for thinnest liquidity
+},
+```
+
+**Thresholds:**
 | Session | VPIN Threshold | Rationale |
 |---------|---------------|-----------|
 | ASIA | 0.65 | More conservative during thin liquidity |
@@ -102,19 +117,9 @@ Implement session-aware VPIN thresholds since VPIN effectiveness varies with liq
 | US | 0.70 | Standard threshold |
 | OFF_HOURS | 0.60 | Most conservative for thinnest liquidity |
 
-**Proposed Configuration:**
-```python
-'session_vpin_thresholds': {
-    'ASIA': 0.65,
-    'EUROPE': 0.70,
-    'US': 0.70,
-    'US_EUROPE_OVERLAP': 0.75,
-    'OFF_HOURS': 0.60,
-},
-```
-
-**Deferral Reason:**
-Requires validation through paper testing. Current single VPIN threshold (0.7) is conservative and safe. Implement after collecting session-specific performance data.
+**Integration:**
+- signal.py updated to get session-specific VPIN threshold before comparison
+- Indicators include `vpin_session_aware` flag and active threshold
 
 ---
 
@@ -157,13 +162,13 @@ Strategy currently assumes single exchange data feed. Cross-exchange arbitrage o
 | REC-002 | IMPLEMENTED | 4.3.0 | OFF_HOURS session type |
 | REC-003 | IMPLEMENTED | 4.4.0 | XRP/BTC ratio pair configuration |
 | REC-004 | IMPLEMENTED | 4.3.0 | Extended decay timing |
-| REC-005 | DEFERRED | 5.0.0 | Post-paper testing |
-| REC-006 | DEFERRED | 5.0.0 | Post-paper testing |
+| REC-005 | IMPLEMENTED | 5.0.0 | Volume anomaly detection |
+| REC-006 | IMPLEMENTED | 5.0.0 | Session-specific VPIN thresholds |
 | REC-007 | IMPLEMENTED | 4.3.0 | Trailing stop documentation |
 | REC-008 | IMPLEMENTED | 4.3.0 | This backlog file |
 
 ---
 
-*Document Version: 1.1*
+*Document Version: 1.2*
 *Created: 2025-12-14*
-*Updated: 2025-12-14 - REC-003 implemented*
+*Updated: 2025-12-14 - REC-005, REC-006 implemented in v5.0.0*
