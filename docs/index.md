@@ -6,16 +6,36 @@
 - [API Reference](./api/)
 - [Development Guide](./development/)
 
-## Recent Updates (2025-12-13)
+## Recent Updates (2025-12-14)
 
-### WebSocket Paper Tester - IMPLEMENTED
-A new lightweight, WebSocket-native paper trading system for rapid strategy development.
+### Strategy Modular Refactoring
+Large strategies have been refactored into modular package structures for better maintainability:
+
+- **Mean Reversion v4.2.1**: Split from 1,772-line file into 7 focused modules
+- **Ratio Trading v4.2.1**: Split into 10 focused modules with dual-asset tracking
+- **Strategies Reference**: [Complete Strategy Documentation](./user/reference/strategies.md)
+
+### Strategy Deep Reviews (15+ cycles)
+Comprehensive review process with research-backed parameter tuning:
+
+- Mean Reversion: 6 deep review cycles (v1.0 → v6.0)
+- Ratio Trading: 8 deep review cycles (v1.0 → v8.0)
+- All strategies now comply with Strategy Development Guide v2.0
+
+Key improvements:
+- XRP/BTC correlation monitoring (correlation dropped from ~80% to ~40%)
+- Dynamic correlation pause thresholds
+- Fee profitability validation before signals
+- Extended position decay timing
+
+### WebSocket Paper Tester
+A lightweight, WebSocket-native paper trading system for rapid strategy development.
 
 - **Feature Doc**: [WebSocket Paper Tester Design](./development/features/WEBSOCKET_PAPER_TESTER_DESIGN.md)
 - **How-To Guide**: [Using the Paper Tester](./user/how-to/websocket-paper-tester.md)
 - **Create Strategies**: [Creating Custom Strategies](./user/how-to/create-strategy.md)
+- **Strategies Reference**: [Strategy Documentation](./user/reference/strategies.md)
 - **ADR**: [ADR-001: WebSocket Paper Tester Architecture](./architecture/09-decisions/ADR-001-websocket-paper-tester.md)
-- **Building Blocks**: [System Components](./architecture/05-building-blocks/index.md)
 
 ## Documentation Structure
 
@@ -52,4 +72,4 @@ A new lightweight, WebSocket-native paper trading system for rapid strategy deve
 - [API](./api/) - API documentation
 
 ---
-*Updated: 2025-12-13*
+*Updated: 2025-12-14*

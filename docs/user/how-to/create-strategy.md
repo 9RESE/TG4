@@ -271,6 +271,36 @@ def on_start(config: dict, state: dict) -> None:
 4. **Handle missing data gracefully** - Check for None/empty before accessing
 5. **Keep strategies simple** - One strategy, one idea
 
+## Modular Strategy Structure
+
+For complex strategies (500+ lines), consider splitting into a package:
+
+```
+strategies/my_strategy/
+├── __init__.py      # Re-exports public interface
+├── config.py        # CONFIG, SYMBOL_CONFIGS, validation
+├── indicators.py    # Technical indicator calculations
+├── signals.py       # Signal generation logic
+└── lifecycle.py     # on_start, on_fill, on_stop callbacks
+```
+
+The `__init__.py` must export the required interface:
+
+```python
+# strategies/my_strategy/__init__.py
+
+from .config import STRATEGY_NAME, STRATEGY_VERSION, SYMBOLS, CONFIG
+from .signals import generate_signal
+from .lifecycle import on_start, on_fill, on_stop
+
+__all__ = [
+    'STRATEGY_NAME', 'STRATEGY_VERSION', 'SYMBOLS', 'CONFIG',
+    'generate_signal', 'on_start', 'on_fill', 'on_stop',
+]
+```
+
+See [mean_reversion](../../../ws_paper_tester/strategies/mean_reversion/) and [ratio_trading](../../../ws_paper_tester/strategies/ratio_trading/) for examples.
+
 ## Testing Your Strategy
 
 Run the paper tester with simulated data:
@@ -283,4 +313,4 @@ python ws_tester.py --simulated --duration 5
 Check the strategy logs in `logs/strategies/your_strategy_*.jsonl`.
 
 ---
-*Last updated: 2025-12-13*
+*Last updated: 2025-12-14*
