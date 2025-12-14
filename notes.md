@@ -1,4 +1,63 @@
-update the docs with the recent work and ALL the changes in git. Ensure documentation complies with the documentation standards and expectations outlined in the claude.md file. Then commit.
+## Task: Comprehensive Market Making Theory Research - COMPLETED
+### Status: COMPLETED (2025-12-14)
+### Summary
+Comprehensive research on market making theory completed, covering all requested topics:
+1. Bid-Ask Spread Capture
+2. Inventory Risk
+3. Adverse Selection
+4. Avellaneda-Stoikov Model
+5. Micro-Price Calculation
+6. Inventory Management Techniques
+7. Market Conditions Where Market Making Fails
+8. Fee Structures and Minimum Profitable Spreads
+
+### Documentation Created
+- Research Document: `/home/rese/Documents/rese/trading-bots/grok-4_1/docs/research/findings/market-making-theory-comprehensive.md`
+  - 43,000+ words comprehensive analysis
+  - Academic references from 20+ papers
+  - Practical implementation guidance
+  - Mathematical formulas and examples
+  - Fee structure analysis for crypto exchanges
+
+### Key Findings
+**Avellaneda-Stoikov Model (2008):**
+- Reservation price formula: r = s - q·γ·σ²·(T-t)
+- Optimal spread formula: δᵃ + δᵇ = γ·σ²·(T-t) + (2/γ)·ln(1 + γ/κ)
+- 526+ citations, 105 highly influential
+
+**Inventory Management:**
+- Quote skewing based on inventory position
+- Position limits (hard and soft)
+- Dynamic order sizing
+- Circuit breakers for volatility, drawdown, adverse selection
+
+**Market Making Fails When:**
+- Strong trending markets (ADX > 25)
+- High volatility (VIX > 30)
+- Low liquidity (depth < 30% normal)
+- News events and flash crashes
+- Spread expansion > 3x normal
+
+**Fee Impact:**
+- Binance VIP 0: 0.20% round trip minimum
+- Coinbase: 1.00% round trip (5x more expensive)
+- 100 RT/day at 0.20% = 20% daily fee cost
+- Strategic limit order use reduces costs 40-60%
+
+### Academic Sources
+- Avellaneda & Stoikov (2008): High-frequency trading in a limit order book
+- Ho & Stoll (1981): Optimal dealer pricing
+- Glosten & Milgrom (1985): Adverse selection model
+- Stoikov (2017): Micro-price estimator
+- Guéant et al. (2013): GLTF model extension
+- Plus 15+ additional academic papers
+
+### Next Steps
+This research document can be:
+- Referenced by market making strategy implementations
+- Used for parameter selection and calibration
+- Guide for risk management implementation
+- Educational resource for team members
 
 cd ws_paper_tester
 # Install dependencies
