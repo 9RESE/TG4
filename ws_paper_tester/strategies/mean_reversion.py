@@ -65,6 +65,16 @@ Version History:
          - REC-005: Added SCOPE AND LIMITATIONS documentation
          - New rejection reason: FEE_UNPROFITABLE
          - Compliance score: 89% -> 92% (fee checks + scope docs added)
+- 4.2.0: Correlation risk management per mean-reversion-deep-review-v6.0.md
+         - REC-001: Tightened correlation_warn_threshold (0.5 -> 0.4) for XRP/BTC
+           XRP-BTC correlation dropped from ~80% to ~40%, making traditional ratio
+           trading assumptions less reliable
+         - REC-001: Added correlation_pause_threshold (0.25) to automatically pause
+           XRP/BTC trading when correlation is critically low
+         - REC-001: Added correlation_pause_enabled config flag for user control
+         - New rejection reason: LOW_CORRELATION (Guide v2.0 Section 24 compliant)
+         - Compliance score: 96% maintained (dynamic correlation pause added)
+         - Deferred: REC-003 ADX filter, REC-004 band walk detection (LOW priority)
 """
 from datetime import datetime
 from typing import Dict, Any, Optional, List, Tuple
@@ -82,7 +92,7 @@ except ImportError:
 # REQUIRED: Strategy Metadata
 # =============================================================================
 STRATEGY_NAME = "mean_reversion"
-STRATEGY_VERSION = "4.1.0"
+STRATEGY_VERSION = "4.2.0"
 SYMBOLS = ["XRP/USDT", "BTC/USDT", "XRP/BTC"]
 
 
@@ -110,6 +120,7 @@ class RejectionReason(Enum):
     TRENDING_MARKET = "trending_market"  # REC-004 (v3.0.0)
     NO_SIGNAL_CONDITIONS = "no_signal_conditions"
     FEE_UNPROFITABLE = "fee_unprofitable"  # REC-002 (v4.1.0)
+    LOW_CORRELATION = "low_correlation"  # REC-001 (v4.2.0) - XRP/BTC correlation pause
 
 
 # =============================================================================
@@ -208,13 +219,16 @@ CONFIG = {
     'decay_multipliers': [1.0, 0.85, 0.7, 0.5],  # Gentler reduction (per REC-002)
 
     # ==========================================================================
-    # XRP/BTC Correlation Monitoring - REC-005 (v4.0.0)
-    # Research: XRP correlation with BTC declining (24.86% over 90 days)
+    # XRP/BTC Correlation Monitoring - REC-005 (v4.0.0), Updated per v6.0 REC-001
+    # Research: XRP correlation with BTC declined from ~80% to ~40% (Dec 2025)
+    # Decoupling confirmed - XRP trading on "own fundamentals"
     # Monitor for adaptive ratio trading decisions
     # ==========================================================================
     'use_correlation_monitoring': True,  # Enable XRP/BTC correlation tracking
     'correlation_lookback': 50,          # Candles for correlation calculation
-    'correlation_warn_threshold': 0.5,   # Log warning if correlation drops below
+    'correlation_warn_threshold': 0.4,   # Tightened from 0.5 (REC-001 v4.2.0)
+    'correlation_pause_threshold': 0.25, # Pause XRP/BTC trading below this (REC-001 v4.2.0)
+    'correlation_pause_enabled': True,   # Enable correlation-based pause (REC-001 v4.2.0)
 
     # ==========================================================================
     # Fee Profitability Checks - REC-002 (v4.1.0)
@@ -700,6 +714,9 @@ def _get_xrp_btc_correlation(
     """
     Get XRP/BTC correlation and update tracking.
 
+    REC-001 (v4.2.0): Enhanced with pause threshold for automatic XRP/BTC
+    trading suspension when correlation drops critically low.
+
     Returns correlation coefficient or None if unavailable.
     """
     if not config.get('use_correlation_monitoring', True):
@@ -725,12 +742,48 @@ def _get_xrp_btc_correlation(
         # Store latest
         state['xrp_btc_correlation'] = correlation
 
-        # Check for low correlation warning
-        warn_threshold = config.get('correlation_warn_threshold', 0.5)
+        # REC-001 (v4.2.0): Check for low correlation warning (0.4 threshold)
+        warn_threshold = config.get('correlation_warn_threshold', 0.4)
         if correlation < warn_threshold and not state.get('_correlation_warned', False):
             state['_correlation_warned'] = True
 
+        # REC-001 (v4.2.0): Check for critical correlation pause (0.25 threshold)
+        pause_threshold = config.get('correlation_pause_threshold', 0.25)
+        pause_enabled = config.get('correlation_pause_enabled', True)
+        state['correlation_below_pause_threshold'] = (
+            pause_enabled and correlation < pause_threshold
+        )
+
     return correlation
+
+
+def _should_pause_for_low_correlation(
+    symbol: str,
+    state: Dict[str, Any],
+    config: Dict[str, Any]
+) -> bool:
+    """
+    Check if XRP/BTC trading should pause due to low correlation.
+
+    REC-001 (v4.2.0): With XRP-BTC correlation at ~40% (down from ~80%),
+    pause ratio trading when correlation drops below critical threshold.
+
+    Args:
+        symbol: Trading symbol
+        state: Strategy state
+        config: Strategy configuration
+
+    Returns:
+        True if trading should be paused for this symbol
+    """
+    # Only applies to XRP/BTC ratio trading
+    if symbol != 'XRP/BTC':
+        return False
+
+    if not config.get('correlation_pause_enabled', True):
+        return False
+
+    return state.get('correlation_below_pause_threshold', False)
 
 
 # =============================================================================
@@ -1141,6 +1194,17 @@ def _evaluate_symbol(
     if symbol == 'XRP/BTC' and config.get('use_correlation_monitoring', True):
         xrp_btc_correlation = _get_xrp_btc_correlation(data, config, state)
 
+        # REC-001 (v4.2.0): Check correlation pause threshold for XRP/BTC
+        if _should_pause_for_low_correlation(symbol, state, config):
+            state['indicators'] = _build_base_indicators(
+                symbol=symbol, status='low_correlation_pause', state=state
+            )
+            state['indicators']['xrp_btc_correlation'] = round(xrp_btc_correlation, 4) if xrp_btc_correlation else None
+            state['indicators']['correlation_pause_threshold'] = config.get('correlation_pause_threshold', 0.25)
+            if track_rejections:
+                _track_rejection(state, RejectionReason.LOW_CORRELATION, symbol)
+            return None
+
     # Get current position for this symbol
     current_position = state.get('position_by_symbol', {}).get(symbol, 0)
 
@@ -1181,6 +1245,10 @@ def _evaluate_symbol(
         'trend_confirmation_required': config.get('trend_confirmation_periods', 3),
         # v4.0.0 indicators - REC-005 XRP/BTC correlation (only for XRP/BTC)
         'xrp_btc_correlation': round(xrp_btc_correlation, 4) if xrp_btc_correlation else None,
+        # v4.2.0 indicators - REC-001 correlation pause thresholds
+        'correlation_warn_threshold': config.get('correlation_warn_threshold', 0.4),
+        'correlation_pause_threshold': config.get('correlation_pause_threshold', 0.25),
+        'correlation_pause_enabled': config.get('correlation_pause_enabled', True),
     }
 
     # ==========================================================================
@@ -1564,6 +1632,12 @@ def on_start(config: Dict[str, Any], state: Dict[str, Any]) -> None:
     print(f"[mean_reversion] v4.1 Params: DecayStart={config.get('decay_start_minutes', 15.0)}min, "
           f"TrendConfirm={config.get('trend_confirmation_periods', 3)} periods, "
           f"FeeRate={fee_rate*100:.2f}%/side, MinNet={min_net}%")
+    # v4.2.0: Log correlation pause parameters (REC-001)
+    corr_warn = config.get('correlation_warn_threshold', 0.4)
+    corr_pause = config.get('correlation_pause_threshold', 0.25)
+    corr_pause_enabled = config.get('correlation_pause_enabled', True)
+    print(f"[mean_reversion] v4.2 Params: CorrelationWarn={corr_warn}, "
+          f"CorrelationPause={corr_pause}, PauseEnabled={corr_pause_enabled}")
 
 
 def on_fill(fill: Dict[str, Any], state: Dict[str, Any]) -> None:
