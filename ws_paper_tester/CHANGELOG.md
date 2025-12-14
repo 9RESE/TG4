@@ -5,6 +5,39 @@ All notable changes to the WebSocket Paper Tester will be documented in this fil
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] - 2025-12-13
+
+### Added
+- **Market Making strategy v1.3.0** - Major improvements based on deep strategy review
+  - Volatility-adjusted spreads using `_calculate_volatility()` function
+  - Signal cooldown mechanism with per-symbol `cooldown_seconds` config
+  - Trade flow confirmation via `use_trade_flow` and `trade_flow_threshold` parameters
+  - Enhanced indicator logging with volatility metrics
+  - XRP/BTC size unit conversion (XRP → USD for Signal compatibility)
+
+### Changed
+- **Market Making strategy** (`market_making.py`)
+  - Improved risk-reward ratios: BTC/USDT now 1:1 (was 0.5:1)
+  - XRP/USDT TP increased from 0.3% to 0.4%
+  - XRP/BTC TP increased from 0.25% to 0.3%
+  - Stop/take profit now based on entry price (was mid price)
+  - `on_fill()` now uses `value` field directly for USD pairs
+
+### Fixed
+- **MM-001**: XRP/BTC size units mismatch - now converts XRP to USD for Signal
+- **MM-002**: Added volatility-adjusted spreads to prevent over-trading
+- **MM-003**: Added signal cooldown to prevent rapid-fire trades
+- **MM-004**: Fixed BTC/USDT risk-reward ratio (0.35%/0.35% = 1:1)
+- **MM-005**: Fixed on_fill unit confusion for USD pairs
+- **MM-006**: Stop/TP now based on entry price, not mid price
+- **MM-007**: Added trade flow confirmation for signal validation
+- **MM-008**: Added volatility metrics to indicator logging
+
+### Documentation
+- Created `docs/development/market-making-strategy-review-v1.2.md` with deep analysis
+- All 8 identified issues documented with severity, impact, and fixes
+- Research references from hftbacktest, DWF Labs, academic papers
+
 ## [1.2.0] - 2025-12-13
 
 ### Added
