@@ -11,9 +11,10 @@ from typing import Dict, Any
 # Strategy Metadata
 # =============================================================================
 STRATEGY_NAME = "order_flow"
-STRATEGY_VERSION = "5.0.0"
+STRATEGY_VERSION = "5.0.1"
 # REC-003 (v4.4.0): Added XRP/BTC ratio pair
 # v5.0.0: Added REC-005 Volume Anomaly Detection, REC-006 Session VPIN Thresholds
+# v5.0.1: REC-007 Added detailed anomaly metrics to indicators for log analysis
 SYMBOLS = ["XRP/USDT", "BTC/USDT", "XRP/BTC"]
 
 

@@ -448,6 +448,15 @@ def _evaluate_symbol(
         'volume_anomaly_detected': volume_anomaly_result.get('anomaly_detected', False),
         'volume_anomaly_types': volume_anomaly_result.get('anomaly_types', []),
         'volume_anomaly_confidence': volume_anomaly_result.get('confidence_score', 0.0),
+        # REC-007 (v5.0.1): Detailed anomaly metrics for analysis
+        'volume_anomaly_details': {
+            'volume_ratio': volume_anomaly_result.get('details', {}).get('volume_consistency', {}).get('volume_ratio'),
+            'avg_volume_per_trade': volume_anomaly_result.get('details', {}).get('volume_consistency', {}).get('avg_volume_per_trade'),
+            'repetitive_ratio': volume_anomaly_result.get('details', {}).get('repetitive_trades', {}).get('repetitive_ratio'),
+            'unique_sizes': volume_anomaly_result.get('details', {}).get('repetitive_trades', {}).get('unique_sizes'),
+            'max_same_size_count': volume_anomaly_result.get('details', {}).get('repetitive_trades', {}).get('max_same_size_count'),
+            'price_change_pct': volume_anomaly_result.get('details', {}).get('volume_price_divergence', {}).get('price_change_pct'),
+        },
         'trade_flow': round(trade_flow, 4),
         'trade_flow_threshold': round(trade_flow_threshold, 4),
         'use_trade_flow': use_trade_flow,
