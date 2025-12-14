@@ -289,10 +289,13 @@ def _evaluate_symbol(
     price_vs_vwap = (current_price - vwap) / vwap
 
     # Micro-price
+    # REC-005 (v4.2.0): Track micro-price fallback for debugging
     ob = data.orderbooks.get(symbol)
     micro_price = current_price
+    micro_price_fallback = True  # Assume fallback until proven otherwise
     if config.get('use_micro_price', True) and ob:
         micro_price = calculate_micro_price(ob)
+        micro_price_fallback = False
 
     # Get symbol-specific config
     volume_spike_mult = get_symbol_config(symbol, config, 'volume_spike_mult') or config.get('volume_spike_mult', 2.0)
@@ -333,8 +336,11 @@ def _evaluate_symbol(
         is_fee_profitable, expected_profit = check_fee_profitability(tp_pct, fee_rate, min_profit_pct)
 
     # Position limits
+    # REC-006 (v4.2.0): Support both total and per-symbol position limits
     current_position = state.get('position_size', 0)
+    current_position_symbol = state.get('position_by_symbol', {}).get(symbol, 0)
     max_position = config.get('max_position_usd', 100.0)
+    max_position_symbol = config.get('max_position_per_symbol_usd', max_position)  # Default to total if not set
     min_trade = config.get('min_trade_size_usd', 5.0)
 
     # Check trailing stop exit
@@ -377,6 +383,7 @@ def _evaluate_symbol(
         'vwap': round(vwap, 6),
         'price': round(current_price, 6),
         'micro_price': round(micro_price, 6),
+        'micro_price_fallback': micro_price_fallback,  # REC-005 (v4.2.0): Log fallback status
         'price_vs_vwap': round(price_vs_vwap, 6),
         'volatility_pct': round(volatility, 4),
         'volatility_regime': regime.name,
@@ -401,7 +408,9 @@ def _evaluate_symbol(
         'expected_profit_pct': round(expected_profit, 4),
         'position_side': state.get('position_side'),
         'position_size': round(current_position, 2),
+        'position_size_symbol': round(current_position_symbol, 2),  # REC-006 (v4.2.0)
         'max_position': max_position,
+        'max_position_symbol': max_position_symbol,  # REC-006 (v4.2.0)
         'adjusted_position_size': round(adjusted_position_size, 2),
         'trailing_stop_price': round(trailing_stop_price, 6) if trailing_stop_price else None,
         'pnl_symbol': round(state.get('pnl_by_symbol', {}).get(symbol, 0), 4),
@@ -409,13 +418,25 @@ def _evaluate_symbol(
         'consecutive_losses': state.get('consecutive_losses', 0),
     }
 
+    # REC-006 (v4.2.0): Check both total and per-symbol position limits
     if current_position >= max_position:
         state['indicators']['status'] = 'max_position_reached'
+        state['indicators']['max_position_reason'] = 'total'
         if track_rejections:
             track_rejection(state, RejectionReason.MAX_POSITION, symbol)
         return None
 
-    available = max_position - current_position
+    if current_position_symbol >= max_position_symbol:
+        state['indicators']['status'] = 'max_position_reached'
+        state['indicators']['max_position_reason'] = 'per_symbol'
+        if track_rejections:
+            track_rejection(state, RejectionReason.MAX_POSITION, symbol)
+        return None
+
+    # REC-006 (v4.2.0): Respect both limits when calculating available size
+    available_total = max_position - current_position
+    available_symbol = max_position_symbol - current_position_symbol
+    available = min(available_total, available_symbol)
     actual_size = min(adjusted_position_size, available)
     if actual_size < min_trade:
         state['indicators']['status'] = 'insufficient_size'
@@ -502,32 +523,37 @@ def _evaluate_symbol(
             )
 
     # VWAP mean reversion opportunities
+    # REC-004 (v4.2.0): Added trade flow confirmation for VWAP reversion signals
     vwap_threshold_mult = config.get('vwap_reversion_threshold_mult', 0.7)
     vwap_size_mult = config.get('vwap_reversion_size_mult', 0.75)
     vwap_deviation = config.get('vwap_deviation_threshold', 0.001)
 
     if signal is None and (imbalance > effective_buy_threshold * vwap_threshold_mult and
           price_vs_vwap < -vwap_deviation):
-        reduced_size = actual_size * vwap_size_mult
+        # REC-004 (v4.2.0): Apply trade flow confirmation to VWAP reversion
+        if use_trade_flow and not is_trade_flow_aligned(data, symbol, 'buy', trade_flow_threshold, lookback):
+            state['indicators']['vwap_reversion_rejected'] = 'trade_flow_not_aligned'
+        else:
+            reduced_size = actual_size * vwap_size_mult
+            can_trade, adjusted_size = check_correlation_exposure(state, symbol, 'buy', reduced_size, config)
 
-        can_trade, adjusted_size = check_correlation_exposure(state, symbol, 'buy', reduced_size, config)
-
-        if can_trade and adjusted_size >= min_trade:
-            signal = Signal(
-                action='buy',
-                symbol=symbol,
-                size=adjusted_size,
-                price=current_price,
-                reason=f"OF: Buy below VWAP (imbal={imbalance:.2f}, dev={price_vs_vwap:.4f})",
-                stop_loss=current_price * (1 - sl_pct / 100),
-                take_profit=vwap,
-            )
+            if can_trade and adjusted_size >= min_trade:
+                signal = Signal(
+                    action='buy',
+                    symbol=symbol,
+                    size=adjusted_size,
+                    price=current_price,
+                    reason=f"OF: Buy below VWAP (imbal={imbalance:.2f}, dev={price_vs_vwap:.4f})",
+                    stop_loss=current_price * (1 - sl_pct / 100),
+                    take_profit=vwap,
+                )
 
     if signal is None and (imbalance < -effective_sell_threshold * vwap_threshold_mult and
           price_vs_vwap > vwap_deviation):
         has_long = state.get('position_side') == 'long' and state.get('position_size', 0) > 0
         reduced_size = actual_size * vwap_size_mult
 
+        # REC-004 (v4.2.0): Only check trade flow for new shorts, not for closing longs
         if has_long and reduced_size >= min_trade:
             close_size = min(reduced_size, state.get('position_size', reduced_size))
             signal = Signal(

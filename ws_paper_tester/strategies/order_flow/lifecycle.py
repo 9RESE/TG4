@@ -23,6 +23,9 @@ def on_start(config: Dict[str, Any], state: Dict[str, Any]) -> None:
 
     initialize_state(state)
 
+    # REC-002 (v4.2.0): Store circuit breaker config in state for on_fill access
+    state['max_consecutive_losses'] = config.get('max_consecutive_losses', 3)
+
     print(f"[order_flow] v{STRATEGY_VERSION} started")
     print(f"[order_flow] Features: VPIN={config.get('use_vpin', True)}, "
           f"Regimes={config.get('use_volatility_regimes', True)}, "
@@ -59,7 +62,8 @@ def on_fill(fill: Dict[str, Any], state: Dict[str, Any]) -> None:
             state['losses_by_symbol'][symbol] = state['losses_by_symbol'].get(symbol, 0) + 1
             state['consecutive_losses'] = state.get('consecutive_losses', 0) + 1
 
-            max_losses = 3
+            # REC-002 (v4.2.0): Use config value from state instead of hardcoded
+            max_losses = state.get('max_consecutive_losses', 3)
             if state['consecutive_losses'] >= max_losses:
                 state['circuit_breaker_time'] = timestamp
 

@@ -54,7 +54,8 @@ def check_trailing_stop_exit(
         exit_price = ob.best_bid if pos_entry['side'] == 'long' else ob.best_ask
 
     if pos_entry['side'] == 'long' and current_price <= trailing_stop_price:
-        close_size = state.get('position_size', 0)
+        # REC-003 (v4.2.0): Use per-symbol position size for multi-symbol accuracy
+        close_size = state.get('position_by_symbol', {}).get(symbol, 0)
         if close_size > 0:
             return Signal(
                 action='sell',
@@ -66,7 +67,8 @@ def check_trailing_stop_exit(
             )
 
     elif pos_entry['side'] == 'short' and current_price >= trailing_stop_price:
-        close_size = state.get('position_size', 0)
+        # REC-003 (v4.2.0): Use per-symbol position size for multi-symbol accuracy
+        close_size = state.get('position_by_symbol', {}).get(symbol, 0)
         if close_size > 0:
             return Signal(
                 action='cover',
@@ -93,6 +95,7 @@ def check_position_decay_exit(
     REC-004: Check if stale position should be closed with progressive TP.
 
     Enhanced to allow closing at any profit > fees during intermediate decay stages.
+    REC-003 (v4.2.0): Uses per-symbol position size for accurate multi-symbol behavior.
     """
     if not config.get('use_position_decay', True):
         return None
@@ -136,7 +139,8 @@ def check_position_decay_exit(
 
         # For tp_mult=0, exit at any profit
         if tp_mult == 0 and profit_pct > 0:
-            close_size = state.get('position_size', 0)
+            # REC-003 (v4.2.0): Use per-symbol position size
+            close_size = state.get('position_by_symbol', {}).get(symbol, 0)
             if close_size > 0:
                 return Signal(
                     action='sell',
@@ -149,7 +153,8 @@ def check_position_decay_exit(
 
         # REC-004: Close at profit after fees during intermediate stages
         elif use_early_close and tp_mult < 1.0 and net_profit_pct >= min_profit_after_fees:
-            close_size = state.get('position_size', 0)
+            # REC-003 (v4.2.0): Use per-symbol position size
+            close_size = state.get('position_by_symbol', {}).get(symbol, 0)
             if close_size > 0:
                 return Signal(
                     action='sell',
@@ -162,7 +167,8 @@ def check_position_decay_exit(
 
         # Standard decay exit at adjusted TP
         elif profit_pct >= adjusted_tp_pct > 0:
-            close_size = state.get('position_size', 0)
+            # REC-003 (v4.2.0): Use per-symbol position size
+            close_size = state.get('position_by_symbol', {}).get(symbol, 0)
             if close_size > 0:
                 return Signal(
                     action='sell',
@@ -178,7 +184,8 @@ def check_position_decay_exit(
         net_profit_pct = profit_pct - round_trip_fee_pct
 
         if tp_mult == 0 and profit_pct > 0:
-            close_size = state.get('position_size', 0)
+            # REC-003 (v4.2.0): Use per-symbol position size
+            close_size = state.get('position_by_symbol', {}).get(symbol, 0)
             if close_size > 0:
                 return Signal(
                     action='cover',
@@ -190,7 +197,8 @@ def check_position_decay_exit(
                 )
 
         elif use_early_close and tp_mult < 1.0 and net_profit_pct >= min_profit_after_fees:
-            close_size = state.get('position_size', 0)
+            # REC-003 (v4.2.0): Use per-symbol position size
+            close_size = state.get('position_by_symbol', {}).get(symbol, 0)
             if close_size > 0:
                 return Signal(
                     action='cover',
@@ -202,7 +210,8 @@ def check_position_decay_exit(
                 )
 
         elif profit_pct >= adjusted_tp_pct > 0:
-            close_size = state.get('position_size', 0)
+            # REC-003 (v4.2.0): Use per-symbol position size
+            close_size = state.get('position_by_symbol', {}).get(symbol, 0)
             if close_size > 0:
                 return Signal(
                     action='cover',

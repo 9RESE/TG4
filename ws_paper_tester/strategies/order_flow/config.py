@@ -11,7 +11,7 @@ from typing import Dict, Any
 # Strategy Metadata
 # =============================================================================
 STRATEGY_NAME = "order_flow"
-STRATEGY_VERSION = "4.1.0"
+STRATEGY_VERSION = "4.2.0"
 SYMBOLS = ["XRP/USDT", "BTC/USDT"]
 
 
@@ -68,9 +68,11 @@ CONFIG: Dict[str, Any] = {
 
     # ==========================================================================
     # Position Sizing
+    # REC-006 (v4.2.0): Added max_position_per_symbol_usd for per-symbol limits
     # ==========================================================================
     'position_size_usd': 25.0,          # Size per trade in USD
-    'max_position_usd': 100.0,          # Maximum position exposure per pair
+    'max_position_usd': 100.0,          # Maximum TOTAL position exposure across all pairs
+    'max_position_per_symbol_usd': 75.0,  # Maximum position exposure PER SYMBOL
     'min_trade_size_usd': 5.0,          # Minimum USD per trade
 
     # ==========================================================================

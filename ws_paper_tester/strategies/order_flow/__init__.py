@@ -1,5 +1,5 @@
 """
-Order Flow Strategy v4.1.0
+Order Flow Strategy v4.2.0
 
 Trades based on trade tape analysis and buy/sell imbalance.
 Enhanced with VPIN, volatility regimes, session awareness, and advanced risk management.
@@ -23,6 +23,12 @@ Version History:
          - Finding #1: Improved VPIN bucket overflow logic
          - Finding #5: Better position decay exit at intermediate stages
 - 4.1.1: Modular refactoring - split into multiple files for maintainability
+- 4.2.0: Improvements per deep-review-v5.0.md
+         - REC-002: Circuit breaker now reads max_consecutive_losses from config
+         - REC-003: Exit signals use per-symbol position size for multi-symbol accuracy
+         - REC-004: VWAP reversion signals now check trade flow confirmation
+         - REC-005: Micro-price fallback status logged in indicators
+         - REC-006: Per-symbol position limits (max_position_per_symbol_usd)
 """
 
 # =============================================================================
