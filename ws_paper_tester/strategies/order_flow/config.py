@@ -11,8 +11,9 @@ from typing import Dict, Any
 # Strategy Metadata
 # =============================================================================
 STRATEGY_NAME = "order_flow"
-STRATEGY_VERSION = "4.3.0"
-SYMBOLS = ["XRP/USDT", "BTC/USDT"]
+STRATEGY_VERSION = "4.4.0"
+# REC-003 (v4.4.0): Added XRP/BTC ratio pair
+SYMBOLS = ["XRP/USDT", "BTC/USDT", "XRP/BTC"]
 
 
 # =============================================================================
@@ -250,6 +251,32 @@ SYMBOL_CONFIGS: Dict[str, Dict[str, Any]] = {
         'volume_spike_mult': 1.8,
         'take_profit_pct': 0.8,
         'stop_loss_pct': 0.4,
+    },
+    # ==========================================================================
+    # REC-003 (v4.4.0): XRP/BTC Ratio Pair Configuration
+    # ==========================================================================
+    # Research findings (December 2025):
+    # - Liquidity: ~1,608 BTC/24h (~$160M) - 7-10x less than XRP/USDT
+    # - Volatility: 234% daily, XRP is 1.55x more volatile than BTC
+    # - Correlation: 0.84 (declining 24.86% over 90 days)
+    # - Spread: Wider than USDT pairs due to lower liquidity
+    # - Dynamics: Ratio pair behavior with mean reversion potential
+    #
+    # Configuration rationale:
+    # - Higher thresholds: Lower liquidity = more noise in order flow
+    # - Smaller position: Lower liquidity = higher slippage risk
+    # - Higher volume mult: Need stronger confirmation in thin market
+    # - Wider TP/SL: Account for higher volatility while maintaining 2:1 R:R
+    # ==========================================================================
+    'XRP/BTC': {
+        'buy_imbalance_threshold': 0.35,     # Higher: 7-10x lower liquidity than USDT pairs
+        'sell_imbalance_threshold': 0.30,    # Higher: requires stronger signal confirmation
+        'imbalance_threshold': 0.35,         # Fallback threshold
+        'position_size_usd': 15.0,           # Smaller: higher slippage risk in thin market
+        'volume_spike_mult': 2.2,            # Higher: need stronger volume confirmation
+        'take_profit_pct': 1.5,              # Wider: XRP 1.55x more volatile than BTC
+        'stop_loss_pct': 0.75,               # Wider: maintains 2:1 R:R (1.5/0.75)
+        'cooldown_trades': 15,               # Higher: fewer quality signals in low liquidity
     },
 }
 

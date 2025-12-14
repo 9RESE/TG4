@@ -1,36 +1,50 @@
 # Order Flow Strategy Backlog
 
-**Strategy Version:** 4.3.0
+**Strategy Version:** 4.4.0
 **Last Updated:** 2025-12-14
 **Created From:** Deep Review v7.0
 
 ---
 
-## Deferred Recommendations
+## Implemented Recommendations
 
-### REC-003: Add XRP/BTC Configuration
+### REC-003: Add XRP/BTC Configuration - IMPLEMENTED v4.4.0
 
-**Priority:** MEDIUM | **Effort:** LOW | **Status:** Deferred - Needs Clarification
+**Priority:** MEDIUM | **Effort:** LOW | **Status:** IMPLEMENTED
 
 **Description:**
-If XRP/BTC trading is intended, add symbol-specific configuration. Currently, only XRP/USDT and BTC/USDT are supported.
+Added XRP/BTC ratio pair support with research-backed configuration parameters.
 
-**Suggested Configuration:**
+**Implementation (config.py):**
 ```python
 'XRP/BTC': {
-    'buy_imbalance_threshold': 0.35,     # Higher for ratio volatility
-    'sell_imbalance_threshold': 0.30,
-    'position_size_usd': 15.0,           # Smaller for lower liquidity
-    'volume_spike_mult': 2.2,            # Higher confirmation
-    'take_profit_pct': 1.5,              # Wider for ratio volatility
-    'stop_loss_pct': 0.75,               # Maintains 2:1 R:R
+    'buy_imbalance_threshold': 0.35,     # Higher: 7-10x lower liquidity than USDT pairs
+    'sell_imbalance_threshold': 0.30,    # Higher: requires stronger signal confirmation
+    'imbalance_threshold': 0.35,         # Fallback threshold
+    'position_size_usd': 15.0,           # Smaller: higher slippage risk in thin market
+    'volume_spike_mult': 2.2,            # Higher: need stronger volume confirmation
+    'take_profit_pct': 1.5,              # Wider: XRP 1.55x more volatile than BTC
+    'stop_loss_pct': 0.75,               # Wider: maintains 2:1 R:R (1.5/0.75)
+    'cooldown_trades': 15,               # Higher: fewer quality signals in low liquidity
 },
 ```
 
-**Deferral Reason:**
-No confirmed business requirement for XRP/BTC pair. Current scope covers USDT pairs only. Add when XRP/BTC trading is explicitly requested.
+**Research Basis (December 2025):**
+- Liquidity: ~1,608 BTC/24h (~$160M) - 7-10x less than XRP/USDT
+- Volatility: 234% daily, XRP is 1.55x more volatile than BTC
+- Correlation: 0.84 (declining 24.86% over 90 days)
+- Spread: Wider than USDT pairs due to lower liquidity
+- Dynamics: Ratio pair behavior with mean reversion potential
+
+**Sources:**
+- [CoinGecko XRP Statistics](https://coinlaw.io/xrp-statistics/)
+- [MacroAxis XRP-BTC Correlation](https://www.macroaxis.com/invest/pair-correlation/XRP.CC/BTC.CC/XRP-vs-Bitcoin)
+- [Gate.com XRP-BTC Correlation Analysis](https://www.gate.com/crypto-wiki/article/how-is-the-price-correlation-between-xrp-and-bitcoin)
+- [CME Group XRP Analysis](https://www.cmegroup.com/insights/economic-research/2025/how-xrp-relates-to-the-crypto-universe-and-the-broader-economy.html)
 
 ---
+
+## Deferred Recommendations
 
 ### REC-005: Volume Anomaly Detection
 
@@ -141,7 +155,7 @@ Strategy currently assumes single exchange data feed. Cross-exchange arbitrage o
 |--------|--------|---------------|-------|
 | REC-001 | IMPLEMENTED | 4.3.0 | Trade flow check for VWAP short |
 | REC-002 | IMPLEMENTED | 4.3.0 | OFF_HOURS session type |
-| REC-003 | DEFERRED | TBD | Needs business requirement |
+| REC-003 | IMPLEMENTED | 4.4.0 | XRP/BTC ratio pair configuration |
 | REC-004 | IMPLEMENTED | 4.3.0 | Extended decay timing |
 | REC-005 | DEFERRED | 5.0.0 | Post-paper testing |
 | REC-006 | DEFERRED | 5.0.0 | Post-paper testing |
@@ -150,5 +164,6 @@ Strategy currently assumes single exchange data feed. Cross-exchange arbitrage o
 
 ---
 
-*Document Version: 1.0*
+*Document Version: 1.1*
 *Created: 2025-12-14*
+*Updated: 2025-12-14 - REC-003 implemented*

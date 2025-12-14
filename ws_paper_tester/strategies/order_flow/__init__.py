@@ -1,5 +1,5 @@
 """
-Order Flow Strategy v4.3.0
+Order Flow Strategy v4.4.0
 
 Trades based on trade tape analysis and buy/sell imbalance.
 Enhanced with VPIN, volatility regimes, session awareness, and advanced risk management.
@@ -35,6 +35,15 @@ Version History:
          - REC-004: Extended position decay start (5 min) for candle data alignment
          - REC-007: Documented trailing stop design decision in config
          - REC-008: Created BACKLOG.md with deferred enhancements
+- 4.4.0: XRP/BTC ratio pair support
+         - REC-003: Added XRP/BTC to SYMBOLS list with research-backed configuration
+         - Configuration based on December 2025 market research:
+           * 7-10x lower liquidity than USDT pairs
+           * XRP 1.55x more volatile than BTC
+           * 0.84 correlation (declining 24.86% over 90 days)
+           * Higher thresholds (0.35/0.30) for noise filtering
+           * Smaller position ($15) for slippage risk
+           * Wider TP/SL (1.5%/0.75%) maintaining 2:1 R:R
 """
 
 # =============================================================================
