@@ -1,5 +1,5 @@
 """
-Mean Reversion Strategy v3.0.0
+Mean Reversion Strategy v4.0.0
 
 Trades price deviations from moving average and VWAP.
 Enhanced with volatility regimes, circuit breaker, multi-symbol support,
@@ -27,6 +27,14 @@ Version History:
          - REC-006: Added trailing stops
          - REC-007: Added position decay
          - Finding #4: Refactored _evaluate_symbol for lower complexity
+- 4.0.0: Optimization per mean-reversion-deep-review-v4.0.md
+         - REC-001: Trailing stops disabled by default (research: fixed TP better for MR)
+         - REC-002: Extended position decay timing (15 min start, 5 min intervals)
+         - REC-003: Added trend confirmation period (reduce false positives in choppy markets)
+         - REC-005: Added XRP/BTC correlation monitoring (rolling Pearson coefficient)
+         - Gentler decay multipliers: [1.0, 0.85, 0.7, 0.5]
+         - Wider trailing distance: 0.3% (if enabled)
+         - Higher trailing activation: 0.4% (if enabled)
 """
 from datetime import datetime
 from typing import Dict, Any, Optional, List, Tuple
@@ -44,7 +52,7 @@ except ImportError:
 # REQUIRED: Strategy Metadata
 # =============================================================================
 STRATEGY_NAME = "mean_reversion"
-STRATEGY_VERSION = "3.0.0"
+STRATEGY_VERSION = "4.0.0"
 SYMBOLS = ["XRP/USDT", "BTC/USDT", "XRP/BTC"]
 
 
@@ -142,26 +150,40 @@ CONFIG = {
     'vwap_size_multiplier': 0.5,      # Position size multiplier for VWAP signals
 
     # ==========================================================================
-    # Trend Filter - REC-004 (v3.0.0)
+    # Trend Filter - REC-004 (v3.0.0), Updated per v4.0 Review REC-003
+    # Added confirmation period to reduce false positives in choppy markets
     # ==========================================================================
     'use_trend_filter': True,         # Enable trend filtering
     'trend_sma_period': 50,           # Lookback for trend SMA
     'trend_slope_threshold': 0.05,    # Min slope % to consider trending
+    'trend_confirmation_periods': 3,  # Consecutive trending evals before rejection (REC-003)
 
     # ==========================================================================
-    # Trailing Stops - REC-006 (v3.0.0)
+    # Trailing Stops - REC-006 (v3.0.0), Updated per v4.0 Review REC-001
+    # Research: Fixed TP better for mean reversion than trailing stops
+    # Trailing stops designed for trend-following; may exit prematurely during MR
     # ==========================================================================
-    'use_trailing_stop': True,        # Enable trailing stops
-    'trailing_activation_pct': 0.3,   # Activate at 0.3% profit
-    'trailing_distance_pct': 0.2,     # Trail 0.2% from high/low
+    'use_trailing_stop': False,       # Disabled by default (per REC-001 research)
+    'trailing_activation_pct': 0.4,   # Activate at 0.4% profit (increased for MR)
+    'trailing_distance_pct': 0.3,     # Trail 0.3% from high/low (wider per REC-001)
 
     # ==========================================================================
-    # Position Decay - REC-007 (v3.0.0)
+    # Position Decay - REC-007 (v3.0.0), Updated per v4.0 Review REC-002
+    # Research: Crypto mean reversion needs multi-candle periods for completion
     # ==========================================================================
     'use_position_decay': True,       # Enable time-based TP reduction
-    'decay_start_minutes': 3.0,       # Start reducing TP after 3 min
-    'decay_interval_minutes': 1.0,    # Reduce TP every 1 min
-    'decay_multipliers': [1.0, 0.75, 0.5, 0.25],  # TP multiplier at each stage
+    'decay_start_minutes': 15.0,      # Start reducing TP after 15 min (was 3, per REC-002)
+    'decay_interval_minutes': 5.0,    # Reduce TP every 5 min (was 1, per REC-002)
+    'decay_multipliers': [1.0, 0.85, 0.7, 0.5],  # Gentler reduction (per REC-002)
+
+    # ==========================================================================
+    # XRP/BTC Correlation Monitoring - REC-005 (v4.0.0)
+    # Research: XRP correlation with BTC declining (24.86% over 90 days)
+    # Monitor for adaptive ratio trading decisions
+    # ==========================================================================
+    'use_correlation_monitoring': True,  # Enable XRP/BTC correlation tracking
+    'correlation_lookback': 50,          # Candles for correlation calculation
+    'correlation_warn_threshold': 0.5,   # Log warning if correlation drops below
 
     # ==========================================================================
     # Rejection Tracking
@@ -518,23 +540,155 @@ def _calculate_trend_slope(candles: List, period: int = 50) -> float:
 
 def _is_trending(
     candles: List,
-    config: Dict[str, Any]
-) -> Tuple[bool, float]:
+    config: Dict[str, Any],
+    state: Dict[str, Any],
+    symbol: str
+) -> Tuple[bool, float, int]:
     """
     Check if market is currently trending (unsuitable for mean reversion).
 
+    REC-003 (v4.0): Added confirmation period to reduce false positives
+    in choppy markets. Only consider trending if slope exceeds threshold
+    for N consecutive evaluations.
+
     Returns:
-        Tuple of (is_trending, slope_pct)
+        Tuple of (is_confirmed_trending, slope_pct, consecutive_trending_count)
     """
     period = config.get('trend_sma_period', 50)
     threshold = config.get('trend_slope_threshold', 0.05)
+    confirmation_periods = config.get('trend_confirmation_periods', 3)
 
     slope_pct = _calculate_trend_slope(candles, period)
 
-    # Market is trending if slope exceeds threshold in either direction
-    is_trending = abs(slope_pct) > threshold
+    # Check if slope exceeds threshold
+    is_slope_trending = abs(slope_pct) > threshold
 
-    return is_trending, slope_pct
+    # Initialize trend confirmation tracking per symbol
+    if 'trend_confirmation_counts' not in state:
+        state['trend_confirmation_counts'] = {}
+
+    # Update consecutive trending count
+    if is_slope_trending:
+        state['trend_confirmation_counts'][symbol] = \
+            state['trend_confirmation_counts'].get(symbol, 0) + 1
+    else:
+        state['trend_confirmation_counts'][symbol] = 0
+
+    consecutive_count = state['trend_confirmation_counts'].get(symbol, 0)
+
+    # Only confirm trending if threshold exceeded for N consecutive periods
+    is_confirmed_trending = consecutive_count >= confirmation_periods
+
+    return is_confirmed_trending, slope_pct, consecutive_count
+
+
+# =============================================================================
+# Section 4b.2: XRP/BTC Correlation Monitoring - REC-005 (v4.0.0)
+# =============================================================================
+def _calculate_correlation(
+    xrp_candles: List,
+    btc_candles: List,
+    lookback: int = 50
+) -> Optional[float]:
+    """
+    Calculate rolling Pearson correlation between XRP and BTC price movements.
+
+    REC-005 (v4.0.0): Added for XRP/BTC ratio trading analysis.
+    Research shows XRP correlation with BTC declining (24.86% over 90 days),
+    which affects ratio mean reversion timing.
+
+    Args:
+        xrp_candles: XRP/USDT candles
+        btc_candles: BTC/USDT candles
+        lookback: Number of candles for correlation
+
+    Returns:
+        Correlation coefficient (-1 to +1), None if insufficient data
+    """
+    if len(xrp_candles) < lookback + 1 or len(btc_candles) < lookback + 1:
+        return None
+
+    # Get returns for correlation calculation
+    xrp_closes = [c.close for c in xrp_candles[-(lookback + 1):]]
+    btc_closes = [c.close for c in btc_candles[-(lookback + 1):]]
+
+    if len(xrp_closes) != len(btc_closes):
+        return None
+
+    # Calculate returns
+    xrp_returns = [(xrp_closes[i] - xrp_closes[i-1]) / xrp_closes[i-1]
+                   for i in range(1, len(xrp_closes)) if xrp_closes[i-1] != 0]
+    btc_returns = [(btc_closes[i] - btc_closes[i-1]) / btc_closes[i-1]
+                   for i in range(1, len(btc_closes)) if btc_closes[i-1] != 0]
+
+    if len(xrp_returns) < 2 or len(btc_returns) < 2:
+        return None
+
+    # Ensure same length
+    n = min(len(xrp_returns), len(btc_returns))
+    xrp_returns = xrp_returns[-n:]
+    btc_returns = btc_returns[-n:]
+
+    # Calculate Pearson correlation
+    mean_xrp = sum(xrp_returns) / n
+    mean_btc = sum(btc_returns) / n
+
+    # Covariance
+    covariance = sum((xrp_returns[i] - mean_xrp) * (btc_returns[i] - mean_btc)
+                     for i in range(n)) / n
+
+    # Standard deviations
+    std_xrp = (sum((r - mean_xrp) ** 2 for r in xrp_returns) / n) ** 0.5
+    std_btc = (sum((r - mean_btc) ** 2 for r in btc_returns) / n) ** 0.5
+
+    if std_xrp == 0 or std_btc == 0:
+        return None
+
+    correlation = covariance / (std_xrp * std_btc)
+
+    # Clamp to valid range
+    return max(-1.0, min(1.0, correlation))
+
+
+def _get_xrp_btc_correlation(
+    data: DataSnapshot,
+    config: Dict[str, Any],
+    state: Dict[str, Any]
+) -> Optional[float]:
+    """
+    Get XRP/BTC correlation and update tracking.
+
+    Returns correlation coefficient or None if unavailable.
+    """
+    if not config.get('use_correlation_monitoring', True):
+        return None
+
+    xrp_candles = data.candles_5m.get('XRP/USDT', ())
+    btc_candles = data.candles_5m.get('BTC/USDT', ())
+    lookback = config.get('correlation_lookback', 50)
+
+    correlation = _calculate_correlation(
+        list(xrp_candles), list(btc_candles), lookback
+    )
+
+    if correlation is not None:
+        # Track correlation history
+        if 'correlation_history' not in state:
+            state['correlation_history'] = []
+        state['correlation_history'].append(correlation)
+        # Keep bounded
+        if len(state['correlation_history']) > 100:
+            state['correlation_history'] = state['correlation_history'][-100:]
+
+        # Store latest
+        state['xrp_btc_correlation'] = correlation
+
+        # Check for low correlation warning
+        warn_threshold = config.get('correlation_warn_threshold', 0.5)
+        if correlation < warn_threshold and not state.get('_correlation_warned', False):
+            state['_correlation_warned'] = True
+
+    return correlation
 
 
 # =============================================================================
@@ -874,11 +1028,14 @@ def _evaluate_symbol(
                 _track_rejection(state, RejectionReason.REGIME_PAUSE, symbol)
             return None
 
-    # REC-004 (v3.0.0): Trend filter check
+    # REC-004 (v3.0.0): Trend filter check with confirmation (REC-003 v4.0)
     trend_slope = 0.0
     is_market_trending = False
+    trend_confirmation_count = 0
     if config.get('use_trend_filter', True):
-        is_market_trending, trend_slope = _is_trending(candles_list, config)
+        is_market_trending, trend_slope, trend_confirmation_count = _is_trending(
+            candles_list, config, state, symbol
+        )
 
     # Calculate VWAP
     vwap = data.get_vwap(symbol, config.get('vwap_lookback', 50))
@@ -903,6 +1060,11 @@ def _evaluate_symbol(
     use_trade_flow = config.get('use_trade_flow_confirmation', True)
     trade_flow_threshold = config.get('trade_flow_threshold', 0.10)
     trade_flow = data.get_trade_imbalance(symbol, 50)
+
+    # REC-005 (v4.0.0): XRP/BTC correlation monitoring
+    xrp_btc_correlation = None
+    if symbol == 'XRP/BTC' and config.get('use_correlation_monitoring', True):
+        xrp_btc_correlation = _get_xrp_btc_correlation(data, config, state)
 
     # Get current position for this symbol
     current_position = state.get('position_by_symbol', {}).get(symbol, 0)
@@ -939,6 +1101,11 @@ def _evaluate_symbol(
         'trend_slope': round(trend_slope, 4),
         'is_trending': is_market_trending,
         'use_trend_filter': config.get('use_trend_filter', True),
+        # v4.0.0 indicators - REC-003 trend confirmation
+        'trend_confirmation_count': trend_confirmation_count,
+        'trend_confirmation_required': config.get('trend_confirmation_periods', 3),
+        # v4.0.0 indicators - REC-005 XRP/BTC correlation (only for XRP/BTC)
+        'xrp_btc_correlation': round(xrp_btc_correlation, 4) if xrp_btc_correlation else None,
     }
 
     # ==========================================================================
@@ -1295,8 +1462,12 @@ def on_start(config: Dict[str, Any], state: Dict[str, Any]) -> None:
           f"CircuitBreaker={config.get('use_circuit_breaker', True)}, "
           f"TradeFlowConfirm={config.get('use_trade_flow_confirmation', True)}, "
           f"TrendFilter={config.get('use_trend_filter', True)}, "
-          f"TrailingStop={config.get('use_trailing_stop', True)}, "
-          f"PositionDecay={config.get('use_position_decay', True)}")
+          f"TrailingStop={config.get('use_trailing_stop', False)}, "  # v4.0: default False per REC-001
+          f"PositionDecay={config.get('use_position_decay', True)}, "
+          f"CorrelationMonitor={config.get('use_correlation_monitoring', True)}")  # v4.0: REC-005
+    # v4.0.0: Log key parameter changes
+    print(f"[mean_reversion] v4.0 Params: DecayStart={config.get('decay_start_minutes', 15.0)}min, "
+          f"TrendConfirm={config.get('trend_confirmation_periods', 3)} periods")
 
 
 def on_fill(fill: Dict[str, Any], state: Dict[str, Any]) -> None:

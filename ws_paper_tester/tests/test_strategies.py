@@ -146,7 +146,63 @@ class TestMeanReversionStrategy:
 
         assert mr is not None
 
-        snapshot = create_rich_snapshot(2.35)
+        # Create a snapshot with enough candles for all 3 symbols
+        now = datetime.now()
+        candles = []
+        for i in range(50):
+            offset = (50 - i) * 0.001
+            candles.append(Candle(
+                timestamp=now,
+                open=2.35 - offset,
+                high=2.35 - offset + 0.005,
+                low=2.35 - offset - 0.005,
+                close=2.35 - offset + 0.002,
+                volume=100.0
+            ))
+
+        xrp_btc_candles = []
+        for i in range(50):
+            offset = (50 - i) * 0.0000001
+            xrp_btc_candles.append(Candle(
+                timestamp=now,
+                open=0.0000225 - offset,
+                high=0.0000225 - offset + 0.0000001,
+                low=0.0000225 - offset - 0.0000001,
+                close=0.0000225 - offset,
+                volume=100.0
+            ))
+
+        trades = []
+        for i in range(60):
+            trades.append(Trade(
+                timestamp=now,
+                price=2.35 + (i % 2 - 0.5) * 0.002,
+                size=50.0 + i,
+                side='buy' if i % 3 != 0 else 'sell'
+            ))
+
+        ob = OrderbookSnapshot(
+            bids=tuple((2.34 - i*0.001, 100.0 + i*10) for i in range(10)),
+            asks=tuple((2.36 + i*0.001, 100.0 + i*10) for i in range(10))
+        )
+
+        snapshot = DataSnapshot(
+            timestamp=now,
+            prices={'XRP/USDT': 2.35, 'BTC/USDT': 104500.0, 'XRP/BTC': 0.0000225},
+            candles_1m={
+                'XRP/USDT': tuple(candles),
+                'BTC/USDT': tuple(candles),
+                'XRP/BTC': tuple(xrp_btc_candles)
+            },
+            candles_5m={
+                'XRP/USDT': tuple(candles),
+                'BTC/USDT': tuple(candles),
+                'XRP/BTC': tuple(xrp_btc_candles)
+            },
+            orderbooks={'XRP/USDT': ob, 'BTC/USDT': ob},
+            trades={'XRP/USDT': tuple(trades), 'BTC/USDT': tuple(trades)}
+        )
+
         mr.on_start()
 
         signal = mr.generate_signal(snapshot)
@@ -154,6 +210,9 @@ class TestMeanReversionStrategy:
         # Check indicators were calculated
         assert 'indicators' in mr.state
         indicators = mr.state['indicators']
+        # 'active' or 'no_signal' both indicate successful indicator calculation
+        assert indicators.get('status') in ('active', 'no_signal'), \
+            f"Status should be active or no_signal, got {indicators.get('status')}"
         assert 'sma' in indicators
         assert 'rsi' in indicators
 
@@ -700,3 +759,373 @@ class TestMarketMakingV15Features:
         btc_usdt = SYMBOL_CONFIGS.get('BTC/USDT', {})
         assert btc_usdt.get('take_profit_pct') == 0.35
         assert btc_usdt.get('stop_loss_pct') == 0.35
+
+
+class TestMeanReversionV40Features:
+    """Tests for Mean Reversion v4.0.0 features per deep-review-v4.0.md."""
+
+    def test_trend_slope_calculation(self):
+        """Test linear regression slope calculation."""
+        from strategies.mean_reversion import _calculate_trend_slope
+
+        now = datetime.now()
+
+        # Create uptrending candles
+        uptrend_candles = []
+        for i in range(60):
+            price = 2.30 + (i * 0.002)  # Upward slope
+            uptrend_candles.append(Candle(
+                timestamp=now,
+                open=price - 0.001,
+                high=price + 0.002,
+                low=price - 0.002,
+                close=price,
+                volume=100.0
+            ))
+
+        slope = _calculate_trend_slope(uptrend_candles, 50)
+        assert slope > 0, "Uptrend should have positive slope"
+
+        # Create downtrending candles
+        downtrend_candles = []
+        for i in range(60):
+            price = 2.50 - (i * 0.002)  # Downward slope
+            downtrend_candles.append(Candle(
+                timestamp=now,
+                open=price + 0.001,
+                high=price + 0.002,
+                low=price - 0.002,
+                close=price,
+                volume=100.0
+            ))
+
+        slope2 = _calculate_trend_slope(downtrend_candles, 50)
+        assert slope2 < 0, "Downtrend should have negative slope"
+
+        # Flat market should have near-zero slope
+        flat_candles = []
+        for i in range(60):
+            flat_candles.append(Candle(
+                timestamp=now,
+                open=2.35,
+                high=2.36,
+                low=2.34,
+                close=2.35,
+                volume=100.0
+            ))
+
+        slope3 = _calculate_trend_slope(flat_candles, 50)
+        assert abs(slope3) < 0.01, "Flat market should have near-zero slope"
+
+    def test_trend_confirmation_period(self):
+        """Test REC-003: trend confirmation requires N consecutive periods."""
+        from strategies.mean_reversion import _is_trending
+
+        now = datetime.now()
+        state = {}
+        symbol = 'XRP/USDT'
+
+        # Create trending candles
+        trending_candles = []
+        for i in range(60):
+            price = 2.30 + (i * 0.003)  # Strong uptrend
+            trending_candles.append(Candle(
+                timestamp=now,
+                open=price - 0.001,
+                high=price + 0.002,
+                low=price - 0.002,
+                close=price,
+                volume=100.0
+            ))
+
+        config = {
+            'trend_sma_period': 50,
+            'trend_slope_threshold': 0.05,
+            'trend_confirmation_periods': 3
+        }
+
+        # First evaluation - should not be confirmed yet
+        is_trending1, slope1, count1 = _is_trending(trending_candles, config, state, symbol)
+        assert count1 == 1, "First trending evaluation should set count to 1"
+        assert is_trending1 is False, "First trending evaluation should not confirm"
+
+        # Second evaluation
+        is_trending2, slope2, count2 = _is_trending(trending_candles, config, state, symbol)
+        assert count2 == 2, "Second trending evaluation should set count to 2"
+        assert is_trending2 is False, "Second trending evaluation should not confirm"
+
+        # Third evaluation - should now confirm
+        is_trending3, slope3, count3 = _is_trending(trending_candles, config, state, symbol)
+        assert count3 == 3, "Third trending evaluation should set count to 3"
+        assert is_trending3 is True, "Third trending evaluation should confirm"
+
+        # Reset with non-trending candles
+        flat_candles = []
+        for i in range(60):
+            flat_candles.append(Candle(
+                timestamp=now,
+                open=2.35,
+                high=2.36,
+                low=2.34,
+                close=2.35,
+                volume=100.0
+            ))
+
+        is_trending4, slope4, count4 = _is_trending(flat_candles, config, state, symbol)
+        assert count4 == 0, "Non-trending should reset count to 0"
+        assert is_trending4 is False, "Non-trending should not confirm"
+
+    def test_correlation_calculation(self):
+        """Test REC-005: XRP/BTC correlation calculation."""
+        from strategies.mean_reversion import _calculate_correlation
+        import math
+
+        now = datetime.now()
+
+        # Create positively correlated candles using sine wave
+        # Both move in the same direction
+        xrp_candles = []
+        btc_candles = []
+        for i in range(60):
+            # Both use same sine pattern -> positive correlation
+            xrp_price = 2.35 + 0.05 * math.sin(i * 0.3)
+            btc_price = 100000 + 2000 * math.sin(i * 0.3)
+            xrp_candles.append(Candle(now, xrp_price, xrp_price+0.01, xrp_price-0.01, xrp_price, 100))
+            btc_candles.append(Candle(now, btc_price, btc_price+100, btc_price-100, btc_price, 10))
+
+        corr = _calculate_correlation(xrp_candles, btc_candles, 50)
+        assert corr is not None
+        assert corr > 0.9, f"Positively correlated should have high correlation, got {corr}"
+
+        # Create negatively correlated candles
+        # XRP uses sine, BTC uses -sine (opposite phase)
+        xrp_candles2 = []
+        btc_candles2 = []
+        for i in range(60):
+            xrp_price = 2.35 + 0.05 * math.sin(i * 0.3)
+            btc_price = 100000 - 2000 * math.sin(i * 0.3)  # Opposite pattern
+            xrp_candles2.append(Candle(now, xrp_price, xrp_price+0.01, xrp_price-0.01, xrp_price, 100))
+            btc_candles2.append(Candle(now, btc_price, btc_price+100, btc_price-100, btc_price, 10))
+
+        corr2 = _calculate_correlation(xrp_candles2, btc_candles2, 50)
+        assert corr2 is not None
+        assert corr2 < -0.9, f"Negatively correlated should have negative correlation, got {corr2}"
+
+        # Insufficient data
+        corr3 = _calculate_correlation(xrp_candles[:10], btc_candles[:10], 50)
+        assert corr3 is None, "Insufficient data should return None"
+
+    def test_position_decay_timing_v40(self):
+        """Test REC-002: extended position decay timing."""
+        from strategies.mean_reversion import _get_decayed_take_profit
+        from datetime import timedelta
+
+        now = datetime.now()
+        entry_price = 2.35
+        original_tp_pct = 0.5
+
+        config = {
+            'decay_start_minutes': 15.0,      # v4.0: increased from 3
+            'decay_interval_minutes': 5.0,     # v4.0: increased from 1
+            'decay_multipliers': [1.0, 0.85, 0.7, 0.5],  # v4.0: gentler
+        }
+
+        # Fresh position (5 min) - no decay
+        entry_time1 = now - timedelta(minutes=5)
+        tp1, mult1 = _get_decayed_take_profit(
+            entry_price, original_tp_pct, entry_time1, now, 'long', config
+        )
+        assert mult1 == 1.0, "Fresh position should have no decay"
+
+        # Position at 15 min - first decay stage
+        entry_time2 = now - timedelta(minutes=15)
+        tp2, mult2 = _get_decayed_take_profit(
+            entry_price, original_tp_pct, entry_time2, now, 'long', config
+        )
+        assert mult2 == 1.0, "At exactly decay_start should still be 1.0"
+
+        # Position at 20 min - second decay stage
+        entry_time3 = now - timedelta(minutes=20)
+        tp3, mult3 = _get_decayed_take_profit(
+            entry_price, original_tp_pct, entry_time3, now, 'long', config
+        )
+        assert mult3 == 0.85, f"At 20 min should be 0.85, got {mult3}"
+
+        # Position at 25 min - third decay stage
+        entry_time4 = now - timedelta(minutes=25)
+        tp4, mult4 = _get_decayed_take_profit(
+            entry_price, original_tp_pct, entry_time4, now, 'long', config
+        )
+        assert mult4 == 0.7, f"At 25 min should be 0.7, got {mult4}"
+
+        # Position at 30+ min - final decay stage
+        entry_time5 = now - timedelta(minutes=30)
+        tp5, mult5 = _get_decayed_take_profit(
+            entry_price, original_tp_pct, entry_time5, now, 'long', config
+        )
+        assert mult5 == 0.5, f"At 30 min should be 0.5, got {mult5}"
+
+    def test_trailing_stop_v40_parameters(self):
+        """Test REC-001: updated trailing stop parameters."""
+        from strategies.mean_reversion import _calculate_trailing_stop
+
+        entry_price = 2.35
+
+        # v4.0 defaults: activation=0.4%, distance=0.3%
+        activation_pct = 0.4
+        trail_distance_pct = 0.3
+
+        # Not yet activated (profit < 0.4%)
+        highest = entry_price * 1.003  # 0.3% profit
+        result = _calculate_trailing_stop(
+            entry_price, highest, highest, 'long',
+            activation_pct, trail_distance_pct
+        )
+        assert result is None, "Should not activate below 0.4% profit"
+
+        # Activated (profit >= 0.4%)
+        highest2 = entry_price * 1.005  # 0.5% profit
+        result2 = _calculate_trailing_stop(
+            entry_price, highest2, highest2, 'long',
+            activation_pct, trail_distance_pct
+        )
+        assert result2 is not None, "Should activate at 0.5% profit"
+        expected_stop = highest2 * (1 - 0.003)  # 0.3% below highest
+        assert result2 == pytest.approx(expected_stop, rel=0.001)
+
+        # Short position
+        lowest = entry_price * 0.995  # 0.5% profit for short
+        result3 = _calculate_trailing_stop(
+            entry_price, lowest, lowest, 'short',
+            activation_pct, trail_distance_pct
+        )
+        assert result3 is not None, "Short should activate at 0.5% profit"
+        expected_stop_short = lowest * (1 + 0.003)  # 0.3% above lowest
+        assert result3 == pytest.approx(expected_stop_short, rel=0.001)
+
+    def test_trailing_stop_disabled_by_default(self):
+        """Test REC-001: trailing stops disabled by default in v4.0."""
+        from strategies.mean_reversion import CONFIG
+
+        assert CONFIG['use_trailing_stop'] is False, \
+            "v4.0: Trailing stops should be disabled by default"
+
+    def test_config_updated_v40_parameters(self):
+        """Test that CONFIG has v4.0 updated parameters."""
+        from strategies.mean_reversion import CONFIG
+
+        # REC-001: Trailing stop defaults
+        assert CONFIG['trailing_activation_pct'] == 0.4, "v4.0: activation should be 0.4%"
+        assert CONFIG['trailing_distance_pct'] == 0.3, "v4.0: distance should be 0.3%"
+
+        # REC-002: Position decay timing
+        assert CONFIG['decay_start_minutes'] == 15.0, "v4.0: decay start should be 15 min"
+        assert CONFIG['decay_interval_minutes'] == 5.0, "v4.0: decay interval should be 5 min"
+        assert CONFIG['decay_multipliers'] == [1.0, 0.85, 0.7, 0.5], \
+            "v4.0: decay multipliers should be gentler"
+
+        # REC-003: Trend confirmation
+        assert CONFIG['trend_confirmation_periods'] == 3, \
+            "v4.0: trend confirmation should require 3 periods"
+
+        # REC-005: Correlation monitoring
+        assert CONFIG['use_correlation_monitoring'] is True, \
+            "v4.0: correlation monitoring should be enabled"
+
+    def test_version_is_4_0_0(self):
+        """Test strategy version is 4.0.0."""
+        from strategies.mean_reversion import STRATEGY_VERSION
+        assert STRATEGY_VERSION == "4.0.0"
+
+    def test_indicators_include_v40_fields(self):
+        """Test that indicators include v4.0.0 fields."""
+        strategies_path = Path(__file__).parent.parent / "strategies"
+        strategies = discover_strategies(str(strategies_path))
+        mr = strategies.get('mean_reversion')
+
+        mr.on_start()
+
+        # Create a snapshot with data for XRP/USDT with enough candles
+        now = datetime.now()
+        candles = []
+        for i in range(50):  # Need at least 50 for trend calculation
+            offset = (50 - i) * 0.001
+            candles.append(Candle(
+                timestamp=now,
+                open=2.35 - offset,
+                high=2.35 - offset + 0.005,
+                low=2.35 - offset - 0.005,
+                close=2.35 - offset + 0.002,
+                volume=100.0
+            ))
+
+        trades = []
+        for i in range(60):
+            trades.append(Trade(
+                timestamp=now,
+                price=2.35 + (i % 2 - 0.5) * 0.002,
+                size=50.0 + i,
+                side='buy' if i % 3 != 0 else 'sell'
+            ))
+
+        ob = OrderbookSnapshot(
+            bids=tuple((2.34 - i*0.001, 100.0 + i*10) for i in range(10)),
+            asks=tuple((2.36 + i*0.001, 100.0 + i*10) for i in range(10))
+        )
+
+        # Create XRP/BTC candles too (strategy evaluates all 3 symbols)
+        xrp_btc_candles = []
+        for i in range(50):
+            offset = (50 - i) * 0.0000001
+            xrp_btc_candles.append(Candle(
+                timestamp=now,
+                open=0.0000225 - offset,
+                high=0.0000225 - offset + 0.0000001,
+                low=0.0000225 - offset - 0.0000001,
+                close=0.0000225 - offset,
+                volume=100.0
+            ))
+
+        snapshot = DataSnapshot(
+            timestamp=now,
+            prices={'XRP/USDT': 2.35, 'BTC/USDT': 104500.0, 'XRP/BTC': 0.0000225},
+            candles_1m={
+                'XRP/USDT': tuple(candles),
+                'BTC/USDT': tuple(candles),
+                'XRP/BTC': tuple(xrp_btc_candles)
+            },
+            candles_5m={
+                'XRP/USDT': tuple(candles),
+                'BTC/USDT': tuple(candles),
+                'XRP/BTC': tuple(xrp_btc_candles)
+            },
+            orderbooks={'XRP/USDT': ob, 'BTC/USDT': ob},
+            trades={'XRP/USDT': tuple(trades), 'BTC/USDT': tuple(trades)}
+        )
+
+        mr.generate_signal(snapshot)
+
+        indicators = mr.state.get('indicators', {})
+
+        # Check we got past warming up
+        assert indicators.get('status') != 'warming_up', \
+            f"Should not be warming up with 50 candles, status: {indicators.get('status')}"
+
+        # v4.0.0 fields
+        assert 'trend_confirmation_count' in indicators, \
+            "v4.0: should include trend_confirmation_count"
+        assert 'trend_confirmation_required' in indicators, \
+            "v4.0: should include trend_confirmation_required"
+        # xrp_btc_correlation is only for XRP/BTC symbol, so it may be None for XRP/USDT
+        assert 'xrp_btc_correlation' in indicators, \
+            "v4.0: should include xrp_btc_correlation field"
+
+    def test_on_start_logs_v40_params(self):
+        """Test on_start logs v4.0 specific parameters."""
+        strategies_path = Path(__file__).parent.parent / "strategies"
+        strategies = discover_strategies(str(strategies_path))
+        mr = strategies.get('mean_reversion')
+
+        # Just verify it doesn't crash
+        mr.on_start()
+        assert mr.state.get('config_validated', False) is True
