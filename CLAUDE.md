@@ -16,3 +16,4 @@ See `docs/architecture/` for detailed documentation.
 ---
 *Uses global config from ~/.claude/CLAUDE.md*
 *Run /project-update to sync with latest standards*
+- update the docs with the recent work and ALL the changes in git. Ensure documentation complies with the documentation standards and expectations outlined in the claude.md file. Then commit.
