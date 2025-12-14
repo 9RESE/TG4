@@ -32,10 +32,10 @@ I want to develop these strategies.
 
 ## Deep Review Prompt (Copy & Fill Placeholders)
 ```
-## Task: Deep Review of market_making Strategy
+## Task: Deep Review of order_flow Strategy
 ### Scope
-- **Strategy:** `ws_paper_tester/strategies/market_making/`
-- **Docs:** `ws_paper_tester/docs/development/features/market_making/` (if exists)
+- **Strategy:** `ws_paper_tester/strategies/order_flow/`
+- **Docs:** `ws_paper_tester/docs/development/features/order_flow/` (if exists)
 - **Pairs:** XRP/USDT, BTC/USDT, XRP/BTC
 ### Review Requirements
 #### 1. Strategy Research
@@ -67,7 +67,7 @@ Review against `ws_paper_tester/docs/development/strategy-development-guide.md` 
 - Edge cases and failure modes
 - Regime change handling
 ### Deliverable
-Create documentation at: `ws_paper_tester/docs/development/review/market_making/`
+Create documentation at: `ws_paper_tester/docs/development/review/order_flow/`
 Include:
 1. **Executive Summary** - Overall assessment and risk level
 2. **Research Findings** - Academic and industry research
@@ -85,10 +85,10 @@ Include:
 
 ## Implementation Prompt (Copy & Fill Placeholders)
 ```
-## Task: Implement Review Findings for {STRATEGY_NAME} Strategy
+## Task: Implement Review Findings for order_flow Strategy
 ### Files
-- **Strategy:** `ws_paper_tester/strategies/{strategy_dir}/`
-- **Review:** `ws_paper_tester/docs/development/review/{strategy_dir}/{review_filename}`
+- **Strategy:** `ws_paper_tester/strategies/order_flow/`
+- **Review:** `ws_paper_tester/docs/development/review/order_flow/deep-review-v8.0.md`
 - **Guide:** `ws_paper_tester/docs/development/strategy-development-guide.md`
 ### Instructions
 1. Read the review document - identify all recommendations (REC-XXX)
@@ -104,7 +104,7 @@ Include:
    - Update version history in docstring
 5. Update STRATEGY_VERSION (semver)
 ### Acceptance Criteria
-- All CRITICAL/HIGH findings addressed or justified
+- All CRITICAL/HIGH, MEDIUM,and LOW findings addressed or justified
 - All existing tests pass
 - Indicators populated on all code paths
 - R:R ratio >= 1:1 maintained
@@ -115,7 +115,8 @@ Provide:
 2. Deferred changes and why
 3. New compliance score estimate
 4. New risks introduced
-5. Commit changes with documentation updates
+6. update the docs with the recent work and ALL the changes in git. Ensure documentation complies with the documentation standards and expectations outlined in the claude.md file.
+7. Commit changes with documentation updates
 ```
 ---
 
