@@ -32,10 +32,10 @@ I want to develop these strategies.
 
 ## Deep Review Prompt (Copy & Fill Placeholders)
 ```
-## Task: Deep Review of order_flow Strategy
+## Task: Deep Review of market_making Strategy
 ### Scope
-- **Strategy:** `ws_paper_tester/strategies/order_flow/`
-- **Docs:** `ws_paper_tester/docs/development/features/order_flow/` (if exists)
+- **Strategy:** `ws_paper_tester/strategies/market_making/`
+- **Docs:** `ws_paper_tester/docs/development/features/market_making/` (if exists)
 - **Pairs:** XRP/USDT, BTC/USDT, XRP/BTC
 ### Review Requirements
 #### 1. Strategy Research
@@ -67,7 +67,7 @@ Review against `ws_paper_tester/docs/development/strategy-development-guide.md` 
 - Edge cases and failure modes
 - Regime change handling
 ### Deliverable
-Create documentation at: `ws_paper_tester/docs/development/review/order_flow/`
+Create documentation at: `ws_paper_tester/docs/development/review/market_making/`
 Include:
 1. **Executive Summary** - Overall assessment and risk level
 2. **Research Findings** - Academic and industry research
