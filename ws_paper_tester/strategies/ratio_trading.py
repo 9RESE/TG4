@@ -1,5 +1,5 @@
 """
-Ratio Trading Strategy v4.0.0
+Ratio Trading Strategy v4.1.0
 
 Mean reversion strategy for XRP/BTC pair accumulation.
 Trades the XRP/BTC ratio to grow holdings of both assets.
@@ -21,11 +21,29 @@ Price exceeding the bands may indicate strong momentum, not necessarily a
 mean reversion opportunity. The volatility regime system helps mitigate this
 by pausing in EXTREME conditions and widening thresholds in HIGH volatility.
 
-WARNING - Correlation Stability:
-XRP/BTC correlation has been declining (~24.86% over 90 days as of 2025).
-The strategy includes rolling correlation monitoring to warn when the
-relationship may be weakening. Consider pausing if correlation falls below
-historical norms.
+CRITICAL WARNING - XRP/BTC Correlation Crisis (December 2025):
+XRP/BTC correlation has declined to ~0.40-0.54, representing a ~37-53% drop from
+historical norms (~0.85). This fundamentally challenges pairs trading viability.
+The strategy now enables correlation_pause_enabled by default (v4.0.0) which will
+auto-pause trading when correlation drops below 0.4. Monitor correlation closely
+and consider the following options:
+
+- CONSERVATIVE: Pause XRP/BTC trading until correlation stabilizes above 0.6
+- MODERATE: Use v4.0.0+ correlation protection (enabled by default)
+- AGGRESSIVE: Lower correlation_pause_threshold to 0.3 (more trading, higher risk)
+
+ALTERNATIVE PAIRS (REC-033):
+If XRP/BTC correlation remains low, consider evaluating alternative pairs:
+- ETH/BTC: Stronger historical cointegration (~0.80 correlation), higher liquidity
+- LTC/BTC: Classical pairs candidate (~0.80 correlation)
+- BCH/BTC: Bitcoin fork relationship (~0.75 correlation)
+These would require strategy scope expansion (future enhancement).
+
+FUTURE ENHANCEMENTS:
+- REC-034: Generalized Hurst Exponent (GHE) for mean-reversion validation
+  H < 0.5 = mean-reverting (good), H >= 0.5 = trending (pause)
+- REC-035: ADF Cointegration Test for formal cointegration validation
+  Currently uses correlation as proxy; formal testing would be more robust
 
 Version History:
 - 1.0.0: Initial implementation
@@ -70,6 +88,19 @@ Version History:
            - correlation_pause_threshold: 0.3 → 0.4
          - Research-validated: XRP/BTC correlation declining (~24.86% over 90 days)
          - Strategy parameters confirmed aligned with academic research
+- 4.1.0: Deep review v6.0 recommendations
+         - REC-033: Document alternative pairs consideration (ETH/BTC, LTC/BTC)
+           - Strategic recommendation for when XRP/BTC correlation remains low
+           - Added prominent warning about correlation crisis in docstring
+         - REC-034: Document GHE validation as future enhancement
+         - REC-035: Document ADF cointegration test as future enhancement
+         - REC-036: Add optional wider Bollinger Bands for crypto volatility
+           - New config: bollinger_std_crypto (2.5 std), use_crypto_bollinger_std
+           - Research suggests 2.5-3.0 std more appropriate for crypto volatility
+           - Disabled by default; current mitigations (trend filter, RSI, volatility
+             regimes) may make this unnecessary per review assessment
+         - Compliance: Maintained 100% with Guide v2.0
+         - Status: Production ready with correlation monitoring critical
 """
 from datetime import datetime
 from typing import Dict, Any, Optional, List, Tuple
@@ -87,7 +118,7 @@ except ImportError:
 # REQUIRED: Strategy Metadata
 # =============================================================================
 STRATEGY_NAME = "ratio_trading"
-STRATEGY_VERSION = "4.0.0"
+STRATEGY_VERSION = "4.1.0"
 SYMBOLS = ["XRP/BTC"]
 
 
@@ -144,6 +175,15 @@ CONFIG = {
     'bollinger_std': 2.0,             # Standard deviations for bands
     'entry_threshold': 1.5,           # Entry at N std devs from mean (was 1.0)
     'exit_threshold': 0.5,            # Exit at N std devs (closer to mean)
+
+    # ==========================================================================
+    # REC-036: Dynamic Bollinger Settings for Crypto Volatility
+    # Research suggests 2.5-3.0 std more appropriate for volatile crypto markets
+    # to avoid false signals. However, current mitigations (trend filter, RSI,
+    # volatility regimes) may make this unnecessary per review assessment.
+    # ==========================================================================
+    'use_crypto_bollinger_std': False,  # Enable wider bands for crypto volatility
+    'bollinger_std_crypto': 2.5,        # Wider std dev when enabled (2.5-3.0 range)
 
     # ==========================================================================
     # Position Sizing - REC-002: USD-based sizing
@@ -1144,8 +1184,12 @@ def generate_signal(
         current_spread = 0.0
 
     # Calculate Bollinger Bands
+    # REC-036: Optionally use wider bands for crypto volatility
     lookback = config.get('lookback_periods', 20)
-    num_std = config.get('bollinger_std', 2.0)
+    if config.get('use_crypto_bollinger_std', False):
+        num_std = config.get('bollinger_std_crypto', 2.5)
+    else:
+        num_std = config.get('bollinger_std', 2.0)
 
     sma, upper, lower, std_dev = _calculate_bollinger_bands(
         price_history,
@@ -1280,6 +1324,7 @@ def generate_signal(
         'std_dev': round(std_dev, 10),
         'z_score': round(z_score, 3),
         'band_width_pct': round(band_width, 4),
+        'bollinger_std': num_std,  # REC-036: Track which std dev is being used
         'position_usd': round(current_position_usd, 4),
         'position_xrp': round(state.get('position_xrp', 0), 4),
         'max_position_usd': config.get('max_position_usd', 50.0),
@@ -1557,6 +1602,10 @@ def on_start(config: Dict[str, Any], state: Dict[str, Any]) -> None:
           f"DynamicBTCPrice=True, SeparateExitTracking=True")
     print(f"[ratio_trading] v4.0 Features: CorrelationPauseEnabled={config.get('correlation_pause_enabled', True)}, "
           f"RaisedThresholds=True (research-validated)")
+    # REC-036: Crypto Bollinger Bands
+    bollinger_std = config.get('bollinger_std_crypto', 2.5) if config.get('use_crypto_bollinger_std', False) else config.get('bollinger_std', 2.0)
+    print(f"[ratio_trading] v4.1 Features: CryptoBollingerStd={config.get('use_crypto_bollinger_std', False)} "
+          f"(std={bollinger_std})")
     if config.get('use_correlation_monitoring', True):
         print(f"[ratio_trading] Correlation (REC-023/024): warn<{config.get('correlation_warning_threshold', 0.6)}, "
               f"pause<{config.get('correlation_pause_threshold', 0.4)} "
