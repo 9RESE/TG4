@@ -2,16 +2,49 @@
 Market Making Strategy - Configuration
 
 Strategy metadata, default configuration, and per-symbol overrides.
+
+v2.0.0 Changes (MM-C01, MM-H01, MM-H02, MM-M01):
+- Added circuit breaker protection (Guide v2.0 Section 16)
+- Added volatility regime classification and EXTREME pause (Guide v2.0 Section 15)
+- Added trending market filter (Guide v2.0 research)
+- Added signal rejection tracking (Guide v2.0 Section 17)
 """
 from typing import Dict, Any, List
+from enum import Enum
 
 
 # =============================================================================
 # Strategy Metadata
 # =============================================================================
 STRATEGY_NAME = "market_making"
-STRATEGY_VERSION = "1.5.0"
+STRATEGY_VERSION = "2.0.0"
 SYMBOLS = ["XRP/USDT", "BTC/USDT", "XRP/BTC"]
+
+
+# =============================================================================
+# Enums for Volatility Regime and Signal Rejection (v2.0.0)
+# =============================================================================
+class VolatilityRegime(Enum):
+    """Volatility regime classification (MM-H01, Guide v2.0 Section 15)."""
+    LOW = "low"           # < 0.3% volatility
+    MEDIUM = "medium"     # 0.3% - 0.8%
+    HIGH = "high"         # 0.8% - 1.5%
+    EXTREME = "extreme"   # > 1.5% - PAUSE TRADING
+
+
+class RejectionReason(Enum):
+    """Signal rejection reasons for tracking (MM-M01, Guide v2.0 Section 17)."""
+    NO_ORDERBOOK = "no_orderbook"
+    NO_PRICE = "no_price"
+    SPREAD_TOO_NARROW = "spread_too_narrow"
+    FEE_UNPROFITABLE = "fee_unprofitable"
+    TIME_COOLDOWN = "time_cooldown"
+    MAX_POSITION = "max_position"
+    INSUFFICIENT_SIZE = "insufficient_size"
+    TRADE_FLOW_MISALIGNED = "trade_flow_misaligned"
+    CIRCUIT_BREAKER = "circuit_breaker"
+    EXTREME_VOLATILITY = "extreme_volatility"
+    TRENDING_MARKET = "trending_market"
 
 
 # =============================================================================
@@ -70,6 +103,27 @@ CONFIG = {
     'use_position_decay': True,      # Enable time-based position decay
     'max_position_age_seconds': 300, # Max age before widening TP (5 minutes)
     'position_decay_tp_multiplier': 0.5,  # Reduce TP by 50% for stale positions
+
+    # v2.0.0: Circuit breaker protection (MM-C01, Guide v2.0 Section 16)
+    'use_circuit_breaker': True,         # Enable circuit breaker
+    'max_consecutive_losses': 3,         # Trigger after N consecutive losses
+    'circuit_breaker_cooldown_minutes': 15,  # Cooldown period after trigger
+
+    # v2.0.0: Volatility regime (MM-H01, Guide v2.0 Section 15)
+    'use_volatility_regime': True,       # Enable volatility regime classification
+    'regime_low_threshold': 0.3,         # Below this = LOW regime
+    'regime_medium_threshold': 0.8,      # Below this = MEDIUM regime
+    'regime_high_threshold': 1.5,        # Below this = HIGH, above = EXTREME
+    'regime_extreme_pause': True,        # Pause trading in EXTREME
+    'regime_high_size_mult': 0.7,        # Reduce size in HIGH regime
+    'regime_low_threshold_mult': 0.9,    # Tighter thresholds in LOW
+    'regime_high_threshold_mult': 1.3,   # Wider thresholds in HIGH
+
+    # v2.0.0: Trending market filter (MM-H02)
+    'use_trend_filter': True,            # Enable trending market filter
+    'trend_slope_threshold': 0.05,       # Skip entries if |slope| > this %
+    'trend_lookback_candles': 20,        # Candles for trend calculation
+    'trend_confirmation_periods': 3,     # Require N consecutive trending signals
 }
 
 # Per-symbol configurations (MM-009: adjusted R:R ratios)
@@ -170,5 +224,26 @@ def validate_config(config: Dict[str, Any]) -> List[str]:
     fee_rate = config.get('fee_rate', 0.001)
     if fee_rate < 0 or fee_rate > 0.01:
         errors.append(f"fee_rate should be between 0 and 0.01, got {fee_rate}")
+
+    # v2.0.0: Validate circuit breaker settings (MM-C01)
+    max_losses = config.get('max_consecutive_losses', 3)
+    if max_losses < 1 or max_losses > 10:
+        errors.append(f"max_consecutive_losses should be between 1 and 10, got {max_losses}")
+
+    cb_cooldown = config.get('circuit_breaker_cooldown_minutes', 15)
+    if cb_cooldown < 1 or cb_cooldown > 60:
+        errors.append(f"circuit_breaker_cooldown_minutes should be between 1 and 60, got {cb_cooldown}")
+
+    # v2.0.0: Validate volatility regime thresholds (MM-H01)
+    low_thresh = config.get('regime_low_threshold', 0.3)
+    med_thresh = config.get('regime_medium_threshold', 0.8)
+    high_thresh = config.get('regime_high_threshold', 1.5)
+    if not (low_thresh < med_thresh < high_thresh):
+        errors.append(f"Regime thresholds must be ordered: low < medium < high ({low_thresh} < {med_thresh} < {high_thresh})")
+
+    # v2.0.0: Validate trend filter settings (MM-H02)
+    trend_slope = config.get('trend_slope_threshold', 0.05)
+    if trend_slope < 0.01 or trend_slope > 0.5:
+        errors.append(f"trend_slope_threshold should be between 0.01 and 0.5, got {trend_slope}")
 
     return errors

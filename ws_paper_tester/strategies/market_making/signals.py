@@ -2,13 +2,19 @@
 Market Making Strategy - Signal Generation
 
 Main signal generation logic and helper functions for building signals.
+
+v2.0.0 additions:
+- Circuit breaker check before signal generation (MM-C01)
+- Volatility regime classification with EXTREME pause (MM-H01)
+- Trending market filter (MM-H02)
+- Signal rejection tracking (MM-M01)
 """
 from datetime import datetime
 from typing import Dict, Any, Optional
 
 from ws_tester.types import DataSnapshot, Signal, OrderbookSnapshot
 
-from .config import SYMBOLS, get_symbol_config, is_xrp_btc
+from .config import SYMBOLS, get_symbol_config, is_xrp_btc, RejectionReason
 from .calculations import (
     calculate_micro_price,
     calculate_optimal_spread,
@@ -20,7 +26,25 @@ from .calculations import (
     check_position_decay,
     get_xrp_usdt_price,
     calculate_effective_thresholds,
+    get_volatility_regime,
+    calculate_trend_slope,
+    check_circuit_breaker,
 )
+
+
+def track_rejection(state: Dict[str, Any], reason: RejectionReason) -> None:
+    """
+    Track signal rejection reason (MM-M01, Guide v2.0 Section 17).
+
+    Args:
+        state: Strategy state dict
+        reason: Rejection reason enum
+    """
+    if 'rejection_counts' not in state:
+        state['rejection_counts'] = {}
+
+    key = reason.value
+    state['rejection_counts'][key] = state['rejection_counts'].get(key, 0) + 1
 
 
 def build_entry_signal(
@@ -238,10 +262,12 @@ def _evaluate_symbol(
     # Get orderbook
     ob = data.orderbooks.get(symbol)
     if not ob or not ob.best_bid or not ob.best_ask:
+        track_rejection(state, RejectionReason.NO_ORDERBOOK)
         return None
 
     price = data.prices.get(symbol, 0)
     if not price:
+        track_rejection(state, RejectionReason.NO_PRICE)
         return None
 
     is_cross_pair = is_xrp_btc(symbol)
@@ -265,10 +291,74 @@ def _evaluate_symbol(
     candles = data.candles_1m.get(symbol, ())
     volatility = calculate_volatility(candles, config.get('volatility_lookback', 20))
 
+    # v2.0.0 MM-H01: Volatility regime classification (Guide v2.0 Section 15)
+    use_regime = config.get('use_volatility_regime', True)
+    regime_name = "MEDIUM"
+    regime_threshold_mult = 1.0
+    regime_size_mult = 1.0
+
+    if use_regime and volatility > 0:
+        regime_name, regime_threshold_mult, regime_size_mult = get_volatility_regime(
+            volatility, config
+        )
+
+        # EXTREME regime: pause trading completely
+        if regime_name == "EXTREME" and config.get('regime_extreme_pause', True):
+            track_rejection(state, RejectionReason.EXTREME_VOLATILITY)
+            # Still populate indicators for monitoring
+            state['indicators'] = {
+                'symbol': symbol,
+                'volatility_pct': round(volatility, 4),
+                'volatility_regime': regime_name,
+                'paused': True,
+                'paused_reason': 'extreme_volatility',
+            }
+            return None
+
+    # v2.0.0 MM-H02: Trending market filter
+    use_trend_filter = config.get('use_trend_filter', True)
+    trend_slope = 0.0
+    is_trending = False
+
+    if use_trend_filter and candles:
+        lookback = config.get('trend_lookback_candles', 20)
+        trend_slope, _ = calculate_trend_slope(candles, lookback)
+
+        trend_threshold = config.get('trend_slope_threshold', 0.05)
+        if abs(trend_slope) > trend_threshold:
+            is_trending = True
+            # Track consecutive trending periods
+            if 'trend_consecutive' not in state:
+                state['trend_consecutive'] = {}
+            state['trend_consecutive'][symbol] = state['trend_consecutive'].get(symbol, 0) + 1
+
+            # Only reject if trending for confirmation periods
+            confirmation = config.get('trend_confirmation_periods', 3)
+            if state['trend_consecutive'].get(symbol, 0) >= confirmation:
+                track_rejection(state, RejectionReason.TRENDING_MARKET)
+                state['indicators'] = {
+                    'symbol': symbol,
+                    'volatility_pct': round(volatility, 4),
+                    'volatility_regime': regime_name,
+                    'trend_slope_pct': round(trend_slope, 4),
+                    'is_trending': True,
+                    'paused': True,
+                    'paused_reason': 'trending_market',
+                }
+                return None
+        else:
+            # Reset trending counter when not trending
+            if 'trend_consecutive' in state:
+                state['trend_consecutive'][symbol] = 0
+
     # Calculate effective thresholds (MM-010 refactor)
+    # Apply regime multiplier on top of volatility scaling
     effective_min_spread, effective_threshold, vol_multiplier = calculate_effective_thresholds(
         config, symbol, volatility
     )
+
+    # Apply regime-based threshold adjustment
+    effective_threshold *= regime_threshold_mult
 
     # MM-E02: Calculate optimal spread if enabled
     use_optimal = config.get('use_optimal_spread', False)
@@ -372,6 +462,13 @@ def _evaluate_symbol(
         'volatility_pct': round(volatility, 4),
         'vol_multiplier': round(vol_multiplier, 2),
         'optimal_spread': round(optimal_spread, 4) if use_optimal else None,  # v1.5.0
+        # v2.0.0: Volatility regime (MM-H01)
+        'volatility_regime': regime_name,
+        'regime_threshold_mult': round(regime_threshold_mult, 2),
+        'regime_size_mult': round(regime_size_mult, 2),
+        # v2.0.0: Trend filter (MM-H02)
+        'trend_slope_pct': round(trend_slope, 4),
+        'is_trending': is_trending,
         # Trade flow
         'trade_flow': round(trade_flow, 4),
         'trade_flow_aligned': False,
@@ -384,23 +481,30 @@ def _evaluate_symbol(
         # Per-pair metrics
         'pnl_symbol': state.get('pnl_by_symbol', {}).get(symbol, 0),
         'trades_symbol': state.get('trades_by_symbol', {}).get(symbol, 0),
+        # v2.0.0: Circuit breaker (MM-C01)
+        'consecutive_losses': state.get('consecutive_losses', 0),
+        'circuit_breaker_active': state.get('circuit_breaker_triggered_time') is not None,
     }
 
     # Check minimum spread (with volatility adjustment)
     if spread_pct < effective_min_spread:
+        track_rejection(state, RejectionReason.SPREAD_TOO_NARROW)
         return None
 
     # MM-E03: Skip if not profitable after fees
     if use_fee_check and not is_fee_profitable:
+        track_rejection(state, RejectionReason.FEE_UNPROFITABLE)
         return None
 
     # Calculate position size with inventory skew
+    # v2.0.0: Apply regime size multiplier (MM-H01)
     skew_factor = 1.0 - abs(inventory / max_inventory) * config.get('inventory_skew', 0.5)
-    position_size = base_size * max(skew_factor, 0.1)
+    position_size = base_size * max(skew_factor, 0.1) * regime_size_mult
 
     # Minimum trade size check (in USD)
     min_size = 5.0
     if position_size < min_size:
+        track_rejection(state, RejectionReason.INSUFFICIENT_SIZE)
         return None
 
     # Decide action based on orderbook imbalance and inventory
@@ -460,6 +564,7 @@ def _evaluate_symbol(
     if inventory < max_inventory and imbalance > effective_threshold:
         if not is_trade_flow_aligned('buy'):
             state['indicators']['trade_flow_aligned'] = False
+            track_rejection(state, RejectionReason.TRADE_FLOW_MISALIGNED)
             return None
 
         state['indicators']['trade_flow_aligned'] = True
@@ -480,6 +585,7 @@ def _evaluate_symbol(
     if inventory > -max_inventory and imbalance < -effective_threshold:
         if not is_trade_flow_aligned('sell'):
             state['indicators']['trade_flow_aligned'] = False
+            track_rejection(state, RejectionReason.TRADE_FLOW_MISALIGNED)
             return None
 
         state['indicators']['trade_flow_aligned'] = True
@@ -558,6 +664,9 @@ def generate_signal(
     - MM-E03: Check fee profitability before entry
     - MM-E01: Use micro-price for better price discovery
     - MM-E04: Handle stale positions with decay
+    - v2.0.0 MM-C01: Circuit breaker protection
+    - v2.0.0 MM-H01: Volatility regime pause
+    - v2.0.0 MM-H02: Trending market filter
 
     Args:
         data: Immutable market data snapshot
@@ -576,14 +685,32 @@ def generate_signal(
         state['btc_accumulated'] = 0.0
         state['last_signal_time'] = None
         state['indicators'] = {}
+        state['rejection_counts'] = {}  # v2.0.0 MM-M01
+        state['consecutive_losses'] = 0  # v2.0.0 MM-C01
+        state['trend_consecutive'] = {}  # v2.0.0 MM-H02
 
     current_time = data.timestamp
+
+    # v2.0.0 MM-C01: Circuit breaker check (Guide v2.0 Section 16)
+    cb_triggered, cb_remaining = check_circuit_breaker(state, config, current_time)
+    if cb_triggered:
+        track_rejection(state, RejectionReason.CIRCUIT_BREAKER)
+        # Populate indicators for monitoring
+        state['indicators'] = {
+            'circuit_breaker_active': True,
+            'circuit_breaker_remaining_seconds': round(cb_remaining, 0),
+            'consecutive_losses': state.get('consecutive_losses', 0),
+            'paused': True,
+            'paused_reason': 'circuit_breaker',
+        }
+        return None
 
     # MM-003: Global cooldown check
     if state.get('last_signal_time') is not None:
         elapsed = (current_time - state['last_signal_time']).total_seconds()
         global_cooldown = config.get('cooldown_seconds', 5.0)
         if elapsed < global_cooldown:
+            track_rejection(state, RejectionReason.TIME_COOLDOWN)
             return None
 
     # Iterate over configured symbols

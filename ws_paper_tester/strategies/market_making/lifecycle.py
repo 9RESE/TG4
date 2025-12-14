@@ -2,11 +2,16 @@
 Market Making Strategy - Lifecycle Callbacks
 
 Handles on_start, on_fill, and on_stop lifecycle events.
+
+v2.0.0 additions:
+- Circuit breaker tracking in on_fill (MM-C01)
+- Rejection counts logging in on_stop (MM-M01)
 """
 from datetime import datetime
 from typing import Dict, Any
 
 from .config import validate_config, is_xrp_btc
+from .calculations import update_circuit_breaker_on_fill
 
 
 def on_start(config: Dict[str, Any], state: Dict[str, Any]) -> None:
@@ -15,6 +20,7 @@ def on_start(config: Dict[str, Any], state: Dict[str, Any]) -> None:
 
     v1.4.0: Added config validation and trailing stop tracking.
     v1.5.0: Enhanced with all v1.4 review recommendations.
+    v2.0.0: Added circuit breaker and rejection tracking initialization.
     """
     # Validate configuration
     errors = validate_config(config)
@@ -40,14 +46,26 @@ def on_start(config: Dict[str, Any], state: Dict[str, Any]) -> None:
     state['pnl_by_symbol'] = {}
     state['trades_by_symbol'] = {}
 
+    # v2.0.0 MM-C01: Circuit breaker state
+    state['consecutive_losses'] = 0
+    state['circuit_breaker_triggered_time'] = None
+    state['circuit_breaker_trigger_count'] = 0
 
-def on_fill(fill: Dict[str, Any], state: Dict[str, Any]) -> None:
+    # v2.0.0 MM-M01: Signal rejection tracking
+    state['rejection_counts'] = {}
+
+    # v2.0.0 MM-H02: Trend tracking
+    state['trend_consecutive'] = {}
+
+
+def on_fill(fill: Dict[str, Any], state: Dict[str, Any], config: Dict[str, Any] = None) -> None:
     """
     Update inventory on fill.
 
     MM-005: Fixed unit handling - use value field from executor for USD pairs.
     v1.4.0: Added position tracking for trailing stops and per-pair metrics.
     v1.5.0: Added entry_time tracking for position decay (MM-E04).
+    v2.0.0: Added circuit breaker tracking (MM-C01).
 
     For XRP/BTC:
     - Buy: +XRP inventory, track BTC spent
@@ -60,6 +78,12 @@ def on_fill(fill: Dict[str, Any], state: Dict[str, Any]) -> None:
     pnl = fill.get('pnl', 0)
     timestamp = fill.get('timestamp', datetime.now())
     value = fill.get('value', size * price)
+
+    # v2.0.0 MM-C01: Update circuit breaker on fill with PnL
+    if config is not None and pnl != 0:
+        triggered = update_circuit_breaker_on_fill(state, config, pnl, timestamp)
+        if triggered:
+            print(f"[market_making] Circuit breaker triggered after {state.get('consecutive_losses', 0)} consecutive losses")
 
     # Initialize inventory tracking by symbol
     if 'inventory_by_symbol' not in state:
@@ -146,7 +170,20 @@ def on_stop(state: Dict[str, Any]) -> None:
 
     v1.4.0: Enhanced with per-pair metrics.
     v1.5.0: Added position decay stats.
+    v2.0.0: Added rejection counts and circuit breaker stats logging (MM-M01, MM-C01).
     """
+    # v2.0.0 MM-M01: Log rejection counts
+    rejection_counts = state.get('rejection_counts', {})
+    if rejection_counts:
+        print("[market_making] Signal rejection counts:")
+        for reason, count in sorted(rejection_counts.items(), key=lambda x: -x[1]):
+            print(f"  {reason}: {count}")
+
+    # v2.0.0 MM-C01: Log circuit breaker stats
+    cb_triggers = state.get('circuit_breaker_trigger_count', 0)
+    if cb_triggers > 0:
+        print(f"[market_making] Circuit breaker triggered {cb_triggers} time(s)")
+
     state['final_summary'] = {
         'inventory_by_symbol': state.get('inventory_by_symbol', {}),
         'xrp_accumulated': state.get('xrp_accumulated', 0),
@@ -155,4 +192,8 @@ def on_stop(state: Dict[str, Any]) -> None:
         'trades_by_symbol': state.get('trades_by_symbol', {}),
         'config_warnings': state.get('config_warnings', []),
         'position_entries': state.get('position_entries', {}),  # v1.5.0
+        # v2.0.0: New stats
+        'rejection_counts': rejection_counts,
+        'circuit_breaker_trigger_count': cb_triggers,
+        'consecutive_losses_at_end': state.get('consecutive_losses', 0),
     }

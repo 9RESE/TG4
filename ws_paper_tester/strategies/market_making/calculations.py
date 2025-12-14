@@ -3,6 +3,11 @@ Market Making Strategy - Calculations
 
 Pure calculation functions for market making signals.
 All functions are stateless and side-effect free.
+
+v2.0.0 additions:
+- get_volatility_regime: Volatility regime classification (MM-H01)
+- calculate_trend_slope: Linear regression slope for trending detection (MM-H02)
+- check_circuit_breaker: Circuit breaker status check (MM-C01)
 """
 from datetime import datetime
 from typing import Dict, Any, Optional, Tuple
@@ -280,3 +285,173 @@ def calculate_effective_thresholds(
     effective_min_spread = min_spread * vol_multiplier
 
     return effective_min_spread, effective_threshold, vol_multiplier
+
+
+def get_volatility_regime(
+    volatility_pct: float,
+    config: Dict[str, Any]
+) -> Tuple[str, float, float]:
+    """
+    Classify volatility into regime (MM-H01, Guide v2.0 Section 15).
+
+    Regimes:
+    - LOW: < 0.3% - Tighter thresholds, normal size
+    - MEDIUM: 0.3% - 0.8% - Baseline
+    - HIGH: 0.8% - 1.5% - Wider thresholds, reduced size
+    - EXTREME: > 1.5% - PAUSE TRADING
+
+    Args:
+        volatility_pct: Current price volatility as percentage
+        config: Strategy configuration
+
+    Returns:
+        Tuple of (regime_name, threshold_mult, size_mult)
+    """
+    low_thresh = config.get('regime_low_threshold', 0.3)
+    med_thresh = config.get('regime_medium_threshold', 0.8)
+    high_thresh = config.get('regime_high_threshold', 1.5)
+
+    low_mult = config.get('regime_low_threshold_mult', 0.9)
+    high_mult = config.get('regime_high_threshold_mult', 1.3)
+    high_size = config.get('regime_high_size_mult', 0.7)
+
+    if volatility_pct < low_thresh:
+        return "LOW", low_mult, 1.0
+    elif volatility_pct < med_thresh:
+        return "MEDIUM", 1.0, 1.0
+    elif volatility_pct < high_thresh:
+        return "HIGH", high_mult, high_size
+    else:
+        return "EXTREME", 2.0, 0.0  # EXTREME = pause (size=0)
+
+
+def calculate_trend_slope(
+    candles,
+    lookback: int = 20
+) -> Tuple[float, bool]:
+    """
+    Calculate price trend using linear regression slope (MM-H02).
+
+    Uses simple linear regression on closing prices to determine trend direction
+    and strength.
+
+    Args:
+        candles: List of candle data
+        lookback: Number of candles to analyze
+
+    Returns:
+        Tuple of (slope_pct, is_trending)
+        - slope_pct: Price change per candle as percentage
+        - is_trending: True if absolute slope > threshold
+    """
+    if not candles or len(candles) < lookback:
+        return 0.0, False
+
+    closes = [c.close for c in candles[-lookback:]]
+    if len(closes) < 2:
+        return 0.0, False
+
+    # Simple linear regression: y = mx + b
+    n = len(closes)
+    x_mean = (n - 1) / 2
+    y_mean = sum(closes) / n
+
+    # Calculate slope
+    numerator = sum((i - x_mean) * (closes[i] - y_mean) for i in range(n))
+    denominator = sum((i - x_mean) ** 2 for i in range(n))
+
+    if denominator == 0:
+        return 0.0, False
+
+    slope = numerator / denominator
+
+    # Convert to percentage change per candle
+    if y_mean != 0:
+        slope_pct = (slope / y_mean) * 100
+    else:
+        slope_pct = 0.0
+
+    return slope_pct, True
+
+
+def check_circuit_breaker(
+    state: Dict[str, Any],
+    config: Dict[str, Any],
+    current_time: datetime
+) -> Tuple[bool, Optional[float]]:
+    """
+    Check if circuit breaker is active (MM-C01, Guide v2.0 Section 16).
+
+    Circuit breaker triggers after consecutive losses and pauses trading
+    for a cooldown period.
+
+    Args:
+        state: Strategy state dict
+        config: Strategy configuration
+        current_time: Current timestamp
+
+    Returns:
+        Tuple of (is_triggered, seconds_remaining)
+        - is_triggered: True if circuit breaker is active
+        - seconds_remaining: Seconds until reset (None if not triggered)
+    """
+    if not config.get('use_circuit_breaker', True):
+        return False, None
+
+    cb_time = state.get('circuit_breaker_triggered_time')
+    if cb_time is None:
+        return False, None
+
+    cooldown_minutes = config.get('circuit_breaker_cooldown_minutes', 15)
+    cooldown_seconds = cooldown_minutes * 60
+
+    elapsed = (current_time - cb_time).total_seconds()
+    if elapsed < cooldown_seconds:
+        remaining = cooldown_seconds - elapsed
+        return True, remaining
+    else:
+        # Cooldown expired - reset circuit breaker
+        state['circuit_breaker_triggered_time'] = None
+        state['consecutive_losses'] = 0
+        return False, None
+
+
+def update_circuit_breaker_on_fill(
+    state: Dict[str, Any],
+    config: Dict[str, Any],
+    pnl: float,
+    timestamp: datetime
+) -> bool:
+    """
+    Update circuit breaker state on fill (MM-C01).
+
+    Args:
+        state: Strategy state dict
+        config: Strategy configuration
+        pnl: Profit/loss from the fill
+        timestamp: Fill timestamp
+
+    Returns:
+        True if circuit breaker was just triggered
+    """
+    if not config.get('use_circuit_breaker', True):
+        return False
+
+    if 'consecutive_losses' not in state:
+        state['consecutive_losses'] = 0
+
+    if pnl < 0:
+        # Loss - increment counter
+        state['consecutive_losses'] = state.get('consecutive_losses', 0) + 1
+
+        max_losses = config.get('max_consecutive_losses', 3)
+        if state['consecutive_losses'] >= max_losses:
+            # Trigger circuit breaker
+            state['circuit_breaker_triggered_time'] = timestamp
+            state['circuit_breaker_trigger_count'] = state.get('circuit_breaker_trigger_count', 0) + 1
+            return True
+    else:
+        # Win - reset counter
+        state['consecutive_losses'] = 0
+
+    return False

@@ -1,5 +1,5 @@
 """
-Market Making Strategy v1.5.0
+Market Making Strategy v2.0.0
 
 Provides liquidity by placing orders on both sides of the spread.
 Captures spread while managing inventory to stay balanced.
@@ -37,16 +37,43 @@ Version History:
          - MM-011: Configurable fallback prices (no hardcoding)
          - MM-E04: Time-based position decay for stale positions
          - Refactored: Split into modular subfolder structure
+- 2.0.0: Guide v2.0 compliance per market-making-strategy-review-v1.5-deep.md
+         - MM-C01: Circuit breaker protection (Guide v2.0 Section 16)
+           * Tracks consecutive losses
+           * Pauses trading after N consecutive losses (default: 3)
+           * 15-minute cooldown period
+           * Resets on winning trade
+         - MM-H01: Volatility regime classification (Guide v2.0 Section 15)
+           * LOW/MEDIUM/HIGH/EXTREME regimes
+           * EXTREME regime pauses trading completely
+           * HIGH regime reduces position size
+           * Regime-specific threshold multipliers
+         - MM-H02: Trending market filter
+           * Linear regression slope detection
+           * Pauses new entries during strong trends
+           * Confirmation period before pausing
+         - MM-M01: Signal rejection tracking (Guide v2.0 Section 17)
+           * Tracks all rejection reasons in state
+           * Logs rejection counts on_stop
 
 Module Structure:
-- config.py: Strategy metadata, CONFIG, SYMBOL_CONFIGS, validation
-- calculations.py: Pure calculation functions (volatility, micro-price, etc.)
-- signals.py: Signal generation logic
-- lifecycle.py: on_start, on_fill, on_stop callbacks
+- config.py: Strategy metadata, CONFIG, SYMBOL_CONFIGS, enums, validation
+- calculations.py: Pure calculation functions (volatility, micro-price, regime, trend, etc.)
+- signals.py: Signal generation logic with rejection tracking
+- lifecycle.py: on_start, on_fill, on_stop callbacks with circuit breaker
 """
 
 # Strategy metadata
-from .config import STRATEGY_NAME, STRATEGY_VERSION, SYMBOLS, CONFIG, SYMBOL_CONFIGS
+from .config import (
+    STRATEGY_NAME,
+    STRATEGY_VERSION,
+    SYMBOLS,
+    CONFIG,
+    SYMBOL_CONFIGS,
+    # v2.0.0 enums
+    VolatilityRegime,
+    RejectionReason,
+)
 
 # Main signal generation
 from .signals import generate_signal
@@ -67,4 +94,7 @@ __all__ = [
     'on_start',
     'on_fill',
     'on_stop',
+    # v2.0.0: Enums for external inspection
+    'VolatilityRegime',
+    'RejectionReason',
 ]
