@@ -91,6 +91,7 @@ class WebSocketPaperTester:
         self.session_id = f"wst_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
         self.strategies_dir = strategies_dir
         self.starting_capital = starting_capital
+        self.starting_assets = (config or {}).get('starting_assets', {})
         self.enable_dashboard = enable_dashboard
         self.simulated = simulated
         self._running = False
@@ -149,9 +150,13 @@ class WebSocketPaperTester:
 
     def _initialize_components(self):
         """Initialize portfolio manager, data manager, executor, and stats."""
-        # Initialize portfolio manager with all strategies
+        # Initialize portfolio manager with all strategies and starting assets
         strategy_names = list(self.strategies.keys())
-        self.portfolio_manager = PortfolioManager(strategy_names, self.starting_capital)
+        self.portfolio_manager = PortfolioManager(
+            strategy_names,
+            self.starting_capital,
+            starting_assets=self.starting_assets
+        )
 
         # Initialize data manager
         if self.simulated:
@@ -180,6 +185,7 @@ class WebSocketPaperTester:
             "names": list(self.strategies.keys()),
             "symbols": self.symbols,
             "starting_capital": self.starting_capital,
+            "starting_assets": self.starting_assets,
         })
 
     async def run(
@@ -201,7 +207,10 @@ class WebSocketPaperTester:
         print(f"Mode: {'Simulated' if self.simulated else 'Live'}")
         print(f"Symbols: {self.symbols}")
         print(f"Strategies: {list(self.strategies.keys())}")
-        print(f"Starting Capital: ${self.starting_capital} per strategy")
+        print(f"Starting Capital: ${self.starting_capital} USDT per strategy")
+        if self.starting_assets:
+            assets_str = ', '.join(f"{v} {k}" for k, v in self.starting_assets.items() if v > 0)
+            print(f"Starting Assets: {assets_str}")
         print(f"Duration: {duration_minutes} min | Interval: {interval_ms}ms")
         print(f"{'='*60}")
 

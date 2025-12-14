@@ -18,7 +18,7 @@ except ImportError:
 # Strategy metadata (required)
 STRATEGY_NAME = "market_making"
 STRATEGY_VERSION = "1.0.1"
-SYMBOLS = ["XRP/USD"]
+SYMBOLS = ["XRP/USDT"]
 
 # Configuration with defaults
 CONFIG = {

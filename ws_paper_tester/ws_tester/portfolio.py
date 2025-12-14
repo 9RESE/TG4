@@ -173,28 +173,42 @@ class PortfolioManager:
 
     FEE_RATE = 0.001  # 0.1%
 
-    def __init__(self, strategy_names: List[str] = None, starting_capital: float = STARTING_CAPITAL):
+    def __init__(
+        self,
+        strategy_names: List[str] = None,
+        starting_capital: float = STARTING_CAPITAL,
+        starting_assets: Dict[str, float] = None
+    ):
         self.starting_capital = starting_capital
+        self.starting_assets = starting_assets or {}
         self.portfolios: Dict[str, StrategyPortfolio] = {}
         self._lock = threading.RLock()
 
         if strategy_names:
             for name in strategy_names:
-                self.portfolios[name] = StrategyPortfolio(
+                portfolio = StrategyPortfolio(
                     strategy_name=name,
                     starting_capital=starting_capital,
                     usdt=starting_capital
                 )
+                # Add starting assets to portfolio
+                if self.starting_assets:
+                    portfolio.assets = dict(self.starting_assets)
+                self.portfolios[name] = portfolio
 
     def add_strategy(self, name: str) -> StrategyPortfolio:
         """Add a new strategy portfolio at runtime. Thread-safe."""
         with self._lock:
             if name not in self.portfolios:
-                self.portfolios[name] = StrategyPortfolio(
+                portfolio = StrategyPortfolio(
                     strategy_name=name,
                     starting_capital=self.starting_capital,
                     usdt=self.starting_capital
                 )
+                # Add starting assets to portfolio
+                if self.starting_assets:
+                    portfolio.assets = dict(self.starting_assets)
+                self.portfolios[name] = portfolio
             return self.portfolios[name]
 
     def get_portfolio(self, strategy: str) -> Optional[StrategyPortfolio]:
@@ -270,14 +284,18 @@ class PortfolioManager:
             return all_fills[:limit]
 
     def reset_strategy(self, strategy: str):
-        """Reset a strategy's portfolio to starting capital. Thread-safe."""
+        """Reset a strategy's portfolio to starting capital and assets. Thread-safe."""
         with self._lock:
             if strategy in self.portfolios:
-                self.portfolios[strategy] = StrategyPortfolio(
+                portfolio = StrategyPortfolio(
                     strategy_name=strategy,
                     starting_capital=self.starting_capital,
                     usdt=self.starting_capital
                 )
+                # Reset with starting assets
+                if self.starting_assets:
+                    portfolio.assets = dict(self.starting_assets)
+                self.portfolios[strategy] = portfolio
 
     def reset_all(self):
         """Reset all portfolios to starting capital. Thread-safe."""

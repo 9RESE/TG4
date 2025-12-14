@@ -46,11 +46,11 @@ def create_rich_snapshot(price: float = 2.35) -> DataSnapshot:
 
     return DataSnapshot(
         timestamp=now,
-        prices={'XRP/USD': price, 'BTC/USD': 104500.0},
-        candles_1m={'XRP/USD': tuple(candles)},
-        candles_5m={'XRP/USD': tuple(candles)},
-        orderbooks={'XRP/USD': ob, 'BTC/USD': ob},
-        trades={'XRP/USD': tuple(trades), 'BTC/USD': tuple(trades)}
+        prices={'XRP/USDT': price, 'BTC/USDT': 104500.0},
+        candles_1m={'XRP/USDT': tuple(candles)},
+        candles_5m={'XRP/USDT': tuple(candles)},
+        orderbooks={'XRP/USDT': ob, 'BTC/USDT': ob},
+        trades={'XRP/USDT': tuple(trades), 'BTC/USDT': tuple(trades)}
     )
 
 
@@ -80,7 +80,7 @@ class TestStrategyLoader:
         strategies = discover_strategies(str(strategies_path))
         symbols = get_all_symbols(strategies)
 
-        assert 'XRP/USD' in symbols
+        assert 'XRP/USDT' in symbols
         assert len(symbols) >= 1
 
 

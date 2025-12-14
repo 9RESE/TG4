@@ -5,6 +5,35 @@ All notable changes to the WebSocket Paper Tester will be documented in this fil
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - 2025-12-13
+
+### Added
+- **XRP/BTC ratio trading support** in Order Flow strategy v2.1.0
+  - Goal: Grow holdings of both XRP and BTC through ratio trading
+  - Research-based config from Kraken 24h data (664 trades/day, 0.0446% spread)
+  - Symbol-specific cooldowns, thresholds, TP/SL percentages
+  - Separate logic for XRP/BTC (direct buy/sell, no shorting)
+- **Starting assets support** in portfolio system
+  - Portfolios can start with assets (e.g., 500 XRP) in addition to USDT
+  - `starting_assets` config section in config.yaml
+  - Assets tracked separately and included in equity calculation
+- **Per-symbol configuration** in Order Flow strategy
+  - `cooldown_trades`, `cooldown_seconds` per symbol
+  - `volume_spike_mult` per symbol
+  - `position_size_xrp` for XRP/BTC trades
+- Feature documentation: `docs/development/features/order-flow-v2.1.md`
+
+### Changed
+- Order Flow strategy updated to v2.1.0
+- Config.yaml symbols updated to include XRP/BTC
+- Test fixtures updated to use USDT pairs consistently (XRP/USDT, BTC/USDT)
+- SimulatedDataManager defaults now include USDT pairs
+- Startup banner shows starting assets when configured
+
+### Fixed
+- Symbol mismatch between strategies (USDT) and tests (USD)
+- Test `test_get_all_symbols` now correctly checks for XRP/USDT
+
 ## [1.0.2] - 2025-12-13
 
 ### Fixed

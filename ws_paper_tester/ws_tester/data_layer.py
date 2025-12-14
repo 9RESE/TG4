@@ -552,12 +552,15 @@ class SimulatedDataManager(DataManager):
     def __init__(self, symbols: List[str], initial_prices: Dict[str, float] = None):
         super().__init__(symbols)
 
-        # Set initial prices
+        # Set initial prices (using USDT pairs to match strategy symbols)
         default_prices = {
+            'XRP/USDT': 2.35,
+            'BTC/USDT': 104500.0,
+            'ETH/USDT': 3900.0,
+            'XRP/BTC': 0.0000225,
+            # Legacy USD pairs for backwards compatibility
             'XRP/USD': 2.35,
             'BTC/USD': 104500.0,
-            'ETH/USD': 3900.0,
-            'XRP/BTC': 0.0000225,
         }
 
         self._prices = initial_prices or {s: default_prices.get(s, 100.0) for s in symbols}

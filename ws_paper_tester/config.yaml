@@ -5,12 +5,19 @@
 general:
   duration_minutes: 60        # How long to run
   interval_ms: 100           # Main loop interval
-  starting_capital: 100.0    # USD per strategy
+  starting_capital: 100.0    # USDT per strategy
+
+# Starting asset holdings (in addition to USDT capital)
+# Goal: Grow holdings of both XRP and BTC through ratio trading
+starting_assets:
+  XRP: 500.0                  # 500 XRP starting balance
+  BTC: 0.0                    # Will accumulate through XRP/BTC trading
 
 # Symbols to trade
 symbols:
-  - XRP/USD
-  - BTC/USD
+  - XRP/USDT
+  - BTC/USDT
+  - XRP/BTC                   # Ratio trading to grow both XRP and BTC
 
 # Data source
 data:
