@@ -5,6 +5,37 @@ All notable changes to the WebSocket Paper Tester will be documented in this fil
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.9.0] - 2025-12-14
+
+### Added
+- **Mean Reversion strategy v4.1.0** - Risk adjustments per mean-reversion-deep-review-v5.0.md
+  - REC-001: Reduced BTC/USDT position size ($50 → $25) due to unfavorable market conditions
+    - BTC in bearish territory (below all EMAs), Fear & Greed at "Extreme Fear" (23)
+    - Academic research (SSRN Oct 2024) indicates mean reversion less effective in BTC
+    - Proportionally reduced max_position ($150 → $75)
+  - REC-002: Added fee profitability check (Guide v2.0 Section 23 compliance)
+    - `_check_fee_profitability()` validates net profit after round-trip fees
+    - New config parameters: `check_fee_profitability`, `estimated_fee_rate`, `min_net_profit_pct`
+    - New rejection reason: `FEE_UNPROFITABLE`
+  - REC-005: Added SCOPE AND LIMITATIONS documentation
+    - Explicit documentation of suitable/unsuitable market conditions
+    - Key assumptions and theoretical basis documented
+    - Market conditions to pause trading enumerated
+
+### Changed
+- **Mean Reversion strategy** (`mean_reversion.py`)
+  - Version updated to 4.1.0
+  - BTC/USDT default position size reduced from $50 to $25
+  - `on_start()` now logs FeeCheck feature status and fee parameters
+  - `_generate_entry_signal()` validates fee profitability before generating signals
+  - New indicator: `net_profit_pct` for fee-aware monitoring
+  - Docstring includes comprehensive SCOPE AND LIMITATIONS section
+
+### Documentation
+- Strategy Development Guide compliance for Mean Reversion: 89% → 92%
+- Added fee profitability validation (Section 23) and scope documentation (Section 26)
+- Research references: SSRN Oct 2024 paper on mean reversion effectiveness in Bitcoin
+
 ## [1.8.0] - 2025-12-14
 
 ### Added

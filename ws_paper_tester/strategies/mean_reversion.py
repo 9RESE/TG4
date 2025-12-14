@@ -1,9 +1,31 @@
 """
-Mean Reversion Strategy v4.0.0
+Mean Reversion Strategy v4.1.0
 
 Trades price deviations from moving average and VWAP.
 Enhanced with volatility regimes, circuit breaker, multi-symbol support,
 trend filtering, trailing stops, position decay, and comprehensive risk management.
+
+SCOPE AND LIMITATIONS (REC-005 v4.1.0):
+- Asset Types: Crypto-to-stablecoin (XRP/USDT, BTC/USDT) and ratio (XRP/BTC)
+- Best For: Range-bound markets, moderate volatility (0.3-1.0%)
+- NOT Suitable For: Strong directional trends, extreme volatility, low correlation periods
+- Market Conditions to Pause:
+  * Fear & Greed Index < 25 (Extreme Fear)
+  * ADX > 30 (strong trend)
+  * XRP/BTC correlation < 0.4
+
+KEY ASSUMPTIONS:
+- Price deviations from mean are temporary and will revert
+- Pairs maintain reasonable correlation (XRP/BTC > 0.5)
+- Market structure supports reversion within decay period (15-30 min)
+- Transaction costs are ~0.2% round-trip
+
+THEORETICAL BASIS:
+- Ornstein-Uhlenbeck process: prices fluctuate but revert to equilibrium
+- Bollinger Bands + RSI combination for overbought/oversold detection
+- VWAP deviation for institutional price anchoring
+- Research note: Academic studies (SSRN Oct 2024) show mean reversion less
+  effective in BTC since 2022; XRP may exhibit better mean-reverting behavior
 
 Version History:
 - 1.0.0: Initial implementation
@@ -35,6 +57,14 @@ Version History:
          - Gentler decay multipliers: [1.0, 0.85, 0.7, 0.5]
          - Wider trailing distance: 0.3% (if enabled)
          - Higher trailing activation: 0.4% (if enabled)
+- 4.1.0: Risk adjustments per mean-reversion-deep-review-v5.0.md
+         - REC-001: Reduced BTC/USDT position size ($50 -> $25) due to unfavorable
+           market conditions (bearish trend, Extreme Fear sentiment, academic research)
+         - REC-002: Added fee profitability check (Guide v2.0 Section 23 compliance)
+           Round-trip fees validated before signal generation
+         - REC-005: Added SCOPE AND LIMITATIONS documentation
+         - New rejection reason: FEE_UNPROFITABLE
+         - Compliance score: 89% -> 92% (fee checks + scope docs added)
 """
 from datetime import datetime
 from typing import Dict, Any, Optional, List, Tuple
@@ -52,7 +82,7 @@ except ImportError:
 # REQUIRED: Strategy Metadata
 # =============================================================================
 STRATEGY_NAME = "mean_reversion"
-STRATEGY_VERSION = "4.0.0"
+STRATEGY_VERSION = "4.1.0"
 SYMBOLS = ["XRP/USDT", "BTC/USDT", "XRP/BTC"]
 
 
@@ -79,6 +109,7 @@ class RejectionReason(Enum):
     TRADE_FLOW_NOT_ALIGNED = "trade_flow_not_aligned"
     TRENDING_MARKET = "trending_market"  # REC-004 (v3.0.0)
     NO_SIGNAL_CONDITIONS = "no_signal_conditions"
+    FEE_UNPROFITABLE = "fee_unprofitable"  # REC-002 (v4.1.0)
 
 
 # =============================================================================
@@ -186,6 +217,14 @@ CONFIG = {
     'correlation_warn_threshold': 0.5,   # Log warning if correlation drops below
 
     # ==========================================================================
+    # Fee Profitability Checks - REC-002 (v4.1.0)
+    # Guide v2.0 Section 23: Validate net profit after fees before signal
+    # ==========================================================================
+    'check_fee_profitability': True,  # Enable fee profitability validation
+    'estimated_fee_rate': 0.001,      # 0.1% per side (typical maker/taker)
+    'min_net_profit_pct': 0.05,       # Minimum net profit after round-trip fees
+
+    # ==========================================================================
     # Rejection Tracking
     # ==========================================================================
     'track_rejections': True,         # Enable rejection tracking
@@ -205,12 +244,15 @@ SYMBOL_CONFIGS = {
         'stop_loss_pct': 0.5,
         'cooldown_seconds': 10.0,
     },
+    # REC-001 (v4.1.0): Reduced position size due to unfavorable BTC market conditions
+    # BTC in bearish territory (below all EMAs), Fear & Greed at "Extreme Fear" (23)
+    # Academic research (SSRN Oct 2024) shows mean reversion less effective in BTC
     'BTC/USDT': {
         'deviation_threshold': 0.3,   # Tighter for lower volatility BTC
         'rsi_oversold': 30,           # More aggressive for efficient market
         'rsi_overbought': 70,
-        'position_size_usd': 50.0,    # Larger size for BTC liquidity
-        'max_position': 150.0,
+        'position_size_usd': 25.0,    # Reduced from $50 (REC-001 v4.1.0)
+        'max_position': 75.0,         # Reduced from $150 proportionally
         'take_profit_pct': 0.4,       # Tighter for BTC
         'stop_loss_pct': 0.4,
         'cooldown_seconds': 5.0,      # Faster for liquid BTC
@@ -689,6 +731,39 @@ def _get_xrp_btc_correlation(
             state['_correlation_warned'] = True
 
     return correlation
+
+
+# =============================================================================
+# Section 4b.3: Fee Profitability Checks - REC-002 (v4.1.0)
+# =============================================================================
+def _check_fee_profitability(
+    expected_profit_pct: float,
+    config: Dict[str, Any]
+) -> Tuple[bool, float]:
+    """
+    Check if trade is profitable after round-trip fees.
+
+    REC-002 (v4.1.0): Guide v2.0 Section 23 compliance.
+    With typical 0.1% maker/taker fees, round-trip cost is ~0.2%.
+
+    Args:
+        expected_profit_pct: Expected take profit percentage
+        config: Strategy configuration
+
+    Returns:
+        Tuple of (is_profitable, net_profit_pct)
+    """
+    if not config.get('check_fee_profitability', True):
+        return True, expected_profit_pct
+
+    fee_rate = config.get('estimated_fee_rate', 0.001)
+    min_net_profit = config.get('min_net_profit_pct', 0.05)
+
+    # Round-trip fees: entry + exit
+    round_trip_fee_pct = fee_rate * 2 * 100  # Convert to percentage
+    net_profit_pct = expected_profit_pct - round_trip_fee_pct
+
+    return net_profit_pct >= min_net_profit, net_profit_pct
 
 
 # =============================================================================
@@ -1332,8 +1407,25 @@ def _generate_entry_signal(
     Generate entry signal based on mean reversion conditions.
 
     Finding #4: Extracted from _evaluate_symbol to reduce complexity.
+    REC-002 (v4.1.0): Added fee profitability check before signal generation.
     """
     signal = None
+
+    # ==========================================================================
+    # REC-002 (v4.1.0): Fee Profitability Check - Guide v2.0 Section 23
+    # Validate that expected profit exceeds round-trip fees before signal
+    # ==========================================================================
+    is_fee_profitable, net_profit_pct = _check_fee_profitability(tp_pct, config)
+    if not is_fee_profitable:
+        state['indicators']['status'] = 'fee_unprofitable'
+        state['indicators']['expected_tp_pct'] = round(tp_pct, 4)
+        state['indicators']['net_profit_pct'] = round(net_profit_pct, 4)
+        if track_rejections:
+            _track_rejection(state, RejectionReason.FEE_UNPROFITABLE, symbol)
+        return None
+
+    # Store fee info in indicators for monitoring
+    state['indicators']['net_profit_pct'] = round(net_profit_pct, 4)
 
     # ==========================================================================
     # Signal Logic: Oversold - Buy Signal
@@ -1464,10 +1556,14 @@ def on_start(config: Dict[str, Any], state: Dict[str, Any]) -> None:
           f"TrendFilter={config.get('use_trend_filter', True)}, "
           f"TrailingStop={config.get('use_trailing_stop', False)}, "  # v4.0: default False per REC-001
           f"PositionDecay={config.get('use_position_decay', True)}, "
-          f"CorrelationMonitor={config.get('use_correlation_monitoring', True)}")  # v4.0: REC-005
-    # v4.0.0: Log key parameter changes
-    print(f"[mean_reversion] v4.0 Params: DecayStart={config.get('decay_start_minutes', 15.0)}min, "
-          f"TrendConfirm={config.get('trend_confirmation_periods', 3)} periods")
+          f"CorrelationMonitor={config.get('use_correlation_monitoring', True)}, "  # v4.0: REC-005
+          f"FeeCheck={config.get('check_fee_profitability', True)}")  # v4.1: REC-002
+    # v4.1.0: Log key parameter changes
+    fee_rate = config.get('estimated_fee_rate', 0.001)
+    min_net = config.get('min_net_profit_pct', 0.05)
+    print(f"[mean_reversion] v4.1 Params: DecayStart={config.get('decay_start_minutes', 15.0)}min, "
+          f"TrendConfirm={config.get('trend_confirmation_periods', 3)} periods, "
+          f"FeeRate={fee_rate*100:.2f}%/side, MinNet={min_net}%")
 
 
 def on_fill(fill: Dict[str, Any], state: Dict[str, Any]) -> None:
