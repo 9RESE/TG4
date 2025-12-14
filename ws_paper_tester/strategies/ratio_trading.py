@@ -1,5 +1,5 @@
 """
-Ratio Trading Strategy v2.0.0
+Ratio Trading Strategy v2.1.0
 
 Mean reversion strategy for XRP/BTC pair accumulation.
 Trades the XRP/BTC ratio to grow holdings of both assets.
@@ -14,6 +14,12 @@ Strategy Logic:
 IMPORTANT: This strategy is designed ONLY for crypto-to-crypto ratio pairs
 (XRP/BTC). It is NOT suitable for USDT-denominated pairs. For USDT pairs,
 use the mean_reversion.py strategy instead.
+
+WARNING - Trend Continuation Risk:
+Bollinger Band touches can signal trend CONTINUATION rather than reversal.
+Price exceeding the bands may indicate strong momentum, not necessarily a
+mean reversion opportunity. The volatility regime system helps mitigate this
+by pausing in EXTREME conditions and widening thresholds in HIGH volatility.
 
 Version History:
 - 1.0.0: Initial implementation
@@ -33,6 +39,15 @@ Version History:
          - Fixed take profit to use price-based percentage
          - Added rejection tracking
          - Added comprehensive on_stop() summary
+- 2.1.0: Enhancement refactor per ratio-trading-strategy-review-v2.0.md
+         - REC-013: Higher entry threshold (1.0 -> 1.5 std)
+         - REC-014: Optional RSI confirmation filter
+         - REC-015: Trend detection warning system
+         - REC-016: Enhanced accumulation metrics
+         - REC-017: Documentation updates (trend risk warning)
+         - Added trailing stops (from mean reversion patterns)
+         - Added position decay for stale positions
+         - Fixed hardcoded max_losses in on_fill
 """
 from datetime import datetime
 from typing import Dict, Any, Optional, List, Tuple
@@ -50,7 +65,7 @@ except ImportError:
 # REQUIRED: Strategy Metadata
 # =============================================================================
 STRATEGY_NAME = "ratio_trading"
-STRATEGY_VERSION = "2.0.0"
+STRATEGY_VERSION = "2.1.0"
 SYMBOLS = ["XRP/BTC"]
 
 
@@ -76,6 +91,9 @@ class RejectionReason(Enum):
     INSUFFICIENT_SIZE = "insufficient_size"
     TRADE_FLOW_NOT_ALIGNED = "trade_flow_not_aligned"
     SPREAD_TOO_WIDE = "spread_too_wide"
+    RSI_NOT_CONFIRMED = "rsi_not_confirmed"  # REC-014
+    STRONG_TREND_DETECTED = "strong_trend_detected"  # REC-015
+    POSITION_DECAYED = "position_decayed"  # Position decay
     NO_SIGNAL_CONDITIONS = "no_signal_conditions"
 
 
@@ -84,11 +102,11 @@ class RejectionReason(Enum):
 # =============================================================================
 CONFIG = {
     # ==========================================================================
-    # Core Ratio Trading Parameters
+    # Core Ratio Trading Parameters - REC-013: Higher entry threshold
     # ==========================================================================
     'lookback_periods': 20,           # Periods for moving average
     'bollinger_std': 2.0,             # Standard deviations for bands
-    'entry_threshold': 1.0,           # Entry at N std devs from mean
+    'entry_threshold': 1.5,           # Entry at N std devs from mean (was 1.0)
     'exit_threshold': 0.5,            # Exit at N std devs (closer to mean)
 
     # ==========================================================================
@@ -139,6 +157,35 @@ CONFIG = {
     # ==========================================================================
     'use_trade_flow_confirmation': False,  # Disabled by default for ratio pairs
     'trade_flow_threshold': 0.10,          # Minimum trade flow alignment
+
+    # ==========================================================================
+    # RSI Confirmation Filter - REC-014
+    # ==========================================================================
+    'use_rsi_confirmation': True,     # Enable RSI filter
+    'rsi_period': 14,                 # RSI calculation period
+    'rsi_oversold': 35,               # RSI oversold level for buy confirmation
+    'rsi_overbought': 65,             # RSI overbought level for sell confirmation
+
+    # ==========================================================================
+    # Trend Detection Warning - REC-015
+    # ==========================================================================
+    'use_trend_filter': True,         # Enable trend filtering
+    'trend_lookback': 10,             # Candles to check for trend
+    'trend_strength_threshold': 0.7,  # % of candles in same direction = strong trend
+
+    # ==========================================================================
+    # Trailing Stops (from mean reversion patterns)
+    # ==========================================================================
+    'use_trailing_stop': True,        # Enable trailing stops
+    'trailing_activation_pct': 0.3,   # Activate at 0.3% profit
+    'trailing_distance_pct': 0.2,     # Trail 0.2% from high/low
+
+    # ==========================================================================
+    # Position Decay (from mean reversion patterns)
+    # ==========================================================================
+    'use_position_decay': True,       # Enable position decay
+    'position_decay_minutes': 5,      # Start decay after 5 minutes
+    'position_decay_tp_mult': 0.5,    # Reduce TP target to 50% after decay
 
     # ==========================================================================
     # Rejection Tracking
@@ -272,6 +319,139 @@ def _calculate_volatility(prices: List[float], lookback: int = 20) -> float:
     mean_return = sum(returns) / len(returns)
     variance = sum((r - mean_return) ** 2 for r in returns) / len(returns)
     return (variance ** 0.5) * 100
+
+
+def _calculate_rsi(prices: List[float], period: int = 14) -> float:
+    """
+    Calculate RSI indicator from price history.
+
+    REC-014: RSI confirmation for signal quality.
+
+    Returns:
+        RSI value (0-100), 50.0 if insufficient data
+    """
+    if len(prices) < period + 1:
+        return 50.0  # Neutral
+
+    gains = []
+    losses = []
+
+    start_idx = max(1, len(prices) - period)
+    for i in range(start_idx, len(prices)):
+        change = prices[i] - prices[i - 1]
+        if change > 0:
+            gains.append(change)
+            losses.append(0)
+        else:
+            gains.append(0)
+            losses.append(abs(change))
+
+    if not gains:
+        return 50.0  # Neutral if no data
+
+    avg_gain = sum(gains) / len(gains)
+    avg_loss = sum(losses) / len(losses)
+
+    if avg_loss == 0:
+        return 100.0
+
+    rs = avg_gain / avg_loss
+    rsi = 100 - (100 / (1 + rs))
+
+    return rsi
+
+
+def _detect_trend_strength(
+    prices: List[float],
+    lookback: int = 10,
+    threshold: float = 0.7
+) -> Tuple[bool, str, float]:
+    """
+    Detect if there's a strong trend in recent price action.
+
+    REC-015: Trend detection warning system.
+
+    Returns:
+        (is_strong_trend, direction, strength)
+        - is_strong_trend: True if trend is strong enough to warn
+        - direction: 'up', 'down', or 'neutral'
+        - strength: 0.0 to 1.0 (% of candles in same direction)
+    """
+    if len(prices) < lookback + 1:
+        return False, 'neutral', 0.0
+
+    recent = prices[-(lookback + 1):]
+    up_moves = 0
+    down_moves = 0
+
+    for i in range(1, len(recent)):
+        if recent[i] > recent[i - 1]:
+            up_moves += 1
+        elif recent[i] < recent[i - 1]:
+            down_moves += 1
+
+    total_moves = up_moves + down_moves
+    if total_moves == 0:
+        return False, 'neutral', 0.0
+
+    up_strength = up_moves / total_moves
+    down_strength = down_moves / total_moves
+
+    if up_strength >= threshold:
+        return True, 'up', up_strength
+    elif down_strength >= threshold:
+        return True, 'down', down_strength
+
+    return False, 'neutral', max(up_strength, down_strength)
+
+
+def _calculate_trailing_stop(
+    entry_price: float,
+    highest_price: float,
+    lowest_price: float,
+    side: str,
+    activation_pct: float,
+    trail_distance_pct: float
+) -> Optional[float]:
+    """
+    Calculate trailing stop price.
+
+    From mean reversion patterns.
+
+    Returns:
+        Trailing stop price if activated, None otherwise
+    """
+    if side == 'long':
+        profit_pct = (highest_price - entry_price) / entry_price * 100
+        if profit_pct >= activation_pct:
+            return highest_price * (1 - trail_distance_pct / 100)
+    elif side == 'short':
+        profit_pct = (entry_price - lowest_price) / entry_price * 100
+        if profit_pct >= activation_pct:
+            return lowest_price * (1 + trail_distance_pct / 100)
+    return None
+
+
+def _check_position_decay(
+    entry_time: datetime,
+    current_time: datetime,
+    decay_minutes: float
+) -> Tuple[bool, float]:
+    """
+    Check if position has decayed (exceeded time threshold).
+
+    From mean reversion patterns.
+
+    Returns:
+        (is_decayed, minutes_held)
+    """
+    if entry_time is None:
+        return False, 0.0
+
+    minutes_held = (current_time - entry_time).total_seconds() / 60
+    is_decayed = minutes_held >= decay_minutes
+
+    return is_decayed, minutes_held
 
 
 # =============================================================================
@@ -467,6 +647,12 @@ def _initialize_state(state: Dict[str, Any]) -> None:
     state['xrp_accumulated'] = 0.0
     state['btc_accumulated'] = 0.0
 
+    # REC-016: Enhanced accumulation metrics
+    state['xrp_accumulated_value_usd'] = 0.0  # USD value at time of acquisition
+    state['btc_accumulated_value_usd'] = 0.0  # USD value at time of acquisition
+    state['total_trades_xrp_bought'] = 0
+    state['total_trades_btc_bought'] = 0
+
     # Per-pair tracking - REC-006
     state['pnl_by_symbol'] = {}
     state['trades_by_symbol'] = {}
@@ -481,8 +667,10 @@ def _initialize_state(state: Dict[str, Any]) -> None:
     state['rejection_counts'] = {}
     state['rejection_counts_by_symbol'] = {}
 
-    # Entry tracking
+    # Entry tracking with trailing stop support
     state['position_entries'] = {}
+    state['highest_price_since_entry'] = {}
+    state['lowest_price_since_entry'] = {}
 
     # Fill history
     state['fills'] = []
@@ -787,7 +975,7 @@ def generate_signal(
             return None
 
     # Entry/exit thresholds with regime adjustment
-    base_entry_threshold = config.get('entry_threshold', 1.0)
+    base_entry_threshold = config.get('entry_threshold', 1.5)  # REC-013: Higher default
     effective_entry_threshold = base_entry_threshold * regime_adjustments['threshold_mult']
     exit_threshold = config.get('exit_threshold', 0.5)
 
@@ -802,6 +990,42 @@ def generate_signal(
 
     # Risk management percentages - REC-003
     sl_pct = config.get('stop_loss_pct', 0.6)
+
+    # REC-014: Calculate RSI if enabled
+    use_rsi = config.get('use_rsi_confirmation', False)
+    rsi_period = config.get('rsi_period', 14)
+    rsi_oversold = config.get('rsi_oversold', 35)
+    rsi_overbought = config.get('rsi_overbought', 65)
+    rsi = _calculate_rsi(price_history, rsi_period) if use_rsi else 50.0
+
+    # REC-015: Detect trend strength if enabled
+    use_trend_filter = config.get('use_trend_filter', False)
+    trend_lookback = config.get('trend_lookback', 10)
+    trend_threshold = config.get('trend_strength_threshold', 0.7)
+    is_strong_trend, trend_direction, trend_strength = _detect_trend_strength(
+        price_history, trend_lookback, trend_threshold
+    ) if use_trend_filter else (False, 'neutral', 0.0)
+
+    # Trailing stop and position decay config
+    use_trailing = config.get('use_trailing_stop', False)
+    trailing_activation = config.get('trailing_activation_pct', 0.3)
+    trailing_distance = config.get('trailing_distance_pct', 0.2)
+    use_decay = config.get('use_position_decay', False)
+    decay_minutes = config.get('position_decay_minutes', 5)
+    decay_tp_mult = config.get('position_decay_tp_mult', 0.5)
+
+    # Update highest/lowest price tracking for trailing stops
+    if symbol in state.get('position_entries', {}):
+        if symbol not in state.get('highest_price_since_entry', {}):
+            state['highest_price_since_entry'][symbol] = price
+        if symbol not in state.get('lowest_price_since_entry', {}):
+            state['lowest_price_since_entry'][symbol] = price
+        state['highest_price_since_entry'][symbol] = max(
+            state['highest_price_since_entry'].get(symbol, price), price
+        )
+        state['lowest_price_since_entry'][symbol] = min(
+            state['lowest_price_since_entry'].get(symbol, price), price
+        )
 
     # Store comprehensive indicators
     state['indicators'] = {
@@ -821,6 +1045,9 @@ def generate_signal(
         'actual_size_usd': round(actual_size_usd, 4),
         'xrp_accumulated': round(state.get('xrp_accumulated', 0), 4),
         'btc_accumulated': round(state.get('btc_accumulated', 0), 8),
+        # REC-016: Enhanced accumulation metrics
+        'xrp_accumulated_value_usd': round(state.get('xrp_accumulated_value_usd', 0), 4),
+        'btc_accumulated_value_usd': round(state.get('btc_accumulated_value_usd', 0), 4),
         'volatility_pct': round(volatility, 4),
         'volatility_regime': regime.name,
         'regime_threshold_mult': round(regime_adjustments['threshold_mult'], 2),
@@ -832,6 +1059,14 @@ def generate_signal(
         'consecutive_losses': state.get('consecutive_losses', 0),
         'pnl_symbol': round(state.get('pnl_by_symbol', {}).get(symbol, 0), 8),
         'trades_symbol': state.get('trades_by_symbol', {}).get(symbol, 0),
+        # REC-014: RSI confirmation
+        'rsi': round(rsi, 2),
+        'use_rsi_confirmation': use_rsi,
+        # REC-015: Trend detection
+        'is_strong_trend': is_strong_trend,
+        'trend_direction': trend_direction,
+        'trend_strength': round(trend_strength, 2),
+        'use_trend_filter': use_trend_filter,
     }
 
     # Position limit check
@@ -858,55 +1093,160 @@ def generate_signal(
     signal = None
 
     # ==========================================================================
+    # Check trailing stop first if position exists
+    # ==========================================================================
+    if current_position_usd > 0 and use_trailing:
+        entry_info = state.get('position_entries', {}).get(symbol, {})
+        entry_price = entry_info.get('entry_price', price)
+        highest = state.get('highest_price_since_entry', {}).get(symbol, price)
+        lowest = state.get('lowest_price_since_entry', {}).get(symbol, price)
+
+        trailing_stop_price = _calculate_trailing_stop(
+            entry_price, highest, lowest, 'long',
+            trailing_activation, trailing_distance
+        )
+
+        if trailing_stop_price and price <= trailing_stop_price:
+            min_trade_size = config.get('min_trade_size_usd', 5.0)
+            exit_size = min(actual_size_usd, current_position_usd)
+            if exit_size >= min_trade_size:
+                signal = Signal(
+                    action='sell',
+                    symbol=symbol,
+                    size=exit_size,
+                    price=price,
+                    reason=f"RT: Trailing stop hit (entry={entry_price:.8f}, high={highest:.8f}, stop={trailing_stop_price:.8f})",
+                    metadata={
+                        'strategy': 'ratio_trading',
+                        'signal_type': 'trailing_stop',
+                        'trailing_stop_price': round(trailing_stop_price, 8),
+                    }
+                )
+                state['indicators']['status'] = 'trailing_stop_triggered'
+                state['last_signal_time'] = current_time
+                state['trade_count'] += 1
+                return signal
+
+    # ==========================================================================
+    # Check position decay if position exists
+    # ==========================================================================
+    if current_position_usd > 0 and use_decay:
+        entry_info = state.get('position_entries', {}).get(symbol, {})
+        entry_time = entry_info.get('entry_time')
+
+        is_decayed, minutes_held = _check_position_decay(entry_time, current_time, decay_minutes)
+        state['indicators']['position_minutes_held'] = round(minutes_held, 1)
+        state['indicators']['position_decayed'] = is_decayed
+
+        if is_decayed and abs(z_score) < exit_threshold * 1.5:  # Close if somewhat near mean
+            min_trade_size = config.get('min_trade_size_usd', 5.0)
+            exit_size = min(actual_size_usd, current_position_usd * 0.5)  # Partial exit
+
+            if exit_size >= min_trade_size:
+                signal = Signal(
+                    action='sell',
+                    symbol=symbol,
+                    size=exit_size,
+                    price=price,
+                    reason=f"RT: Position decay exit (held {minutes_held:.1f}min, z={z_score:.2f})",
+                    metadata={
+                        'strategy': 'ratio_trading',
+                        'signal_type': 'position_decay',
+                        'minutes_held': round(minutes_held, 1),
+                        'z_score': round(z_score, 3),
+                    }
+                )
+                state['indicators']['status'] = 'position_decay_exit'
+                if track_rejections:
+                    _track_rejection(state, RejectionReason.POSITION_DECAYED, symbol)
+                state['last_signal_time'] = current_time
+                state['trade_count'] += 1
+                return signal
+
+    # ==========================================================================
     # BUY Signal: Price below lower band (XRP cheap vs BTC)
     # Action: Spend BTC to buy XRP
     # ==========================================================================
     if z_score < -effective_entry_threshold:
-        # Trade flow confirmation if enabled
-        if use_trade_flow:
-            if not _is_trade_flow_aligned(data, symbol, 'buy', trade_flow_threshold):
-                state['indicators']['status'] = 'trade_flow_not_aligned'
-                state['indicators']['trade_flow_aligned'] = False
-                if track_rejections:
-                    _track_rejection(state, RejectionReason.TRADE_FLOW_NOT_ALIGNED, symbol)
-                return None
+        # REC-015: Trend filter check - don't buy into strong downtrend
+        if use_trend_filter and is_strong_trend and trend_direction == 'down':
+            state['indicators']['status'] = 'strong_trend_detected'
+            state['indicators']['trend_warning'] = 'Strong downtrend - buy signal blocked'
+            if track_rejections:
+                _track_rejection(state, RejectionReason.STRONG_TREND_DETECTED, symbol)
+            # Don't return None - just skip buy signal, check other conditions
 
-        state['indicators']['trade_flow_aligned'] = True
-        signal = _generate_buy_signal(
-            symbol, price, actual_size_usd, z_score,
-            effective_entry_threshold, sl_pct, tp_pct, regime.name, Signal
-        )
+        # REC-014: RSI confirmation check - buy only if oversold
+        elif use_rsi and rsi > rsi_oversold:
+            state['indicators']['status'] = 'rsi_not_confirmed'
+            state['indicators']['rsi_required'] = f'RSI {rsi:.1f} > {rsi_oversold} (not oversold)'
+            if track_rejections:
+                _track_rejection(state, RejectionReason.RSI_NOT_CONFIRMED, symbol)
+            # Don't return None - just skip buy signal
+
+        else:
+            # Trade flow confirmation if enabled
+            if use_trade_flow:
+                if not _is_trade_flow_aligned(data, symbol, 'buy', trade_flow_threshold):
+                    state['indicators']['status'] = 'trade_flow_not_aligned'
+                    state['indicators']['trade_flow_aligned'] = False
+                    if track_rejections:
+                        _track_rejection(state, RejectionReason.TRADE_FLOW_NOT_ALIGNED, symbol)
+                    return None
+
+            state['indicators']['trade_flow_aligned'] = True
+            signal = _generate_buy_signal(
+                symbol, price, actual_size_usd, z_score,
+                effective_entry_threshold, sl_pct, tp_pct, regime.name, Signal
+            )
 
     # ==========================================================================
     # SELL Signal: Price above upper band (XRP expensive vs BTC)
     # Action: Sell XRP to get BTC
     # ==========================================================================
     elif z_score > effective_entry_threshold:
-        # Trade flow confirmation if enabled
-        if use_trade_flow:
-            if not _is_trade_flow_aligned(data, symbol, 'sell', trade_flow_threshold):
-                state['indicators']['status'] = 'trade_flow_not_aligned'
-                state['indicators']['trade_flow_aligned'] = False
-                if track_rejections:
-                    _track_rejection(state, RejectionReason.TRADE_FLOW_NOT_ALIGNED, symbol)
-                return None
+        # REC-015: Trend filter check - don't sell into strong uptrend
+        if use_trend_filter and is_strong_trend and trend_direction == 'up':
+            state['indicators']['status'] = 'strong_trend_detected'
+            state['indicators']['trend_warning'] = 'Strong uptrend - sell signal blocked'
+            if track_rejections:
+                _track_rejection(state, RejectionReason.STRONG_TREND_DETECTED, symbol)
+            # Don't return None - just skip sell signal
 
-        state['indicators']['trade_flow_aligned'] = True
+        # REC-014: RSI confirmation check - sell only if overbought
+        elif use_rsi and rsi < rsi_overbought:
+            state['indicators']['status'] = 'rsi_not_confirmed'
+            state['indicators']['rsi_required'] = f'RSI {rsi:.1f} < {rsi_overbought} (not overbought)'
+            if track_rejections:
+                _track_rejection(state, RejectionReason.RSI_NOT_CONFIRMED, symbol)
+            # Don't return None - just skip sell signal
 
-        if current_position_usd > 0:
-            # Sell from our position
-            sell_size = min(actual_size_usd, current_position_usd)
-            signal = _generate_sell_signal(
-                symbol, price, sell_size, z_score,
-                effective_entry_threshold, sl_pct, tp_pct, regime.name, Signal
-            )
         else:
-            # No position but still signal for accumulating BTC
-            # Sell from "starting XRP holdings" concept
-            signal = _generate_sell_signal(
-                symbol, price, actual_size_usd, z_score,
-                effective_entry_threshold, sl_pct, tp_pct, regime.name, Signal
-            )
+            # Trade flow confirmation if enabled
+            if use_trade_flow:
+                if not _is_trade_flow_aligned(data, symbol, 'sell', trade_flow_threshold):
+                    state['indicators']['status'] = 'trade_flow_not_aligned'
+                    state['indicators']['trade_flow_aligned'] = False
+                    if track_rejections:
+                        _track_rejection(state, RejectionReason.TRADE_FLOW_NOT_ALIGNED, symbol)
+                    return None
+
+            state['indicators']['trade_flow_aligned'] = True
+
+            if current_position_usd > 0:
+                # Sell from our position
+                sell_size = min(actual_size_usd, current_position_usd)
+                signal = _generate_sell_signal(
+                    symbol, price, sell_size, z_score,
+                    effective_entry_threshold, sl_pct, tp_pct, regime.name, Signal
+                )
+            else:
+                # No position but still signal for accumulating BTC
+                # Sell from "starting XRP holdings" concept
+                signal = _generate_sell_signal(
+                    symbol, price, actual_size_usd, z_score,
+                    effective_entry_threshold, sl_pct, tp_pct, regime.name, Signal
+                )
 
     # ==========================================================================
     # EXIT/TAKE PROFIT: Position exists and price reverted toward mean
@@ -948,11 +1288,19 @@ def on_start(config: Dict[str, Any], state: Dict[str, Any]) -> None:
 
     _initialize_state(state)
 
+    # Store config values in state for use in on_fill (fixes hardcoded max_losses)
+    state['max_consecutive_losses'] = config.get('max_consecutive_losses', 3)
+
     print(f"[ratio_trading] v{STRATEGY_VERSION} started")
     print(f"[ratio_trading] Symbol: {SYMBOLS[0]} (ratio pair)")
+    print(f"[ratio_trading] Entry threshold: {config.get('entry_threshold', 1.5)} std (REC-013)")
     print(f"[ratio_trading] Features: VolatilityRegimes={config.get('use_volatility_regimes', True)}, "
           f"CircuitBreaker={config.get('use_circuit_breaker', True)}, "
           f"SpreadFilter={config.get('use_spread_filter', True)}")
+    print(f"[ratio_trading] v2.1 Features: RSI={config.get('use_rsi_confirmation', False)}, "
+          f"TrendFilter={config.get('use_trend_filter', False)}, "
+          f"TrailingStop={config.get('use_trailing_stop', False)}, "
+          f"PositionDecay={config.get('use_position_decay', False)}")
     print(f"[ratio_trading] Position sizing: {config.get('position_size_usd', 15.0)} USD, "
           f"Max: {config.get('max_position_usd', 50.0)} USD")
     print(f"[ratio_trading] R:R ratio: {config.get('take_profit_pct', 0.6)}/{config.get('stop_loss_pct', 0.6)} "
@@ -969,6 +1317,7 @@ def on_fill(fill: Dict[str, Any], state: Dict[str, Any]) -> None:
 
     REC-006: Per-pair PnL tracking
     REC-005: Circuit breaker consecutive loss tracking
+    REC-016: Enhanced accumulation metrics
     """
     side = fill.get('side', '')
     symbol = fill.get('symbol', SYMBOLS[0])
@@ -989,7 +1338,8 @@ def on_fill(fill: Dict[str, Any], state: Dict[str, Any]) -> None:
 
     # Initialize tracking dicts
     for key in ['pnl_by_symbol', 'trades_by_symbol', 'wins_by_symbol',
-                'losses_by_symbol', 'position_entries']:
+                'losses_by_symbol', 'position_entries', 'highest_price_since_entry',
+                'lowest_price_since_entry']:
         if key not in state:
             state[key] = {}
 
@@ -997,7 +1347,7 @@ def on_fill(fill: Dict[str, Any], state: Dict[str, Any]) -> None:
     if pnl != 0:
         state['pnl_by_symbol'][symbol] = state['pnl_by_symbol'].get(symbol, 0) + pnl
 
-        # REC-005: Circuit breaker tracking
+        # REC-005: Circuit breaker tracking (fixed: use state config instead of hardcoded)
         if pnl > 0:
             state['wins_by_symbol'][symbol] = state['wins_by_symbol'].get(symbol, 0) + 1
             state['consecutive_losses'] = 0
@@ -1005,7 +1355,8 @@ def on_fill(fill: Dict[str, Any], state: Dict[str, Any]) -> None:
             state['losses_by_symbol'][symbol] = state['losses_by_symbol'].get(symbol, 0) + 1
             state['consecutive_losses'] = state.get('consecutive_losses', 0) + 1
 
-            max_losses = 3  # Matches config default
+            # Use config value from state (set in on_start) instead of hardcoded
+            max_losses = state.get('max_consecutive_losses', 3)
             if state['consecutive_losses'] >= max_losses:
                 state['circuit_breaker_time'] = timestamp
 
@@ -1018,12 +1369,19 @@ def on_fill(fill: Dict[str, Any], state: Dict[str, Any]) -> None:
         state['position_xrp'] = state.get('position_xrp', 0) + xrp_amount
         state['xrp_accumulated'] = state.get('xrp_accumulated', 0) + xrp_amount
 
+        # REC-016: Track USD value at time of acquisition
+        state['xrp_accumulated_value_usd'] = state.get('xrp_accumulated_value_usd', 0) + value
+        state['total_trades_xrp_bought'] = state.get('total_trades_xrp_bought', 0) + 1
+
         if symbol not in state['position_entries']:
             state['position_entries'][symbol] = {
                 'entry_price': price,
                 'entry_time': timestamp,
                 'side': 'long',
             }
+            # Initialize trailing stop tracking
+            state['highest_price_since_entry'][symbol] = price
+            state['lowest_price_since_entry'][symbol] = price
 
     elif side == 'sell':
         # Sold XRP for BTC
@@ -1031,11 +1389,20 @@ def on_fill(fill: Dict[str, Any], state: Dict[str, Any]) -> None:
         state['position_xrp'] = max(0, state.get('position_xrp', 0) - xrp_amount)
         state['btc_accumulated'] = state.get('btc_accumulated', 0) + btc_value
 
+        # REC-016: Track USD value at time of BTC acquisition
+        state['btc_accumulated_value_usd'] = state.get('btc_accumulated_value_usd', 0) + value
+        state['total_trades_btc_bought'] = state.get('total_trades_btc_bought', 0) + 1
+
         if state['position_usd'] < 0.01:
             state['position_usd'] = 0.0
             state['position_xrp'] = 0.0
             if symbol in state['position_entries']:
                 del state['position_entries'][symbol]
+            # Clean up trailing stop tracking
+            if symbol in state.get('highest_price_since_entry', {}):
+                del state['highest_price_since_entry'][symbol]
+            if symbol in state.get('lowest_price_since_entry', {}):
+                del state['lowest_price_since_entry'][symbol]
 
     # Track fill history
     if 'fills' not in state:
@@ -1051,6 +1418,7 @@ def on_stop(state: Dict[str, Any]) -> None:
     Called when strategy stops.
 
     Logs comprehensive summary of trading performance.
+    REC-016: Enhanced accumulation metrics in summary.
     """
     symbol = SYMBOLS[0]
 
@@ -1064,14 +1432,29 @@ def on_stop(state: Dict[str, Any]) -> None:
     rejection_counts = state.get('rejection_counts', {})
     total_rejections = sum(rejection_counts.values())
 
+    # REC-016: Enhanced accumulation metrics
+    xrp_acc = state.get('xrp_accumulated', 0)
+    btc_acc = state.get('btc_accumulated', 0)
+    xrp_value_usd = state.get('xrp_accumulated_value_usd', 0)
+    btc_value_usd = state.get('btc_accumulated_value_usd', 0)
+    xrp_trades = state.get('total_trades_xrp_bought', 0)
+    btc_trades = state.get('total_trades_btc_bought', 0)
+
     state['indicators'] = {}
 
     state['final_summary'] = {
         'symbol': symbol,
         'position_usd': state.get('position_usd', 0),
         'position_xrp': state.get('position_xrp', 0),
-        'xrp_accumulated': state.get('xrp_accumulated', 0),
-        'btc_accumulated': state.get('btc_accumulated', 0),
+        'xrp_accumulated': xrp_acc,
+        'btc_accumulated': btc_acc,
+        # REC-016: Enhanced metrics
+        'xrp_accumulated_value_usd': xrp_value_usd,
+        'btc_accumulated_value_usd': btc_value_usd,
+        'total_trades_xrp_bought': xrp_trades,
+        'total_trades_btc_bought': btc_trades,
+        'avg_xrp_buy_value_usd': xrp_value_usd / xrp_trades if xrp_trades > 0 else 0,
+        'avg_btc_buy_value_usd': btc_value_usd / btc_trades if btc_trades > 0 else 0,
         'pnl_by_symbol': state.get('pnl_by_symbol', {}),
         'trades_by_symbol': state.get('trades_by_symbol', {}),
         'wins_by_symbol': state.get('wins_by_symbol', {}),
@@ -1099,10 +1482,9 @@ def on_stop(state: Dict[str, Any]) -> None:
     sym_wr = (sym_wins / sym_trades * 100) if sym_trades > 0 else 0
     print(f"[ratio_trading]   {symbol}: PnL=${sym_pnl:.6f}, Trades={sym_trades}, WR={sym_wr:.1f}%")
 
-    # Print accumulation summary (unique to ratio trading)
-    xrp_acc = state.get('xrp_accumulated', 0)
-    btc_acc = state.get('btc_accumulated', 0)
-    print(f"[ratio_trading]   Accumulated: XRP={xrp_acc:.4f}, BTC={btc_acc:.8f}")
+    # Print accumulation summary (unique to ratio trading) - REC-016: Enhanced
+    print(f"[ratio_trading]   Accumulated: XRP={xrp_acc:.4f} (${xrp_value_usd:.2f} cost, {xrp_trades} trades)")
+    print(f"[ratio_trading]   Accumulated: BTC={btc_acc:.8f} (${btc_value_usd:.2f} value, {btc_trades} trades)")
 
     # Print rejection summary
     if rejection_counts:
