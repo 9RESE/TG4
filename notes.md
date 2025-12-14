@@ -131,7 +131,7 @@ I want to develop these strategies.
   - Position state tracking via on_fill() callback
   - Indicator logging via state['indicators']
 
-
+Ratio Strategy
 
 in the ws_paper_tester/ we have the strategy Order Flow. We need to do a deep code and strategy review. Deep research the strategy technique and its use with the XRP/USDT, BTC/USDT, XRP/BTC pairs. XRP/BTC trading goals is to accumulate both assets. USDT traded pairs goal is to accumulate USDT. I also want to ensure the strategy meets the requirements in ws_paper_tester/docs/development/strategy-development-guide.md. provide a document with your findings and recommendations for improvements and fixes. ultrathink
 

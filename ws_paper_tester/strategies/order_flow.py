@@ -14,11 +14,10 @@ Version History:
          - Fixed type hints and import patterns
          - Added on_stop() callback for compliance
          - Improved risk-reward ratio
-- 2.1.0: Added XRP/BTC pair support for ratio trading
-         - Research-backed config: 664 trades/day, 0.0446% spread
-         - Symbol-specific cooldowns, thresholds, TP/SL
-         - Separate logic for XRP/BTC (no shorting, direct sell)
-         - Goal: Grow both XRP and BTC holdings through ratio trading
+- 2.1.0: Added XRP/BTC pair support (moved to dedicated strategies in v2.2.0)
+- 2.2.0: Removed XRP/BTC (now handled by market_making and ratio_trading)
+         - Focused on USDT pairs for order flow momentum trading
+         - Cleaner separation of concerns
 """
 from datetime import datetime
 from typing import Dict, Any, Optional
@@ -30,8 +29,8 @@ from ws_tester.types import DataSnapshot, Signal
 # REQUIRED: Strategy Metadata
 # =============================================================================
 STRATEGY_NAME = "order_flow"
-STRATEGY_VERSION = "2.1.0"
-SYMBOLS = ["XRP/USDT", "BTC/USDT", "XRP/BTC"]
+STRATEGY_VERSION = "2.2.0"
+SYMBOLS = ["XRP/USDT", "BTC/USDT"]
 
 
 # =============================================================================
@@ -74,19 +73,7 @@ SYMBOL_CONFIGS = {
         'imbalance_threshold': 0.25,   # Slightly lower for BTC
         'position_size_usd': 50.0,     # Larger size for BTC
     },
-    'XRP/BTC': {
-        # XRP/BTC ratio trading - optimized based on Kraken 24h data:
-        # - 664 trades/day (~1 per 2 min), 96K XRP volume, 0.0446% spread
-        'imbalance_threshold': 0.35,   # Higher threshold (wider spread, less noise)
-        'volume_spike_mult': 1.5,      # Lower mult (fewer trades to detect spikes)
-        'cooldown_seconds': 30.0,      # Longer cooldown (lower trade frequency)
-        'cooldown_trades': 5,          # Fewer trades needed for cooldown
-        'position_size_xrp': 30.0,     # Trade 30 XRP per signal (~6% of 500 XRP)
-        'take_profit_pct': 0.4,        # Wider than spread (0.0446%)
-        'stop_loss_pct': 0.4,          # 1:1 R:R
-        'base_asset': 'XRP',           # Selling XRP to get BTC
-        'quote_asset': 'BTC',
-    },
+    # Note: XRP/BTC moved to market_making.py and ratio_trading.py
 }
 
 
@@ -247,18 +234,9 @@ def _evaluate_symbol(
     # Get symbol-specific config
     base_threshold = _get_symbol_config(symbol, config, 'imbalance_threshold')
     volume_spike_mult = _get_symbol_config(symbol, config, 'volume_spike_mult') or config.get('volume_spike_mult', 2.0)
-
-    # Handle XRP/BTC differently - size in XRP, not USD
-    is_xrp_btc = symbol == 'XRP/BTC'
-    if is_xrp_btc:
-        position_size = _get_symbol_config(symbol, config, 'position_size_xrp') or 30.0
-        # For XRP/BTC, get symbol-specific TP/SL
-        tp_pct = _get_symbol_config(symbol, config, 'take_profit_pct') or config.get('take_profit_pct', 0.4)
-        sl_pct = _get_symbol_config(symbol, config, 'stop_loss_pct') or config.get('stop_loss_pct', 0.4)
-    else:
-        position_size = _get_symbol_config(symbol, config, 'position_size_usd')
-        tp_pct = config.get('take_profit_pct', 0.5)
-        sl_pct = config.get('stop_loss_pct', 0.5)
+    position_size = _get_symbol_config(symbol, config, 'position_size_usd')
+    tp_pct = config.get('take_profit_pct', 0.5)
+    sl_pct = config.get('stop_loss_pct', 0.5)
 
     # Adjusted threshold
     effective_threshold = base_threshold * vol_multiplier
@@ -278,16 +256,10 @@ def _evaluate_symbol(
         'trades_since_signal': trades_since_signal,
     }
 
-    # Check position limits (different for XRP/BTC vs USD pairs)
+    # Check position limits
     current_position = state.get('position_size', 0)
-    if is_xrp_btc:
-        # For XRP/BTC, we trade XRP directly - check XRP holdings
-        # Skip position limit for now (managed by XRP balance in portfolio)
-        max_position = 500.0  # Max XRP to trade
-        min_trade = 5.0  # Minimum XRP per trade
-    else:
-        max_position = config.get('max_position_usd', 100.0)
-        min_trade = 5.0  # Minimum USD per trade
+    max_position = config.get('max_position_usd', 100.0)
+    min_trade = 5.0  # Minimum USD per trade
 
     if current_position >= max_position:
         return None
@@ -302,7 +274,6 @@ def _evaluate_symbol(
     signal = None
 
     # Strong buy pressure with volume spike
-    # For XRP/BTC: buy = trade BTC for XRP (accumulate XRP)
     if imbalance > effective_threshold and volume_spike > volume_spike_mult:
         signal = Signal(
             action='buy',
@@ -315,7 +286,6 @@ def _evaluate_symbol(
         )
 
     # Strong sell pressure with volume spike
-    # For XRP/BTC: sell = trade XRP for BTC (accumulate BTC)
     elif imbalance < -effective_threshold and volume_spike > volume_spike_mult:
         # Check if we have a long position to sell, otherwise go short
         has_long = state.get('position_side') == 'long' and state.get('position_size', 0) > 0
@@ -333,28 +303,16 @@ def _evaluate_symbol(
                 take_profit=current_price * (1 + tp_pct / 100),
             )
         else:
-            # Open a short position (for USD pairs) or sell XRP (for XRP/BTC)
-            if is_xrp_btc:
-                # For XRP/BTC, sell means trading XRP for BTC
-                signal = Signal(
-                    action='sell',
-                    symbol=symbol,
-                    size=actual_size,
-                    price=current_price,
-                    reason=f"OF: Sell XRP for BTC (imbal={imbalance:.2f}, vol={volume_spike:.1f}x)",
-                    stop_loss=current_price * (1 + sl_pct / 100),  # Stop above for sell
-                    take_profit=current_price * (1 - tp_pct / 100),  # TP below for sell
-                )
-            else:
-                signal = Signal(
-                    action='short',
-                    symbol=symbol,
-                    size=actual_size,
-                    price=current_price,
-                    reason=f"OF: Short (imbal={imbalance:.2f}, vol={volume_spike:.1f}x, volatility={volatility:.2f}%)",
-                    stop_loss=current_price * (1 + sl_pct / 100),
-                    take_profit=current_price * (1 - tp_pct / 100),
-                )
+            # Open a short position
+            signal = Signal(
+                action='short',
+                symbol=symbol,
+                size=actual_size,
+                price=current_price,
+                reason=f"OF: Short (imbal={imbalance:.2f}, vol={volume_spike:.1f}x, volatility={volatility:.2f}%)",
+                stop_loss=current_price * (1 + sl_pct / 100),
+                take_profit=current_price * (1 - tp_pct / 100),
+            )
 
     # Buy pressure + price below VWAP (mean reversion opportunity)
     elif (imbalance > effective_threshold * 0.7 and
