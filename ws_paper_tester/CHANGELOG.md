@@ -13,10 +13,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Dedicated strategy for growing both XRP and BTC holdings
   - Tracks `xrp_accumulated` and `btc_accumulated` metrics
   - Research-based config: 60s cooldown, 20-period lookback
-- **XRP/BTC Market Making** in `market_making.py` v1.1.0
+- **XRP/BTC Market Making** in `market_making.py` v1.2.0
   - Spread capture for dual-asset accumulation
   - XRP-denominated inventory tracking
   - No shorting on cross-pair (buy/sell only)
+- **BTC/USDT Market Making** in `market_making.py` v1.2.0
+  - High liquidity pair with tighter spreads (0.03% min)
+  - Larger position sizes ($50 vs $20 for XRP)
+  - Lower imbalance threshold (0.08) for more liquid market
 - Feature documentation: `docs/development/features/ratio-trading-v1.0.md`
 
 ### Changed
@@ -24,8 +28,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Removed XRP/BTC (now handled by dedicated strategies)
   - Focused on USDT pairs (XRP/USDT, BTC/USDT)
   - Cleaner separation of concerns
-- Market Making strategy updated to v1.1.0
-  - Added XRP/BTC to symbols list
+- Market Making strategy updated to v1.2.0
+  - Added BTC/USDT and XRP/BTC to symbols list
   - Symbol-specific configuration support
   - Tracks XRP and BTC accumulation
 - Test version assertion relaxed to `startswith('1.')` for flexibility
@@ -34,7 +38,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - XRP/BTC trading now split across two strategies:
   - `market_making.py` - Spread capture, inventory management
   - `ratio_trading.py` - Mean reversion, Bollinger Bands
-- Clear separation: Order Flow for momentum, others for accumulation
+- Market Making covers all three pairs: XRP/USDT, BTC/USDT, XRP/BTC
+- Clear separation: Order Flow for momentum, Market Making for spread capture
 
 ## [1.1.0] - 2025-12-13
 

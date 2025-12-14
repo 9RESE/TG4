@@ -11,6 +11,9 @@ Version History:
          - Symbol-specific configuration
          - XRP-denominated inventory tracking for XRP/BTC
          - Wider spreads and adjusted sizing for cross-pair
+- 1.2.0: Added BTC/USDT support
+         - Higher liquidity pair with tighter spreads
+         - Larger position sizes appropriate for BTC
 """
 from datetime import datetime
 from typing import Dict, Any, Optional
@@ -22,8 +25,8 @@ from ws_tester.types import DataSnapshot, Signal
 # REQUIRED: Strategy Metadata
 # =============================================================================
 STRATEGY_NAME = "market_making"
-STRATEGY_VERSION = "1.1.0"
-SYMBOLS = ["XRP/USDT", "XRP/BTC"]
+STRATEGY_VERSION = "1.2.0"
+SYMBOLS = ["XRP/USDT", "BTC/USDT", "XRP/BTC"]
 
 
 # =============================================================================
@@ -47,6 +50,19 @@ SYMBOL_CONFIGS = {
         'position_size_usd': 20,
         'max_inventory': 100,
         'imbalance_threshold': 0.1,
+        'take_profit_pct': 0.3,
+        'stop_loss_pct': 0.5,
+    },
+    'BTC/USDT': {
+        # BTC/USDT market making - high liquidity pair
+        # - Very tight spreads, high volume
+        # - Larger position sizes (BTC trades bigger)
+        'min_spread_pct': 0.03,       # Tighter min spread (more liquid)
+        'position_size_usd': 50,      # Larger size for BTC
+        'max_inventory': 200,         # Higher max inventory
+        'imbalance_threshold': 0.08,  # Lower threshold (more liquid)
+        'take_profit_pct': 0.2,       # Tighter TP (faster fills)
+        'stop_loss_pct': 0.4,         # Tighter SL
     },
     'XRP/BTC': {
         # XRP/BTC market making - optimized from Kraken data:
