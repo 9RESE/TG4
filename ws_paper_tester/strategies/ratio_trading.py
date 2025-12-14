@@ -1,5 +1,5 @@
 """
-Ratio Trading Strategy v3.0.0
+Ratio Trading Strategy v4.0.0
 
 Mean reversion strategy for XRP/BTC pair accumulation.
 Trades the XRP/BTC ratio to grow holdings of both assets.
@@ -63,6 +63,13 @@ Version History:
          - Added ExitReason enum for intentional exit tracking
          - Added correlation warning system
          - Improved accumulation metrics with real-time USD values
+- 4.0.0: Deep review recommendations per ratio-trading-strategy-review-v4.0.md
+         - REC-023: Enable correlation_pause_enabled by default (HIGH priority)
+         - REC-024: Raised correlation thresholds for earlier warning/pause
+           - correlation_warning_threshold: 0.5 → 0.6
+           - correlation_pause_threshold: 0.3 → 0.4
+         - Research-validated: XRP/BTC correlation declining (~24.86% over 90 days)
+         - Strategy parameters confirmed aligned with academic research
 """
 from datetime import datetime
 from typing import Dict, Any, Optional, List, Tuple
@@ -80,7 +87,7 @@ except ImportError:
 # REQUIRED: Strategy Metadata
 # =============================================================================
 STRATEGY_NAME = "ratio_trading"
-STRATEGY_VERSION = "3.0.0"
+STRATEGY_VERSION = "4.0.0"
 SYMBOLS = ["XRP/BTC"]
 
 
@@ -226,9 +233,9 @@ CONFIG = {
     # ==========================================================================
     'use_correlation_monitoring': True,   # Enable correlation monitoring
     'correlation_lookback': 20,           # Periods for correlation calculation
-    'correlation_warning_threshold': 0.5, # Warn if correlation below this
-    'correlation_pause_threshold': 0.3,   # Pause trading if below this
-    'correlation_pause_enabled': False,   # Whether to pause on low correlation
+    'correlation_warning_threshold': 0.6, # REC-024: Warn if correlation below this (raised from 0.5)
+    'correlation_pause_threshold': 0.4,   # REC-024: Pause trading if below this (raised from 0.3)
+    'correlation_pause_enabled': True,    # REC-023: Enabled by default for declining XRP/BTC correlation
 
     # ==========================================================================
     # Dynamic BTC Price - REC-018
@@ -1548,10 +1555,12 @@ def on_start(config: Dict[str, Any], state: Dict[str, Any]) -> None:
           f"PositionDecay={config.get('use_position_decay', True)}")
     print(f"[ratio_trading] v3.0 Features: CorrelationMonitoring={config.get('use_correlation_monitoring', True)}, "
           f"DynamicBTCPrice=True, SeparateExitTracking=True")
+    print(f"[ratio_trading] v4.0 Features: CorrelationPauseEnabled={config.get('correlation_pause_enabled', True)}, "
+          f"RaisedThresholds=True (research-validated)")
     if config.get('use_correlation_monitoring', True):
-        print(f"[ratio_trading] Correlation: warn<{config.get('correlation_warning_threshold', 0.5)}, "
-              f"pause<{config.get('correlation_pause_threshold', 0.3)} "
-              f"(pause_enabled={config.get('correlation_pause_enabled', False)})")
+        print(f"[ratio_trading] Correlation (REC-023/024): warn<{config.get('correlation_warning_threshold', 0.6)}, "
+              f"pause<{config.get('correlation_pause_threshold', 0.4)} "
+              f"(pause_enabled={config.get('correlation_pause_enabled', True)})")
     print(f"[ratio_trading] Position sizing: {config.get('position_size_usd', 15.0)} USD, "
           f"Max: {config.get('max_position_usd', 50.0)} USD")
     print(f"[ratio_trading] R:R ratio: {config.get('take_profit_pct', 0.6)}/{config.get('stop_loss_pct', 0.6)} "

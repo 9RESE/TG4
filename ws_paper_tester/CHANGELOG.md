@@ -5,6 +5,35 @@ All notable changes to the WebSocket Paper Tester will be documented in this fil
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.0] - 2025-12-14
+
+### Added
+- **Ratio Trading strategy v4.0.0** - Deep review optimizations per ratio-trading-strategy-review-v4.0.md
+  - REC-023: Enable `correlation_pause_enabled` by default (HIGH priority)
+    - Trading automatically pauses when XRP/BTC correlation drops below threshold
+    - Protects against correlation breakdown periods
+    - Research shows XRP/BTC correlation declining (~24.86% over 90 days)
+  - REC-024: Raised correlation thresholds for earlier warning/pause
+    - `correlation_warning_threshold`: 0.5 → 0.6 (earlier warning)
+    - `correlation_pause_threshold`: 0.3 → 0.4 (more conservative pause)
+    - Research suggests pairs trading requires correlation > 0.6 for reliability
+  - New v4.0 feature logging in `on_start()` showing raised thresholds and research validation
+
+- **Feature Documentation**
+  - `docs/development/features/ratio_trading/ratio-trading-v4.0.md` - v4.0.0 feature docs
+
+### Changed
+- **Ratio Trading strategy** (`ratio_trading.py`)
+  - Version updated to 4.0.0
+  - Default configuration now more conservative for correlation protection
+  - `on_start()` logs v4.0 features with REC-023/024 reference
+  - Strategy marked "Production Ready - Monitor Correlation Closely" in review
+
+### Documentation
+- Strategy Development Guide compliance for Ratio Trading remains at ~98%
+- All HIGH and MEDIUM priority recommendations from v4.0 review implemented
+- Research references updated with XRP/BTC correlation analysis
+
 ## [1.7.0] - 2025-12-14
 
 ### Added
