@@ -23,6 +23,11 @@ Version History:
          - MM-006: Stop/TP now based on entry price
          - MM-007: Added trade flow confirmation
          - MM-008: Enhanced indicator logging with volatility
+- 1.4.0: Enhancements per market-making-strategy-review-v1.3.md
+         - Added config validation on startup
+         - Optional Avellaneda-Stoikov reservation price model
+         - Trailing stop support
+         - Enhanced per-pair metrics tracking
 """
 from datetime import datetime
 from typing import Dict, Any, Optional, List
@@ -34,7 +39,7 @@ from ws_tester.types import DataSnapshot, Signal
 # REQUIRED: Strategy Metadata
 # =============================================================================
 STRATEGY_NAME = "market_making"
-STRATEGY_VERSION = "1.3.0"
+STRATEGY_VERSION = "1.4.0"
 SYMBOLS = ["XRP/USDT", "BTC/USDT", "XRP/BTC"]
 
 
@@ -64,6 +69,16 @@ CONFIG = {
     # Trade flow confirmation (MM-007)
     'use_trade_flow': True,       # Confirm with trade tape
     'trade_flow_threshold': 0.15, # Minimum trade imbalance alignment
+
+    # v1.4.0: Avellaneda-Stoikov reservation price model (optional)
+    'use_reservation_price': False,  # Enable A-S style quote adjustment
+    'gamma': 0.1,                    # Risk aversion parameter (0.01-1.0)
+    # Higher gamma = more aggressive inventory reduction
+
+    # v1.4.0: Trailing stop support
+    'use_trailing_stop': False,      # Enable trailing stops
+    'trailing_stop_activation': 0.2, # Activate trailing after 0.2% profit
+    'trailing_stop_distance': 0.15,  # Trail at 0.15% from high
 }
 
 # Per-symbol configurations
@@ -116,6 +131,124 @@ def _get_symbol_config(symbol: str, config: Dict[str, Any], key: str) -> Any:
 def _is_xrp_btc(symbol: str) -> bool:
     """Check if this is the XRP/BTC pair."""
     return symbol == 'XRP/BTC'
+
+
+def _validate_config(config: Dict[str, Any]) -> List[str]:
+    """
+    Validate configuration on startup.
+
+    Returns:
+        List of error messages (empty if valid)
+    """
+    errors = []
+
+    # Required positive values
+    required_positive = [
+        'position_size_usd',
+        'max_inventory',
+        'stop_loss_pct',
+        'take_profit_pct',
+        'cooldown_seconds',
+    ]
+
+    for key in required_positive:
+        val = config.get(key)
+        if val is None:
+            errors.append(f"Missing required config: {key}")
+        elif val <= 0:
+            errors.append(f"{key} must be positive, got {val}")
+
+    # Optional values with bounds
+    gamma = config.get('gamma', 0.1)
+    if gamma < 0.01 or gamma > 1.0:
+        errors.append(f"gamma must be between 0.01 and 1.0, got {gamma}")
+
+    inventory_skew = config.get('inventory_skew', 0.5)
+    if inventory_skew < 0 or inventory_skew > 1.0:
+        errors.append(f"inventory_skew must be between 0 and 1.0, got {inventory_skew}")
+
+    # Warn about risky R:R ratios
+    sl = config.get('stop_loss_pct', 0.5)
+    tp = config.get('take_profit_pct', 0.4)
+    if sl > 0 and tp > 0:
+        rr_ratio = tp / sl
+        if rr_ratio < 0.5:
+            errors.append(f"Warning: Poor R:R ratio ({rr_ratio:.2f}:1), requires {100/(1+rr_ratio):.0f}% win rate")
+
+    return errors
+
+
+def _calculate_reservation_price(
+    mid_price: float,
+    inventory: float,
+    max_inventory: float,
+    gamma: float,
+    volatility_pct: float
+) -> float:
+    """
+    Calculate Avellaneda-Stoikov reservation price.
+
+    The reservation price adjusts the mid price based on inventory risk:
+    r = s - q * γ * σ²
+
+    Where:
+    - s: mid price
+    - q: normalized inventory (-1 to 1)
+    - γ: risk aversion parameter
+    - σ²: variance of price (volatility squared)
+
+    Returns:
+        Adjusted reservation price
+    """
+    if max_inventory <= 0:
+        return mid_price
+
+    # Normalize inventory to -1 to 1 range
+    q = inventory / max_inventory
+
+    # Convert volatility percentage to decimal variance
+    sigma_sq = (volatility_pct / 100) ** 2
+
+    # Calculate reservation price
+    # Positive inventory (long) -> lower reservation price (favor selling)
+    # Negative inventory (short) -> higher reservation price (favor buying)
+    reservation = mid_price * (1 - q * gamma * sigma_sq * 100)
+
+    return reservation
+
+
+def _calculate_trailing_stop(
+    entry_price: float,
+    highest_price: float,
+    side: str,
+    activation_pct: float,
+    trail_distance_pct: float
+) -> Optional[float]:
+    """
+    Calculate trailing stop level.
+
+    Args:
+        entry_price: Original entry price
+        highest_price: Highest price since entry (for longs) or lowest (for shorts)
+        side: 'long' or 'short'
+        activation_pct: Minimum profit % to activate trailing
+        trail_distance_pct: Distance from high/low to trail
+
+    Returns:
+        Trailing stop price or None if not activated
+    """
+    if side == 'long':
+        # Long: profit when price increases
+        profit_pct = (highest_price - entry_price) / entry_price * 100
+        if profit_pct >= activation_pct:
+            return highest_price * (1 - trail_distance_pct / 100)
+    elif side == 'short':
+        # Short: profit when price decreases (highest_price is actually lowest)
+        profit_pct = (entry_price - highest_price) / entry_price * 100
+        if profit_pct >= activation_pct:
+            return highest_price * (1 + trail_distance_pct / 100)
+
+    return None
 
 
 def _calculate_volatility(candles, lookback: int = 20) -> float:
@@ -277,6 +410,78 @@ def _evaluate_symbol(
         base_size = _get_symbol_config(symbol, config, 'position_size_usd') or 20
         base_size_xrp = 0  # Not applicable
 
+    # v1.4.0: Calculate reservation price if enabled (Avellaneda-Stoikov)
+    use_reservation = config.get('use_reservation_price', False)
+    gamma = config.get('gamma', 0.1)
+    reservation_price = ob.mid
+
+    if use_reservation and volatility > 0:
+        reservation_price = _calculate_reservation_price(
+            mid_price=ob.mid,
+            inventory=inventory,
+            max_inventory=max_inventory,
+            gamma=gamma,
+            volatility_pct=volatility
+        )
+
+    # v1.4.0: Check trailing stop if we have a position
+    use_trailing = config.get('use_trailing_stop', False)
+    trailing_activation = config.get('trailing_stop_activation', 0.2)
+    trailing_distance = config.get('trailing_stop_distance', 0.15)
+    trailing_stop_price = None
+
+    if use_trailing and 'position_entries' in state:
+        pos_entry = state['position_entries'].get(symbol)
+        if pos_entry:
+            # Update highest/lowest price for tracking
+            if pos_entry['side'] == 'long':
+                pos_entry['highest_price'] = max(pos_entry['highest_price'], price)
+                tracking_price = pos_entry['highest_price']
+            else:
+                pos_entry['lowest_price'] = min(pos_entry['lowest_price'], price)
+                tracking_price = pos_entry['lowest_price']
+
+            trailing_stop_price = _calculate_trailing_stop(
+                entry_price=pos_entry['entry_price'],
+                highest_price=tracking_price,
+                side=pos_entry['side'],
+                activation_pct=trailing_activation,
+                trail_distance_pct=trailing_distance
+            )
+
+            # Check if trailing stop is triggered
+            if trailing_stop_price is not None:
+                if pos_entry['side'] == 'long' and price <= trailing_stop_price:
+                    # Trailing stop triggered on long - close position
+                    close_size = abs(inventory)
+                    if is_cross_pair:
+                        xrp_usdt_price = data.prices.get('XRP/USDT', 2.35)
+                        close_size = close_size * xrp_usdt_price
+
+                    return Signal(
+                        action='sell',
+                        symbol=symbol,
+                        size=close_size,
+                        price=ob.best_bid,
+                        reason=f"MM: Trailing stop hit (entry={pos_entry['entry_price']:.6f}, high={pos_entry['highest_price']:.6f}, trail={trailing_stop_price:.6f})",
+                        metadata={'trailing_stop': True, 'xrp_size': close_size / xrp_usdt_price if is_cross_pair else None},
+                    )
+                elif pos_entry['side'] == 'short' and price >= trailing_stop_price:
+                    # Trailing stop triggered on short - cover position
+                    close_size = abs(inventory)
+                    if is_cross_pair:
+                        xrp_usdt_price = data.prices.get('XRP/USDT', 2.35)
+                        close_size = close_size * xrp_usdt_price
+
+                    return Signal(
+                        action='cover',
+                        symbol=symbol,
+                        size=close_size,
+                        price=ob.best_ask,
+                        reason=f"MM: Trailing stop hit (entry={pos_entry['entry_price']:.6f}, low={pos_entry['lowest_price']:.6f}, trail={trailing_stop_price:.6f})",
+                        metadata={'trailing_stop': True, 'xrp_size': close_size / xrp_usdt_price if is_cross_pair else None},
+                    )
+
     # MM-008: Enhanced indicator logging with volatility
     state['indicators'] = {
         'symbol': symbol,
@@ -297,6 +502,12 @@ def _evaluate_symbol(
         # MM-007: Trade flow
         'trade_flow': round(trade_flow, 4),
         'trade_flow_aligned': False,  # Will be set below
+        # v1.4.0: Reservation price and trailing stop
+        'reservation_price': round(reservation_price, 8) if use_reservation else None,
+        'trailing_stop_price': round(trailing_stop_price, 8) if trailing_stop_price else None,
+        # v1.4.0: Per-pair metrics
+        'pnl_symbol': state.get('pnl_by_symbol', {}).get(symbol, 0),
+        'trades_symbol': state.get('trades_by_symbol', {}).get(symbol, 0),
     }
 
     # Check minimum spread (with volatility adjustment)
@@ -470,7 +681,20 @@ def _evaluate_symbol(
 # OPTIONAL: Lifecycle Callbacks
 # =============================================================================
 def on_start(config: Dict[str, Any], state: Dict[str, Any]) -> None:
-    """Initialize state."""
+    """
+    Initialize state and validate configuration.
+
+    v1.4.0: Added config validation and trailing stop tracking.
+    """
+    # v1.4.0: Validate configuration
+    errors = _validate_config(config)
+    if errors:
+        for error in errors:
+            print(f"[market_making] Config warning: {error}")
+        state['config_warnings'] = errors
+    state['config_validated'] = True
+
+    # Core state
     state['initialized'] = True
     state['inventory'] = 0
     state['inventory_by_symbol'] = {}
@@ -479,12 +703,20 @@ def on_start(config: Dict[str, Any], state: Dict[str, Any]) -> None:
     state['last_signal_time'] = None
     state['indicators'] = {}
 
+    # v1.4.0: Position tracking for trailing stops
+    state['position_entries'] = {}  # symbol -> {'entry_price', 'highest_price', 'lowest_price', 'side'}
+
+    # v1.4.0: Per-pair metrics
+    state['pnl_by_symbol'] = {}
+    state['trades_by_symbol'] = {}
+
 
 def on_fill(fill: Dict[str, Any], state: Dict[str, Any]) -> None:
     """
     Update inventory on fill.
 
     MM-005: Fixed unit handling - use value field from executor for USD pairs.
+    v1.4.0: Added position tracking for trailing stops and per-pair metrics.
 
     For XRP/BTC:
     - Buy: +XRP inventory, track BTC spent
@@ -494,6 +726,7 @@ def on_fill(fill: Dict[str, Any], state: Dict[str, Any]) -> None:
     side = fill.get('side', '')
     size = fill.get('size', 0)  # Base asset size from executor
     price = fill.get('price', 0)
+    pnl = fill.get('pnl', 0)
     # MM-005: Use value from executor if available (always in quote currency)
     value = fill.get('value', size * price)
 
@@ -535,11 +768,68 @@ def on_fill(fill: Dict[str, Any], state: Dict[str, Any]) -> None:
     state['inventory'] = sum(state['inventory_by_symbol'].values())
     state['last_fill'] = fill
 
+    # v1.4.0: Track position entries for trailing stops
+    if 'position_entries' not in state:
+        state['position_entries'] = {}
+
+    if side == 'buy':
+        # Opening or adding to long position
+        if symbol not in state['position_entries']:
+            state['position_entries'][symbol] = {
+                'entry_price': price,
+                'highest_price': price,
+                'lowest_price': price,
+                'side': 'long',
+            }
+        else:
+            # Update highest price
+            pos = state['position_entries'][symbol]
+            pos['highest_price'] = max(pos['highest_price'], price)
+    elif side == 'sell':
+        # Closing long position
+        if symbol in state['position_entries']:
+            del state['position_entries'][symbol]
+    elif side == 'short':
+        # Opening or adding to short position
+        if symbol not in state['position_entries']:
+            state['position_entries'][symbol] = {
+                'entry_price': price,
+                'highest_price': price,
+                'lowest_price': price,
+                'side': 'short',
+            }
+        else:
+            # Update lowest price (favorable for shorts)
+            pos = state['position_entries'][symbol]
+            pos['lowest_price'] = min(pos['lowest_price'], price)
+    elif side == 'cover':
+        # Closing short position
+        if symbol in state['position_entries']:
+            del state['position_entries'][symbol]
+
+    # v1.4.0: Track per-pair metrics
+    if 'pnl_by_symbol' not in state:
+        state['pnl_by_symbol'] = {}
+    if 'trades_by_symbol' not in state:
+        state['trades_by_symbol'] = {}
+
+    if pnl != 0:
+        state['pnl_by_symbol'][symbol] = state['pnl_by_symbol'].get(symbol, 0) + pnl
+    state['trades_by_symbol'][symbol] = state['trades_by_symbol'].get(symbol, 0) + 1
+
 
 def on_stop(state: Dict[str, Any]) -> None:
-    """Called when strategy stops."""
+    """
+    Called when strategy stops.
+
+    v1.4.0: Enhanced with per-pair metrics.
+    """
     state['final_summary'] = {
         'inventory_by_symbol': state.get('inventory_by_symbol', {}),
         'xrp_accumulated': state.get('xrp_accumulated', 0),
         'btc_accumulated': state.get('btc_accumulated', 0),
+        # v1.4.0: Per-pair metrics
+        'pnl_by_symbol': state.get('pnl_by_symbol', {}),
+        'trades_by_symbol': state.get('trades_by_symbol', {}),
+        'config_warnings': state.get('config_warnings', []),
     }

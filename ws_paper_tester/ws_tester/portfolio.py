@@ -23,6 +23,8 @@ class StrategyPortfolio:
     """
     Isolated portfolio for a single strategy.
     Thread-safe: uses RLock for all balance/position modifications.
+
+    v1.1: Added per-pair PnL and metrics tracking
     """
     strategy_name: str
     starting_capital: float = STARTING_CAPITAL
@@ -38,13 +40,19 @@ class StrategyPortfolio:
     fills: List[Fill] = field(default_factory=list)
     _max_fills: int = field(default=MAX_FILLS_HISTORY, repr=False)
 
-    # Metrics
+    # Metrics - Global
     total_trades: int = 0
     winning_trades: int = 0
     losing_trades: int = 0
     total_pnl: float = 0.0
     max_drawdown: float = 0.0
     peak_equity: float = field(default=None)  # Will be set in __post_init__
+
+    # Metrics - Per-pair (v1.1)
+    pnl_by_symbol: Dict[str, float] = field(default_factory=dict)
+    trades_by_symbol: Dict[str, int] = field(default_factory=dict)
+    wins_by_symbol: Dict[str, int] = field(default_factory=dict)
+    losses_by_symbol: Dict[str, int] = field(default_factory=dict)
 
     # Timestamps
     created_at: datetime = field(default_factory=datetime.now)
@@ -109,6 +117,57 @@ class StrategyPortfolio:
             if len(self.fills) > self._max_fills:
                 self.fills = self.fills[-self._max_fills:]
 
+    def record_trade_result(self, symbol: str, pnl: float):
+        """
+        Record trade result for per-pair metrics. Thread-safe.
+
+        Args:
+            symbol: Trading pair (e.g., 'XRP/USDT')
+            pnl: Realized P&L for this trade
+        """
+        with self._lock:
+            # Update per-symbol PnL
+            self.pnl_by_symbol[symbol] = self.pnl_by_symbol.get(symbol, 0.0) + pnl
+
+            # Update per-symbol trade counts
+            self.trades_by_symbol[symbol] = self.trades_by_symbol.get(symbol, 0) + 1
+
+            # Update per-symbol win/loss
+            if pnl > 0:
+                self.wins_by_symbol[symbol] = self.wins_by_symbol.get(symbol, 0) + 1
+            elif pnl < 0:
+                self.losses_by_symbol[symbol] = self.losses_by_symbol.get(symbol, 0) + 1
+
+    def get_symbol_stats(self, symbol: str) -> dict:
+        """Get statistics for a specific trading pair. Thread-safe."""
+        with self._lock:
+            trades = self.trades_by_symbol.get(symbol, 0)
+            wins = self.wins_by_symbol.get(symbol, 0)
+            losses = self.losses_by_symbol.get(symbol, 0)
+            pnl = self.pnl_by_symbol.get(symbol, 0.0)
+
+            win_rate = (wins / trades * 100) if trades > 0 else 0.0
+
+            # Calculate avg P&L for this symbol
+            symbol_fills = [f for f in self.fills if f.symbol == symbol and f.pnl != 0]
+            avg_pnl = (sum(f.pnl for f in symbol_fills) / len(symbol_fills)) if symbol_fills else 0.0
+
+            return {
+                'symbol': symbol,
+                'trades': trades,
+                'wins': wins,
+                'losses': losses,
+                'win_rate': round(win_rate, 1),
+                'pnl': round(pnl, 4),
+                'avg_pnl': round(avg_pnl, 4),
+            }
+
+    def get_all_symbol_stats(self) -> Dict[str, dict]:
+        """Get statistics for all traded symbols. Thread-safe."""
+        with self._lock:
+            all_symbols = set(self.pnl_by_symbol.keys()) | set(self.trades_by_symbol.keys())
+            return {symbol: self.get_symbol_stats(symbol) for symbol in all_symbols}
+
     def get_profit_factor(self) -> float:
         """Calculate profit factor (gross profit / gross loss). Thread-safe."""
         with self._lock:
@@ -149,19 +208,34 @@ class StrategyPortfolio:
     def to_dict(self, prices: Dict[str, float]) -> dict:
         """Serialize for dashboard/logging. Thread-safe."""
         with self._lock:
+            # Calculate asset values in USD
+            asset_values = {}
+            for asset, amount in self.assets.items():
+                if amount != 0:
+                    price = prices.get(f"{asset}/USDT", 0) or prices.get(f"{asset}/USD", 0)
+                    asset_values[asset] = {
+                        'amount': round(amount, 8),
+                        'price': round(price, 8) if price else 0,
+                        'value_usd': round(amount * price, 4) if price else 0,
+                    }
+
             return {
                 'strategy': self.strategy_name,
                 'usdt': round(self.usdt, 4),
                 'assets': {k: round(v, 8) for k, v in self.assets.items()},
+                'asset_values': asset_values,
                 'equity': round(self.get_equity(prices), 4),
                 'pnl': round(self.total_pnl, 4),
+                'pnl_by_symbol': {k: round(v, 4) for k, v in self.pnl_by_symbol.items()},
                 'roi_pct': round(self.get_roi(prices), 2),
                 'trades': self.total_trades,
+                'trades_by_symbol': dict(self.trades_by_symbol),
                 'win_rate': round(self.get_win_rate(), 1),
                 'max_drawdown_pct': round(self.max_drawdown * 100, 2),
                 'open_positions': len(self.positions),
                 'profit_factor': round(self.get_profit_factor(), 2),
                 'avg_trade_pnl': round(self.get_avg_trade_pnl(), 4),
+                'symbol_stats': self.get_all_symbol_stats(),
             }
 
 

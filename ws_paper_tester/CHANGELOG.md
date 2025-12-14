@@ -5,6 +5,55 @@ All notable changes to the WebSocket Paper Tester will be documented in this fil
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0] - 2025-12-13
+
+### Added
+- **Market Making strategy v1.4.0** - Enhancements per deep strategy review v1.3
+  - Configuration validation on startup with warnings for invalid/risky settings
+  - Optional Avellaneda-Stoikov reservation price model (`use_reservation_price`, `gamma`)
+  - Trailing stop support (`use_trailing_stop`, `trailing_stop_activation`, `trailing_stop_distance`)
+  - Per-pair PnL and trade metrics tracking in strategy state
+  - Position entry tracking for trailing stop calculations
+
+- **Portfolio per-pair tracking** (`ws_tester/portfolio.py`)
+  - New fields: `pnl_by_symbol`, `trades_by_symbol`, `wins_by_symbol`, `losses_by_symbol`
+  - New methods: `record_trade_result()`, `get_symbol_stats()`, `get_all_symbol_stats()`
+  - Enhanced `to_dict()` with asset values, per-pair breakdown, and symbol stats
+
+- **Enhanced logging** (`ws_tester/logger.py`)
+  - `log_fill()` now accepts `symbol_stats` for per-pair cumulative P&L display
+  - New `log_portfolio_snapshot()` method for detailed portfolio state logging
+  - Console output shows per-pair cumulative P&L on fills
+
+- **New tests** (`tests/test_strategies.py`)
+  - `TestMarketMakingV14Features`: Config validation, reservation price, trailing stop
+  - `TestPortfolioPerPairTracking`: Per-pair PnL and stats tracking
+  - 17 total strategy tests (6 new for v1.4.0)
+
+- **Documentation**
+  - `docs/development/market-making-strategy-review-v1.3.md` - Deep strategy review
+  - `docs/development/features/market-making-v1.4.md` - Feature documentation
+
+### Changed
+- **Market Making strategy** (`market_making.py`)
+  - Version updated to 1.4.0
+  - `on_start()` now validates config and initializes trailing stop tracking
+  - `on_fill()` now tracks position entries and per-pair metrics
+  - `on_stop()` includes per-pair metrics in final summary
+  - `_evaluate_symbol()` checks trailing stops and calculates reservation price
+  - Enhanced indicators include `reservation_price`, `trailing_stop_price`, `pnl_symbol`, `trades_symbol`
+
+- **Executor** (`ws_tester/executor.py`)
+  - Now calls `portfolio.record_trade_result()` for per-pair metrics
+
+### Documentation
+- Created comprehensive v1.3 strategy review with:
+  - Strategy Development Guide compliance analysis (95% score)
+  - Deep research on market making techniques (Avellaneda-Stoikov, OBI, trade flow)
+  - Pair-specific analysis for XRP/USDT, BTC/USDT, XRP/BTC
+  - Industry comparison with Hummingbot A-S strategy
+  - 12 academic and industry references
+
 ## [1.3.0] - 2025-12-13
 
 ### Added

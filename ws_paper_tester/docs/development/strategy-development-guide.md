@@ -1,8 +1,8 @@
 # Strategy Development Guide
 
-**Version:** 1.0
-**Target Platform:** WebSocket Paper Tester v1.0.2+
-**Supported Pairs:** XRP/USDTT, BTC/USDTT (Kraken)
+**Version:** 1.1
+**Target Platform:** WebSocket Paper Tester v1.4.0+
+**Supported Pairs:** XRP/USDT, BTC/USDT, XRP/BTC (Kraken)
 
 This guide provides comprehensive instructions for developing trading strategies that integrate seamlessly with the WebSocket Paper Tester platform.
 
@@ -22,6 +22,8 @@ This guide provides comprehensive instructions for developing trading strategies
 10. [Testing Your Strategy](#10-testing-your-strategy)
 11. [Common Pitfalls](#11-common-pitfalls)
 12. [Performance Considerations](#12-performance-considerations)
+13. [Per-Pair PnL Tracking](#13-per-pair-pnl-tracking) *(v1.4.0+)*
+14. [Advanced Features](#14-advanced-features) *(v1.4.0+)*
 
 ---
 
@@ -1245,6 +1247,216 @@ data.get_trade_imbalance('XRP/USDT', 50)  # float: Buy-sell imbalance
 
 ---
 
-**Document Version:** 1.0
-**Last Updated:** 2024
-**Platform Version:** WebSocket Paper Tester v1.0.2+
+## 13. Per-Pair PnL Tracking
+
+*Added in v1.4.0*
+
+The platform now tracks P&L and trade metrics per trading pair automatically.
+
+### Automatic Portfolio Tracking
+
+The `StrategyPortfolio` class tracks these metrics per symbol:
+
+```python
+portfolio.pnl_by_symbol      # {'XRP/USDT': 12.50, 'BTC/USDT': -3.25}
+portfolio.trades_by_symbol   # {'XRP/USDT': 15, 'BTC/USDT': 8}
+portfolio.wins_by_symbol     # {'XRP/USDT': 10, 'BTC/USDT': 3}
+portfolio.losses_by_symbol   # {'XRP/USDT': 5, 'BTC/USDT': 5}
+```
+
+### Strategy-Level Tracking
+
+In your strategy, track per-pair metrics in state:
+
+```python
+def on_fill(fill: dict, state: dict) -> None:
+    symbol = fill.get('symbol')
+    pnl = fill.get('pnl', 0)
+
+    # Initialize tracking dicts
+    if 'pnl_by_symbol' not in state:
+        state['pnl_by_symbol'] = {}
+    if 'trades_by_symbol' not in state:
+        state['trades_by_symbol'] = {}
+
+    # Update per-pair metrics
+    if pnl != 0:
+        state['pnl_by_symbol'][symbol] = state['pnl_by_symbol'].get(symbol, 0) + pnl
+    state['trades_by_symbol'][symbol] = state['trades_by_symbol'].get(symbol, 0) + 1
+```
+
+### Including Per-Pair Stats in Indicators
+
+Add per-pair P&L to your indicator logging:
+
+```python
+state['indicators'] = {
+    'symbol': symbol,
+    'price': price,
+    # ... other indicators ...
+
+    # Per-pair metrics (v1.4.0+)
+    'pnl_symbol': state.get('pnl_by_symbol', {}).get(symbol, 0),
+    'trades_symbol': state.get('trades_by_symbol', {}).get(symbol, 0),
+}
+```
+
+### Portfolio Snapshot Method
+
+Use the logger's new method for detailed portfolio state:
+
+```python
+# In ws_tester main loop (done automatically)
+logger.log_portfolio_snapshot(
+    strategy='my_strategy',
+    portfolio=portfolio.to_dict(prices),
+    prices=prices,
+    symbol_stats=portfolio.get_all_symbol_stats(),
+)
+```
+
+### Console Output
+
+Fills now show cumulative per-pair P&L:
+
+```
+[FILL] [market_making] BUY XRP/USDT @ 2.350000 P&L: +$1.25 [XRP/USDT total: +$8.50]
+```
+
+---
+
+## 14. Advanced Features
+
+*Added in v1.4.0*
+
+### Configuration Validation
+
+Validate your config parameters on startup:
+
+```python
+def _validate_config(config: dict) -> list:
+    """Validate configuration. Returns list of error messages."""
+    errors = []
+
+    # Required positive values
+    required = ['position_size_usd', 'stop_loss_pct', 'take_profit_pct']
+    for key in required:
+        val = config.get(key)
+        if val is None:
+            errors.append(f"Missing required config: {key}")
+        elif val <= 0:
+            errors.append(f"{key} must be positive, got {val}")
+
+    # Check R:R ratio
+    sl = config.get('stop_loss_pct', 0.5)
+    tp = config.get('take_profit_pct', 0.4)
+    if sl > 0 and tp > 0:
+        rr = tp / sl
+        if rr < 0.5:
+            errors.append(f"Warning: Poor R:R ratio ({rr:.2f}:1)")
+
+    return errors
+
+def on_start(config: dict, state: dict) -> None:
+    errors = _validate_config(config)
+    if errors:
+        for e in errors:
+            print(f"[my_strategy] Config warning: {e}")
+    state['config_validated'] = True
+```
+
+### Avellaneda-Stoikov Reservation Price
+
+For advanced inventory-aware quote adjustment:
+
+```python
+def _calculate_reservation_price(
+    mid_price: float,
+    inventory: float,
+    max_inventory: float,
+    gamma: float,          # Risk aversion (0.01-1.0)
+    volatility_pct: float  # Current volatility
+) -> float:
+    """
+    Reservation price = mid * (1 - q * γ * σ² * 100)
+
+    - Positive inventory → lower price (favor selling)
+    - Negative inventory → higher price (favor buying)
+    """
+    if max_inventory <= 0:
+        return mid_price
+
+    q = inventory / max_inventory
+    sigma_sq = (volatility_pct / 100) ** 2
+
+    return mid_price * (1 - q * gamma * sigma_sq * 100)
+```
+
+Enable in config:
+```python
+CONFIG = {
+    'use_reservation_price': False,  # Enable A-S model
+    'gamma': 0.1,                    # Risk aversion
+}
+```
+
+### Trailing Stops
+
+Implement trailing stops for profit protection:
+
+```python
+def _calculate_trailing_stop(
+    entry_price: float,
+    highest_price: float,  # Track in on_fill
+    side: str,             # 'long' or 'short'
+    activation_pct: float, # e.g., 0.2 (activate at 0.2% profit)
+    trail_distance_pct: float,  # e.g., 0.15 (trail 0.15% from high)
+) -> float:
+    """Returns trailing stop price or None if not activated."""
+    if side == 'long':
+        profit_pct = (highest_price - entry_price) / entry_price * 100
+        if profit_pct >= activation_pct:
+            return highest_price * (1 - trail_distance_pct / 100)
+    elif side == 'short':
+        profit_pct = (entry_price - highest_price) / entry_price * 100
+        if profit_pct >= activation_pct:
+            return highest_price * (1 + trail_distance_pct / 100)
+    return None
+```
+
+Track position entries for trailing stops:
+
+```python
+def on_fill(fill: dict, state: dict) -> None:
+    symbol = fill.get('symbol')
+    side = fill.get('side')
+    price = fill.get('price')
+
+    if 'position_entries' not in state:
+        state['position_entries'] = {}
+
+    if side == 'buy':
+        state['position_entries'][symbol] = {
+            'entry_price': price,
+            'highest_price': price,
+            'side': 'long',
+        }
+    elif side == 'sell':
+        if symbol in state['position_entries']:
+            del state['position_entries'][symbol]
+```
+
+Config options:
+```python
+CONFIG = {
+    'use_trailing_stop': False,
+    'trailing_stop_activation': 0.2,  # Activate at 0.2% profit
+    'trailing_stop_distance': 0.15,   # Trail 0.15% from high
+}
+```
+
+---
+
+**Document Version:** 1.1
+**Last Updated:** 2025-12-13
+**Platform Version:** WebSocket Paper Tester v1.4.0+

@@ -359,9 +359,20 @@ class TesterLogger:
         correlation_id: str,
         strategy: str,
         portfolio: Dict,
-        position: Dict = None
+        position: Dict = None,
+        symbol_stats: Dict = None
     ):
-        """Log trade execution."""
+        """
+        Log trade execution with per-pair metrics.
+
+        Args:
+            fill: Fill object
+            correlation_id: Correlation ID linking signal to fill
+            strategy: Strategy name
+            portfolio: Portfolio state after fill
+            position: Position state (optional)
+            symbol_stats: Per-symbol statistics (optional, v1.1)
+        """
         fill_dict = None
         if fill:
             if hasattr(fill, '__dataclass_fields__'):
@@ -378,18 +389,26 @@ class TesterLogger:
             "fill": fill_dict,
             "strategy": strategy,
             "portfolio_after": portfolio,
-            "position": position
+            "position": position,
+            "symbol_stats": symbol_stats,
         }
         self._write_queue.put(('trades', entry))
 
-        # Console output for fills
+        # Console output for fills with per-pair summary
         if fill and self.config.console_output:
             side = fill.side if hasattr(fill, 'side') else 'unknown'
             symbol = fill.symbol if hasattr(fill, 'symbol') else 'unknown'
             price = fill.price if hasattr(fill, 'price') else 0
             pnl = fill.pnl if hasattr(fill, 'pnl') else 0
             pnl_str = f" P&L: ${pnl:+.2f}" if pnl != 0 else ""
-            print(f"[FILL] [{strategy}] {side.upper()} {symbol} @ {price:.6f}{pnl_str}")
+
+            # Add per-symbol cumulative P&L if available
+            symbol_pnl_str = ""
+            if symbol_stats and symbol in symbol_stats:
+                cumulative = symbol_stats[symbol].get('pnl', 0)
+                symbol_pnl_str = f" [{symbol} total: ${cumulative:+.2f}]"
+
+            print(f"[FILL] [{strategy}] {side.upper()} {symbol} @ {price:.6f}{pnl_str}{symbol_pnl_str}")
 
     def log_aggregated(
         self,
@@ -456,6 +475,57 @@ class TesterLogger:
             "portfolios": portfolios
         }
         self._write_queue.put(('system', entry))
+
+    def log_portfolio_snapshot(
+        self,
+        strategy: str,
+        portfolio: Dict,
+        prices: Dict[str, float],
+        symbol_stats: Dict = None
+    ):
+        """
+        Log detailed portfolio snapshot with balances and per-pair P&L.
+
+        Args:
+            strategy: Strategy name
+            portfolio: Full portfolio dict from to_dict()
+            prices: Current prices
+            symbol_stats: Per-symbol statistics
+        """
+        entry = {
+            "timestamp": datetime.now().isoformat(),
+            "event": "portfolio_snapshot",
+            "strategy": strategy,
+            "prices": prices,
+            "portfolio": portfolio,
+            "symbol_stats": symbol_stats or {},
+        }
+        self._write_queue.put((strategy, entry))
+
+        # Console output for periodic snapshots
+        if self.config.console_output:
+            equity = portfolio.get('equity', 0)
+            pnl = portfolio.get('pnl', 0)
+            usdt = portfolio.get('usdt', 0)
+            assets = portfolio.get('assets', {})
+
+            # Build asset string
+            asset_parts = []
+            for asset, amount in assets.items():
+                if amount != 0:
+                    asset_parts.append(f"{asset}:{amount:.4f}")
+            asset_str = " | ".join(asset_parts) if asset_parts else "none"
+
+            # Build per-pair P&L string
+            pnl_by_symbol = portfolio.get('pnl_by_symbol', {})
+            if pnl_by_symbol:
+                pair_parts = [f"{sym}:${p:+.2f}" for sym, p in pnl_by_symbol.items()]
+                pair_str = " ".join(pair_parts)
+            else:
+                pair_str = "no trades"
+
+            print(f"[PORTFOLIO] [{strategy}] Equity: ${equity:.2f} | P&L: ${pnl:+.2f} | USDT: ${usdt:.2f} | Assets: {asset_str}")
+            print(f"            Per-pair P&L: {pair_str}")
 
     def close(self):
         """Flush and close all log files."""
@@ -537,6 +607,9 @@ class NullLogger:
         pass
 
     def log_status(self, *args, **kwargs):
+        pass
+
+    def log_portfolio_snapshot(self, *args, **kwargs):
         pass
 
     def close(self):

@@ -106,6 +106,10 @@ class PaperExecutor:
             portfolio.last_trade_at = data.timestamp
             portfolio.update_drawdown(data.prices)
 
+            # Record per-pair metrics (v1.1)
+            if fill.pnl != 0:
+                portfolio.record_trade_result(signal.symbol, fill.pnl)
+
         return fill
 
     def _execute_buy(
