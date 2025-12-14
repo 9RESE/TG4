@@ -11,7 +11,7 @@ from typing import Dict, Any
 # Strategy Metadata
 # =============================================================================
 STRATEGY_NAME = "order_flow"
-STRATEGY_VERSION = "4.2.0"
+STRATEGY_VERSION = "4.3.0"
 SYMBOLS = ["XRP/USDT", "BTC/USDT"]
 
 
@@ -32,6 +32,8 @@ class TradingSession(Enum):
     EUROPE = auto()
     US = auto()
     US_EUROPE_OVERLAP = auto()
+    # REC-002 (v4.3.0): Add OFF_HOURS session for 21:00-24:00 UTC (post-US thin liquidity)
+    OFF_HOURS = auto()
 
 
 class RejectionReason(Enum):
@@ -118,6 +120,7 @@ CONFIG: Dict[str, Any] = {
     # ==========================================================================
     'use_session_awareness': True,      # Enable session-based adjustments
     # Session boundaries in UTC (configurable for DST adjustments)
+    # REC-002 (v4.3.0): Added off_hours boundaries for 21:00-24:00 UTC
     'session_boundaries': {
         'asia_start': 0,                # 00:00 UTC
         'asia_end': 8,                  # 08:00 UTC
@@ -127,30 +130,38 @@ CONFIG: Dict[str, Any] = {
         'overlap_end': 17,              # 17:00 UTC
         'us_start': 17,                 # 17:00 UTC
         'us_end': 21,                   # 21:00 UTC
+        'off_hours_start': 21,          # 21:00 UTC (post-US, pre-Asia)
+        'off_hours_end': 24,            # 24:00 UTC (midnight)
     },
     'session_threshold_multipliers': {
         'ASIA': 1.2,                    # Wider thresholds (lower volume)
         'EUROPE': 1.0,                  # Standard thresholds
         'US': 1.0,                      # Standard thresholds
         'US_EUROPE_OVERLAP': 0.85,      # Tighter thresholds (peak liquidity)
+        # REC-002 (v4.3.0): OFF_HOURS - more conservative (42% below peak liquidity)
+        'OFF_HOURS': 1.35,              # Very wide thresholds (thinnest liquidity)
     },
     'session_size_multipliers': {
         'ASIA': 0.8,                    # Smaller sizes (lower liquidity)
         'EUROPE': 1.0,                  # Standard sizes
         'US': 1.0,                      # Standard sizes
         'US_EUROPE_OVERLAP': 1.1,       # Larger sizes (peak liquidity)
+        # REC-002 (v4.3.0): OFF_HOURS - smaller sizes for thin liquidity
+        'OFF_HOURS': 0.6,               # Smallest sizes (highest risk period)
     },
 
     # ==========================================================================
-    # Progressive Position Decay (REC-004: Enhanced with profit-after-fees)
+    # Progressive Position Decay (REC-004 v4.2.0: Enhanced with profit-after-fees)
+    # REC-004 (v4.3.0): Extended decay start time to allow 5 complete 1-minute candles
     # ==========================================================================
     'use_position_decay': True,         # Enable time-based position decay
     'position_decay_stages': [
         # (age_seconds, tp_multiplier)
-        (180, 0.90),                    # 3 min: 90% of original TP
-        (240, 0.75),                    # 4 min: 75% of original TP
-        (300, 0.50),                    # 5 min: 50% of original TP
-        (360, 0.0),                     # 6+ min: Close at any profit
+        # REC-004 (v4.3.0): Delayed start to 5 min for better candle data alignment
+        (300, 0.90),                    # 5 min: 90% of original TP
+        (360, 0.75),                    # 6 min: 75% of original TP
+        (420, 0.50),                    # 7 min: 50% of original TP
+        (480, 0.0),                     # 8+ min: Close at any profit
     ],
     # REC-004: Allow closing at any profit > fees during intermediate stages
     'decay_close_at_profit_after_fees': True,
@@ -191,8 +202,16 @@ CONFIG: Dict[str, Any] = {
 
     # ==========================================================================
     # Trailing Stops
+    # REC-007 (v4.3.0): Documented design decision for trailing stop default
+    # Trailing stops are DISABLED by default for order flow strategies.
+    # Rationale: Order flow strategies target quick mean-reversion or momentum
+    # moves with fixed profit targets. Trailing stops favor trend-following
+    # strategies where moves extend over time. Order flow signals typically
+    # resolve within a few minutes - either hitting TP or being exited via
+    # position decay. Enable trailing stops only if backtesting shows improved
+    # profit factor vs fixed targets.
     # ==========================================================================
-    'use_trailing_stop': False,         # Enable trailing stops
+    'use_trailing_stop': False,         # Disabled - see rationale above
     'trailing_stop_activation': 0.3,    # Activate after 0.3% profit
     'trailing_stop_distance': 0.2,      # Trail at 0.2% from high
 

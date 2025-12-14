@@ -563,6 +563,22 @@ def _evaluate_symbol(
                 price=current_price,
                 reason=f"OF: Close long above VWAP (imbal={imbalance:.2f}, dev={price_vs_vwap:.4f})",
             )
+        # REC-001 (v4.3.0): Add trade flow confirmation for new VWAP reversion short entries
+        elif not has_long and reduced_size >= min_trade:
+            if use_trade_flow and not is_trade_flow_aligned(data, symbol, 'sell', trade_flow_threshold, lookback):
+                state['indicators']['vwap_reversion_rejected'] = 'trade_flow_not_aligned'
+            else:
+                can_trade, adjusted_size = check_correlation_exposure(state, symbol, 'short', reduced_size, config)
+                if can_trade and adjusted_size >= min_trade:
+                    signal = Signal(
+                        action='short',
+                        symbol=symbol,
+                        size=adjusted_size,
+                        price=current_price,
+                        reason=f"OF: Short above VWAP (imbal={imbalance:.2f}, dev={price_vs_vwap:.4f})",
+                        stop_loss=current_price * (1 + sl_pct / 100),
+                        take_profit=vwap,
+                    )
 
     if signal:
         state['last_signal_idx'] = state['total_trades_seen']

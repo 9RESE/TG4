@@ -62,6 +62,7 @@ def classify_trading_session(
 ) -> TradingSession:
     """
     REC-003: Classify current time into a trading session using configurable boundaries.
+    REC-002 (v4.3.0): Added OFF_HOURS session for 21:00-24:00 UTC.
 
     Session boundaries are configurable in CONFIG['session_boundaries'] to allow
     adjustment for daylight saving time changes.
@@ -83,6 +84,9 @@ def classify_trading_session(
     europe_end = bounds.get('europe_end', 14)
     us_start = bounds.get('us_start', 17)
     us_end = bounds.get('us_end', 21)
+    # REC-002 (v4.3.0): OFF_HOURS boundaries
+    off_hours_start = bounds.get('off_hours_start', 21)
+    off_hours_end = bounds.get('off_hours_end', 24)
 
     if overlap_start <= hour < overlap_end:
         return TradingSession.US_EUROPE_OVERLAP
@@ -90,6 +94,9 @@ def classify_trading_session(
         return TradingSession.EUROPE
     elif us_start <= hour < us_end:
         return TradingSession.US
+    # REC-002 (v4.3.0): Explicitly handle OFF_HOURS (21:00-24:00 UTC)
+    elif off_hours_start <= hour < off_hours_end:
+        return TradingSession.OFF_HOURS
     else:
         return TradingSession.ASIA
 

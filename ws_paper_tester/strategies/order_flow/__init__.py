@@ -1,5 +1,5 @@
 """
-Order Flow Strategy v4.2.0
+Order Flow Strategy v4.3.0
 
 Trades based on trade tape analysis and buy/sell imbalance.
 Enhanced with VPIN, volatility regimes, session awareness, and advanced risk management.
@@ -29,6 +29,12 @@ Version History:
          - REC-004: VWAP reversion signals now check trade flow confirmation
          - REC-005: Micro-price fallback status logged in indicators
          - REC-006: Per-symbol position limits (max_position_per_symbol_usd)
+- 4.3.0: Improvements per deep-review-v7.0.md
+         - REC-001: Trade flow confirmation for VWAP reversion short entries
+         - REC-002: OFF_HOURS session type (21:00-24:00 UTC) with conservative multipliers
+         - REC-004: Extended position decay start (5 min) for candle data alignment
+         - REC-007: Documented trailing stop design decision in config
+         - REC-008: Created BACKLOG.md with deferred enhancements
 """
 
 # =============================================================================
