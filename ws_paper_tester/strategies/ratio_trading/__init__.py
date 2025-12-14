@@ -39,18 +39,34 @@ If XRP/BTC correlation deteriorates, consider evaluating alternative pairs:
 - BCH/BTC: Bitcoin fork relationship (~0.75 correlation)
 These would require strategy scope expansion (future enhancement).
 
-FUTURE ENHANCEMENTS:
-- REC-034/REC-040: Generalized Hurst Exponent (GHE) for mean-reversion validation
-  H < 0.5 = mean-reverting (good), H >= 0.5 = trending (pause)
-  2025 research shows GHE outperforms correlation/cointegration for crypto pair selection
-  Implementation: Add _calculate_ghe() function, GHE_NOT_MEAN_REVERTING rejection reason
-- REC-035: ADF Cointegration Test for formal cointegration validation
-  Currently uses correlation as proxy; formal testing would be more robust
-- REC-038: Half-Life Calculation for position management optimization
-  Calculate spread half-life via Ornstein-Uhlenbeck process to adjust position decay
-- REC-039: Multi-Pair Support Framework for trading alternative pairs (ETH/BTC, LTC/BTC)
-  Would enable rapid pair switching without code changes if XRP/BTC correlation degrades
-  Requires: Per-pair SYMBOL_CONFIGS, per-pair correlation tracking, pair selection logic
+FUTURE ENHANCEMENTS (v10.0 Review Recommendations):
+- REC-053/REC-054: Cointegration & GHE Implementation (HIGH priority)
+  * REC-053: ADF cointegration test - Replace correlation proxy with formal Engle-Granger test
+    - Calculate spread = XRP_price - hedge_ratio * BTC_price
+    - Run ADF test on spread (p-value < 0.05 = cointegrated)
+    - New rejection reason: COINTEGRATION_BROKEN
+  * REC-054: Generalized Hurst Exponent (GHE) for mean-reversion validation
+    - H < 0.5 = mean-reverting (good), H >= 0.5 = trending (pause)
+    - 2025 research shows GHE outperforms correlation/cointegration for crypto pair selection
+    - Implementation: _calculate_ghe() function, GHE_NOT_MEAN_REVERTING rejection reason
+- REC-055: Half-Life Calculation (MEDIUM priority)
+  * Calculate spread half-life via Ornstein-Uhlenbeck process
+  * Use τ = -ln(2)/λ to derive mean-reversion speed
+  * Optimize position_decay_minutes based on actual pair dynamics
+- REC-056: Johansen Cointegration Test (MEDIUM priority)
+  * Multivariate cointegration test for more robust validation
+  * Provides cointegration rank and eigenvalue statistics
+  * Complement to Engle-Granger (REC-053)
+- REC-057: Multi-Pair Support Framework (LOW priority, HIGH effort)
+  * Enable trading alternative pairs (ETH/BTC, LTC/BTC) if XRP/BTC degrades
+  * Requires: PAIR_CONFIGS (like SYMBOL_CONFIGS), per-pair correlation tracking
+  * Pair selection logic based on correlation/cointegration scores
+
+LEGACY REC NUMBERS (mapped to v10.0):
+- REC-034/040 → REC-054 (GHE)
+- REC-035 → REC-053 (ADF)
+- REC-038 → REC-055 (Half-Life)
+- REC-039 → REC-057 (Multi-Pair)
 
 Version History:
 - 1.0.0: Initial implementation
@@ -153,6 +169,20 @@ Version History:
          - REC-047/048/049: Document half-life calc, multi-pair support, session awareness
          - Compliance: Maintained 100% with Guide v2.0
          - Status: Production ready with enhanced fee protection
+- 4.3.1: Deep review v10.0 validation (December 2025)
+         - Review validates v4.3.0 as PRODUCTION READY
+         - No CRITICAL findings identified
+         - HIGH priority findings (H-001, H-002) are monitoring/documentation items
+         - Updated FUTURE ENHANCEMENTS section with v10.0 REC numbers:
+           * REC-053: ADF cointegration test (replaces REC-035)
+           * REC-054: GHE calculation (replaces REC-034/040)
+           * REC-055: Half-life calculation (replaces REC-038)
+           * REC-056: Johansen cointegration test (new)
+           * REC-057: Multi-pair support framework (replaces REC-039)
+         - Research references updated: 15 academic sources (2024-2025)
+         - XRP/BTC correlation confirmed ~0.84 (recovered from crisis lows)
+         - Compliance: Maintained 100% with Guide v2.0 (25/25 sections)
+         - Status: Production ready, continue correlation monitoring
 """
 
 # Strategy metadata

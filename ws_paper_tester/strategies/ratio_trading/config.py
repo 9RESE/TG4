@@ -10,7 +10,7 @@ from typing import Dict, Any, List
 # Strategy Metadata
 # =============================================================================
 STRATEGY_NAME = "ratio_trading"
-STRATEGY_VERSION = "4.3.0"
+STRATEGY_VERSION = "4.3.1"
 SYMBOLS = ["XRP/BTC"]
 
 
