@@ -9,11 +9,12 @@ Contains functions for:
 - Fee profitability checks
 - Trailing stops
 - Position decay
+- ADX trend strength filter (v4.3.0)
 """
 from datetime import datetime
 from typing import Dict, Any, Optional, List, Tuple
 
-from .indicators import calculate_trend_slope, calculate_correlation
+from .indicators import calculate_trend_slope, calculate_correlation, calculate_adx
 
 
 # =============================================================================
@@ -349,3 +350,55 @@ def get_decayed_take_profit(
         decayed_tp = entry_price * (1 - effective_tp_pct / 100)
 
     return decayed_tp, multiplier
+
+
+# =============================================================================
+# ADX Trend Strength Filter - REC-003 (v4.3.0)
+# =============================================================================
+def check_adx_strong_trend(
+    candles: List,
+    symbol: str,
+    config: Dict[str, Any],
+    state: Dict[str, Any]
+) -> Tuple[bool, Optional[float]]:
+    """
+    Check if ADX indicates a strong trend (unsuitable for mean reversion).
+
+    REC-003 (v4.3.0): Deep Review v8.0 HIGH-001 finding.
+    Research shows BTC exhibits stronger trending behavior than mean reversion.
+    "BTC tends to trend when it is at its maximum and bounce back when at the minimum."
+
+    Only applies to BTC/USDT by default. ADX > 25 indicates strong trend.
+
+    Args:
+        candles: List of candles for ADX calculation
+        symbol: Trading symbol
+        config: Strategy configuration
+        state: Strategy state
+
+    Returns:
+        Tuple of (is_strong_trend, adx_value)
+    """
+    # Only apply to BTC/USDT unless explicitly configured otherwise
+    if symbol != 'BTC/USDT' and not config.get('adx_filter_all_symbols', False):
+        return False, None
+
+    if not config.get('use_adx_filter', True):
+        return False, None
+
+    period = config.get('adx_period', 14)
+    threshold = config.get('adx_strong_trend_threshold', 25)
+
+    adx = calculate_adx(candles, period)
+
+    if adx is None:
+        return False, None
+
+    # Store ADX in state for monitoring
+    if 'adx_by_symbol' not in state:
+        state['adx_by_symbol'] = {}
+    state['adx_by_symbol'][symbol] = adx
+
+    is_strong_trend = adx > threshold
+
+    return is_strong_trend, adx

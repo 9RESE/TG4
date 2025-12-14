@@ -6,6 +6,7 @@ Contains pure functions for calculating technical indicators:
 - Relative Strength Index (RSI)
 - Bollinger Bands
 - Volatility (standard deviation of returns)
+- ADX (Average Directional Index) - v4.3.0 REC-003
 """
 from typing import List, Tuple, Optional
 
@@ -198,3 +199,112 @@ def calculate_correlation(
 
     # Clamp to valid range
     return max(-1.0, min(1.0, correlation))
+
+
+def calculate_adx(candles: List, period: int = 14) -> Optional[float]:
+    """
+    Calculate Average Directional Index (ADX).
+
+    REC-003 (v4.3.0): Added for BTC trend strength filtering.
+    Research shows BTC exhibits stronger trending behavior than mean reversion.
+    ADX > 25 indicates strong trend, unsuitable for mean reversion.
+
+    Args:
+        candles: List of candles with high, low, close attributes
+        period: ADX period (default 14)
+
+    Returns:
+        ADX value (0-100), None if insufficient data
+    """
+    # Need 2*period + 1 candles for stable ADX
+    if len(candles) < 2 * period + 1:
+        return None
+
+    # Extract OHLC data
+    highs = [c.high for c in candles]
+    lows = [c.low for c in candles]
+    closes = [c.close for c in candles]
+
+    n = len(candles)
+
+    # Calculate True Range and Directional Movement
+    tr_list = []
+    plus_dm_list = []
+    minus_dm_list = []
+
+    for i in range(1, n):
+        high = highs[i]
+        low = lows[i]
+        prev_close = closes[i - 1]
+        prev_high = highs[i - 1]
+        prev_low = lows[i - 1]
+
+        # True Range: max of (high-low, |high-prev_close|, |low-prev_close|)
+        tr = max(high - low, abs(high - prev_close), abs(low - prev_close))
+        tr_list.append(tr)
+
+        # Directional Movement
+        up_move = high - prev_high
+        down_move = prev_low - low
+
+        plus_dm = up_move if up_move > down_move and up_move > 0 else 0
+        minus_dm = down_move if down_move > up_move and down_move > 0 else 0
+
+        plus_dm_list.append(plus_dm)
+        minus_dm_list.append(minus_dm)
+
+    if len(tr_list) < period:
+        return None
+
+    # Calculate smoothed values using Wilder's smoothing
+    def wilder_smooth(values: List[float], period: int) -> List[float]:
+        if len(values) < period:
+            return []
+        smoothed = [sum(values[:period])]
+        for i in range(period, len(values)):
+            smoothed.append(smoothed[-1] - (smoothed[-1] / period) + values[i])
+        return smoothed
+
+    smooth_tr = wilder_smooth(tr_list, period)
+    smooth_plus_dm = wilder_smooth(plus_dm_list, period)
+    smooth_minus_dm = wilder_smooth(minus_dm_list, period)
+
+    if not smooth_tr or len(smooth_tr) < period:
+        return None
+
+    # Calculate +DI and -DI
+    plus_di_list = []
+    minus_di_list = []
+    dx_list = []
+
+    for i in range(len(smooth_tr)):
+        if smooth_tr[i] == 0:
+            plus_di_list.append(0)
+            minus_di_list.append(0)
+            dx_list.append(0)
+            continue
+
+        plus_di = (smooth_plus_dm[i] / smooth_tr[i]) * 100
+        minus_di = (smooth_minus_dm[i] / smooth_tr[i]) * 100
+        plus_di_list.append(plus_di)
+        minus_di_list.append(minus_di)
+
+        # Calculate DX
+        di_sum = plus_di + minus_di
+        if di_sum == 0:
+            dx_list.append(0)
+        else:
+            dx = abs(plus_di - minus_di) / di_sum * 100
+            dx_list.append(dx)
+
+    if len(dx_list) < period:
+        return None
+
+    # Smooth DX to get ADX
+    smooth_dx = wilder_smooth(dx_list, period)
+    if not smooth_dx:
+        return None
+
+    # Return latest ADX value
+    adx = smooth_dx[-1] / period  # Normalize by period
+    return max(0.0, min(100.0, adx))

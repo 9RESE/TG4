@@ -20,6 +20,7 @@ from .risk import (
     get_xrp_btc_correlation, should_pause_for_low_correlation,
     check_fee_profitability, calculate_trailing_stop,
     update_position_extremes, get_decayed_take_profit,
+    check_adx_strong_trend,  # REC-003 (v4.3.0)
 )
 
 
@@ -271,24 +272,47 @@ def _evaluate_symbol(
     trade_flow_threshold = config.get('trade_flow_threshold', 0.10)
     trade_flow = data.get_trade_imbalance(symbol, 50)
 
+    # Get current position for this symbol (moved up for use in filters)
+    current_position = state.get('position_by_symbol', {}).get(symbol, 0)
+
     # REC-005 (v4.0.0): XRP/BTC correlation monitoring
     xrp_btc_correlation = None
     if symbol == 'XRP/BTC' and config.get('use_correlation_monitoring', True):
         xrp_btc_correlation = get_xrp_btc_correlation(data, config, state)
 
-        # REC-001 (v4.2.0): Check correlation pause threshold for XRP/BTC
+        # REC-001/002 (v4.3.0): Check correlation pause threshold for XRP/BTC
+        # Raised from 0.25 to 0.5 per Deep Review v8.0 CRITICAL-001
         if should_pause_for_low_correlation(symbol, state, config):
             state['indicators'] = build_base_indicators(
                 symbol=symbol, status='low_correlation_pause', state=state
             )
             state['indicators']['xrp_btc_correlation'] = round(xrp_btc_correlation, 4) if xrp_btc_correlation else None
-            state['indicators']['correlation_pause_threshold'] = config.get('correlation_pause_threshold', 0.25)
+            state['indicators']['correlation_pause_threshold'] = config.get('correlation_pause_threshold', 0.5)
             if track_rejections:
                 track_rejection(state, RejectionReason.LOW_CORRELATION, symbol)
             return None
 
-    # Get current position for this symbol
-    current_position = state.get('position_by_symbol', {}).get(symbol, 0)
+    # ==========================================================================
+    # REC-003 (v4.3.0): ADX filter for BTC - Deep Review v8.0 HIGH-001
+    # Research: BTC exhibits stronger trending behavior than mean reversion
+    # Pause BTC entries when ADX > 25 indicates strong trend
+    # ==========================================================================
+    is_adx_strong_trend = False
+    adx_value = None
+    if config.get('use_adx_filter', True):
+        is_adx_strong_trend, adx_value = check_adx_strong_trend(
+            candles_list, symbol, config, state
+        )
+
+        if is_adx_strong_trend and current_position == 0:
+            state['indicators'] = build_base_indicators(
+                symbol=symbol, status='strong_trend_adx', state=state
+            )
+            state['indicators']['adx'] = round(adx_value, 2) if adx_value else None
+            state['indicators']['adx_threshold'] = config.get('adx_strong_trend_threshold', 25)
+            if track_rejections:
+                track_rejection(state, RejectionReason.STRONG_TREND_ADX, symbol)
+            return None
 
     # REC-006 (v3.0.0): Update position extremes for trailing stop
     update_position_extremes(state, symbol, current_price)
@@ -328,9 +352,14 @@ def _evaluate_symbol(
         # v4.0.0 indicators - REC-005 XRP/BTC correlation (only for XRP/BTC)
         'xrp_btc_correlation': round(xrp_btc_correlation, 4) if xrp_btc_correlation else None,
         # v4.2.0 indicators - REC-001 correlation pause thresholds
-        'correlation_warn_threshold': config.get('correlation_warn_threshold', 0.4),
-        'correlation_pause_threshold': config.get('correlation_pause_threshold', 0.25),
+        'correlation_warn_threshold': config.get('correlation_warn_threshold', 0.55),
+        'correlation_pause_threshold': config.get('correlation_pause_threshold', 0.5),
         'correlation_pause_enabled': config.get('correlation_pause_enabled', True),
+        # v4.3.0 indicators - REC-003 ADX filter
+        'adx': round(adx_value, 2) if adx_value else None,
+        'adx_threshold': config.get('adx_strong_trend_threshold', 25),
+        'use_adx_filter': config.get('use_adx_filter', True),
+        'is_adx_strong_trend': is_adx_strong_trend,
     }
 
     # ==========================================================================

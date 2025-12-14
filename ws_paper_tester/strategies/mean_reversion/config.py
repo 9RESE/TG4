@@ -11,7 +11,7 @@ from enum import Enum, auto
 # Strategy Metadata
 # =============================================================================
 STRATEGY_NAME = "mean_reversion"
-STRATEGY_VERSION = "4.2.0"
+STRATEGY_VERSION = "4.3.0"
 SYMBOLS = ["XRP/USDT", "BTC/USDT", "XRP/BTC"]
 
 
@@ -40,6 +40,7 @@ class RejectionReason(Enum):
     NO_SIGNAL_CONDITIONS = "no_signal_conditions"
     FEE_UNPROFITABLE = "fee_unprofitable"  # REC-002 (v4.1.0)
     LOW_CORRELATION = "low_correlation"  # REC-001 (v4.2.0) - XRP/BTC correlation pause
+    STRONG_TREND_ADX = "strong_trend_adx"  # REC-003 (v4.3.0) - BTC ADX filter
 
 
 # =============================================================================
@@ -138,16 +139,16 @@ CONFIG = {
     'decay_multipliers': [1.0, 0.85, 0.7, 0.5],  # Gentler reduction (per REC-002)
 
     # ==========================================================================
-    # XRP/BTC Correlation Monitoring - REC-005 (v4.0.0), Updated per v6.0 REC-001
+    # XRP/BTC Correlation Monitoring - REC-005 (v4.0.0), Updated per v8.0 REC-001/002
     # Research: XRP correlation with BTC declined from ~80% to ~40% (Dec 2025)
     # Decoupling confirmed - XRP trading on "own fundamentals"
-    # Monitor for adaptive ratio trading decisions
+    # v4.3.0: Raised pause threshold from 0.25 to 0.5 per deep review v8.0
     # ==========================================================================
     'use_correlation_monitoring': True,  # Enable XRP/BTC correlation tracking
     'correlation_lookback': 50,          # Candles for correlation calculation
-    'correlation_warn_threshold': 0.4,   # Tightened from 0.5 (REC-001 v4.2.0)
-    'correlation_pause_threshold': 0.25, # Pause XRP/BTC trading below this (REC-001 v4.2.0)
-    'correlation_pause_enabled': True,   # Enable correlation-based pause (REC-001 v4.2.0)
+    'correlation_warn_threshold': 0.55,  # Raised from 0.4 (REC-001 v4.3.0)
+    'correlation_pause_threshold': 0.5,  # Raised from 0.25 (REC-001/002 v4.3.0)
+    'correlation_pause_enabled': True,   # Enable correlation-based pause
 
     # ==========================================================================
     # Fee Profitability Checks - REC-002 (v4.1.0)
@@ -161,6 +162,16 @@ CONFIG = {
     # Rejection Tracking
     # ==========================================================================
     'track_rejections': True,         # Enable rejection tracking
+
+    # ==========================================================================
+    # ADX Filter - REC-003 (v4.3.0) - Deep Review v8.0
+    # Research: BTC exhibits stronger trending behavior than mean reversion
+    # "BTC tends to trend when it is at its maximum and bounce back when at the minimum"
+    # Pause BTC/USDT entries when ADX indicates strong trend
+    # ==========================================================================
+    'use_adx_filter': True,           # Enable ADX trend strength filter
+    'adx_period': 14,                 # Standard ADX period
+    'adx_strong_trend_threshold': 25, # ADX > 25 indicates strong trend
 }
 
 # =============================================================================

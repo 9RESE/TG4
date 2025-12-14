@@ -37,19 +37,25 @@ def on_start(config: Dict[str, Any], state: Dict[str, Any]) -> None:
           f"TrailingStop={config.get('use_trailing_stop', False)}, "  # v4.0: default False per REC-001
           f"PositionDecay={config.get('use_position_decay', True)}, "
           f"CorrelationMonitor={config.get('use_correlation_monitoring', True)}, "  # v4.0: REC-005
-          f"FeeCheck={config.get('check_fee_profitability', True)}")  # v4.1: REC-002
+          f"FeeCheck={config.get('check_fee_profitability', True)}, "  # v4.1: REC-002
+          f"ADXFilter={config.get('use_adx_filter', True)}")  # v4.3: REC-003
     # v4.1.0: Log key parameter changes
     fee_rate = config.get('estimated_fee_rate', 0.001)
     min_net = config.get('min_net_profit_pct', 0.05)
     print(f"[mean_reversion] v4.1 Params: DecayStart={config.get('decay_start_minutes', 15.0)}min, "
           f"TrendConfirm={config.get('trend_confirmation_periods', 3)} periods, "
           f"FeeRate={fee_rate*100:.2f}%/side, MinNet={min_net}%")
-    # v4.2.0: Log correlation pause parameters (REC-001)
-    corr_warn = config.get('correlation_warn_threshold', 0.4)
-    corr_pause = config.get('correlation_pause_threshold', 0.25)
+    # v4.2.0/v4.3.0: Log correlation pause parameters (REC-001/002)
+    corr_warn = config.get('correlation_warn_threshold', 0.55)
+    corr_pause = config.get('correlation_pause_threshold', 0.5)
     corr_pause_enabled = config.get('correlation_pause_enabled', True)
-    print(f"[mean_reversion] v4.2 Params: CorrelationWarn={corr_warn}, "
-          f"CorrelationPause={corr_pause}, PauseEnabled={corr_pause_enabled}")
+    print(f"[mean_reversion] v4.3 Correlation: Warn={corr_warn}, "
+          f"Pause={corr_pause}, Enabled={corr_pause_enabled}")
+    # v4.3.0: Log ADX filter parameters (REC-003)
+    use_adx = config.get('use_adx_filter', True)
+    adx_threshold = config.get('adx_strong_trend_threshold', 25)
+    print(f"[mean_reversion] v4.3 ADXFilter: Enabled={use_adx}, "
+          f"Threshold={adx_threshold} (BTC/USDT only)")
 
 
 def on_fill(fill: Dict[str, Any], state: Dict[str, Any]) -> None:

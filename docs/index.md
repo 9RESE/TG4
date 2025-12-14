@@ -8,23 +8,31 @@
 
 ## Recent Updates (2025-12-14)
 
+### Mean Reversion v4.3.0 - Deep Review v8.0 Implementation
+Based on comprehensive research review (Ornstein-Uhlenbeck theory, crypto effectiveness, BB+RSI academic studies):
+
+- **REC-001/002 (CRITICAL)**: XRP/BTC correlation pause threshold raised from 0.25 to 0.5
+- **REC-003 (HIGH)**: ADX filter added for BTC/USDT - pauses entries when ADX > 25 (strong trend)
+- **Research-backed**: BTC shows stronger trending behavior than mean reversion
+
 ### Strategy Modular Refactoring
 Large strategies have been refactored into modular package structures for better maintainability:
 
-- **Mean Reversion v4.2.1**: Split from 1,772-line file into 7 focused modules
+- **Mean Reversion v4.3.0**: Split from 1,772-line file into 7 focused modules + Deep Review v8.0
 - **Ratio Trading v4.2.1**: Split into 10 focused modules with dual-asset tracking
 - **Strategies Reference**: [Complete Strategy Documentation](./user/reference/strategies.md)
 
-### Strategy Deep Reviews (15+ cycles)
+### Strategy Deep Reviews (16+ cycles)
 Comprehensive review process with research-backed parameter tuning:
 
-- Mean Reversion: 6 deep review cycles (v1.0 → v6.0)
+- Mean Reversion: 8 deep review cycles (v1.0 → v8.0)
 - Ratio Trading: 8 deep review cycles (v1.0 → v8.0)
 - All strategies now comply with Strategy Development Guide v2.0
 
 Key improvements:
 - XRP/BTC correlation monitoring (correlation dropped from ~80% to ~40%)
-- Dynamic correlation pause thresholds
+- ADX trend strength filter for BTC (v4.3.0)
+- Dynamic correlation pause thresholds (raised to 0.5 in v4.3.0)
 - Fee profitability validation before signals
 - Extended position decay timing
 

@@ -6,7 +6,7 @@ Technical reference for all trading strategies in the WebSocket Paper Tester.
 
 | Strategy | Version | Pairs | Type | Description |
 |----------|---------|-------|------|-------------|
-| [Mean Reversion](#mean-reversion) | 4.2.1 | XRP/USDT, BTC/USDT, XRP/BTC | Counter-trend | Trades price deviations from moving average |
+| [Mean Reversion](#mean-reversion) | 4.3.0 | XRP/USDT, BTC/USDT, XRP/BTC | Counter-trend | Trades price deviations from moving average |
 | [Ratio Trading](#ratio-trading) | 4.2.1 | XRP/BTC | Statistical arbitrage | Trades ratio deviations between correlated pairs |
 | [Order Flow](#order-flow) | 4.1.0 | XRP/USDT | Momentum | Trades based on order book imbalance |
 | [Market Making](#market-making) | 1.5.0 | XRP/USDT | Liquidity provision | Provides liquidity with bid-ask spreads |
@@ -67,23 +67,30 @@ CONFIG = {
     'regime_medium_threshold': 0.8,
     'regime_high_threshold': 1.5,
 
-    # Correlation Monitoring (v4.2.0)
+    # Correlation Monitoring (v4.2.0, updated v4.3.0)
     'use_correlation_monitoring': True,
-    'correlation_warn_threshold': 0.4,
-    'correlation_pause_threshold': 0.25,
+    'correlation_warn_threshold': 0.55,
+    'correlation_pause_threshold': 0.5,   # Raised from 0.25 per REC-001/002
+
+    # ADX Filter for BTC (v4.3.0)
+    'use_adx_filter': True,
+    'adx_period': 14,
+    'adx_strong_trend_threshold': 25,     # Pause BTC when ADX > 25
 }
 ```
 
 ### Market Conditions to Pause
 
 - Fear & Greed Index < 25 (Extreme Fear)
-- ADX > 30 (strong trend)
-- XRP/BTC correlation < 0.4
+- ADX > 25 for BTC/USDT (strong trend) - v4.3.0 REC-003
+- ADX > 30 (strong trend for other pairs)
+- XRP/BTC correlation < 0.5 (raised from 0.25 in v4.3.0 REC-001/002)
 
 ### Version History
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 4.3.0 | 2025-12-14 | Deep Review v8.0: ADX filter for BTC (REC-003), correlation threshold raised to 0.5 (REC-001/002) |
 | 4.2.1 | 2025-12-14 | Refactored into modular package structure |
 | 4.2.0 | 2025-12-14 | Correlation pause threshold (0.25), tightened warn (0.4) |
 | 4.1.0 | 2025-12-13 | Fee profitability checks, reduced BTC position size |
