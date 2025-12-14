@@ -1,64 +1,46 @@
-# Trading Bots Development Notes
+# Project Notes
 
-## Quick Start
+## WS Paper Tester
 
+### Quick Start
 ```bash
 cd ws_paper_tester
-# Install dependencies
 pip install -r requirements.txt
-# Run with live Kraken WebSocket data
-python ws_tester.py
-# Run with simulated data
-python ws_tester.py --simulated
-# Run for 30 minutes with dashboard disabled
-python ws_tester.py --duration 30 --no-dashboard
-# Run tests
-pytest tests/ -v
+python ws_tester.py                    # Live Kraken WebSocket data
+python ws_tester.py --simulated        # Simulated data
+python ws_tester.py --duration 30      # Run for 30 minutes
+pytest tests/ -v                       # Run tests
 ```
 
-## Strategy Development Ideas
+### Active Strategies
 
-### Current Strategies
-- **order_flow** (v4.1.0) - Trade tape analysis with VPIN, volatility regimes, session awareness
-- **market_maker** (v1.5.0) - Market making with fee-aware trading
-- **ratio** - XRP/BTC ratio trading
-- **mean_reversion** - Mean reversion strategy
+| Strategy | Version | Status | Symbols |
+|----------|---------|--------|---------|
+| order_flow | 4.1.0 | Production Ready | XRP/USDT, BTC/USDT |
+| market_making | 1.5.0 | Production Ready | XRP/USDT, BTC/USDT, XRP/BTC |
+| mean_reversion | 2.0.0 | Paper Testing Ready | XRP/USDT, BTC/USDT |
+| ratio_trading | 1.0.0 | Under Review | XRP/USDT, BTC/USDT, XRP/BTC |
 
-### Future Strategy Ideas
-- 9-week moving average on 5min and 1hr timeframes
-- XRP/BTC correlation-based trading
-- Scalping (momentum) - 1m-5m quick momentum bursts
-- Arbitrage - Cross-exchange price differences
+### Strategy Ideas (Future Development)
 
-## Documentation Structure
+- **Scalping (momentum)**: 1m-5m timeframes for quick momentum bursts
+- **Arbitrage**: Tick-level for cross-exchange price differences
+- **9 Week MA Strategy**: BTC and XRP USDT pairs with 9-week moving average on 5m and 1h. Close position on candle opposite trend, 2 candles above/below MA indicates trend
+- **BTC-XRP Correlation**: Investigate if XRP follows BTC predictably enough to trade on
+
+### Documentation Structure
 
 ```
 ws_paper_tester/docs/
 ├── development/
-│   ├── features/      # Feature documentation by strategy
+│   ├── features/         # Version release notes
 │   │   ├── order_flow/
 │   │   ├── market_maker/
-│   │   └── ratio/
-│   └── review/        # Strategy reviews
+│   │   └── mean_reversion/
+│   └── review/           # Deep strategy reviews
 │       ├── order_flow/
 │       ├── market_maker/
 │       └── mean_reversion/
 └── user/
-    └── how-to/        # User guides
+    └── how-to/           # User guides
 ```
-
-## Recent Work
-
-### 2025-12-14
-- Order Flow Strategy v4.1.0: Implemented review recommendations
-  - Signal rejection logging and statistics
-  - Configuration override validation
-  - Configurable session boundaries
-  - Enhanced position decay with profit-after-fees option
-  - Improved VPIN bucket logic
-- Order Flow Strategy Review v4.0.0: Deep code and strategy analysis
-
-### 2025-12-13
-- Order Flow Strategy v3.1.0: Bug fixes and asymmetric thresholds
-- Order Flow Strategy Review v3.1.0: Deep code analysis
-- Market Making v1.5.0: Fee-aware trading improvements
