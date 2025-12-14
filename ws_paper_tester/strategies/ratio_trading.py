@@ -1,5 +1,5 @@
 """
-Ratio Trading Strategy v4.2.0
+Ratio Trading Strategy v4.2.1
 
 Mean reversion strategy for XRP/BTC pair accumulation.
 Trades the XRP/BTC ratio to grow holdings of both assets.
@@ -40,12 +40,17 @@ If XRP/BTC correlation deteriorates, consider evaluating alternative pairs:
 These would require strategy scope expansion (future enhancement).
 
 FUTURE ENHANCEMENTS:
-- REC-034: Generalized Hurst Exponent (GHE) for mean-reversion validation
+- REC-034/REC-040: Generalized Hurst Exponent (GHE) for mean-reversion validation
   H < 0.5 = mean-reverting (good), H >= 0.5 = trending (pause)
+  2025 research shows GHE outperforms correlation/cointegration for crypto pair selection
+  Implementation: Add _calculate_ghe() function, GHE_NOT_MEAN_REVERTING rejection reason
 - REC-035: ADF Cointegration Test for formal cointegration validation
   Currently uses correlation as proxy; formal testing would be more robust
 - REC-038: Half-Life Calculation for position management optimization
   Calculate spread half-life via Ornstein-Uhlenbeck process to adjust position decay
+- REC-039: Multi-Pair Support Framework for trading alternative pairs (ETH/BTC, LTC/BTC)
+  Would enable rapid pair switching without code changes if XRP/BTC correlation degrades
+  Requires: Per-pair SYMBOL_CONFIGS, per-pair correlation tracking, pair selection logic
 
 Version History:
 - 1.0.0: Initial implementation
@@ -117,6 +122,17 @@ Version History:
          - Updated docstring with current XRP/BTC correlation recovery (~0.84 3-month)
          - Compliance: Maintained 100% with Guide v2.0
          - Status: Production ready with enhanced correlation monitoring
+- 4.2.1: Deep review v8.0 validation
+         - Review validates v4.2.0 as PRODUCTION READY with enhanced correlation monitoring
+         - REC-039: Document multi-pair support framework as future enhancement
+           - Would enable trading alternative pairs (ETH/BTC, LTC/BTC) if XRP/BTC correlation degrades
+         - REC-040: Enhanced GHE documentation (builds on REC-034)
+           - 2025 research validates GHE outperforms correlation for crypto pair selection
+         - XRP/BTC correlation confirmed favorable (~0.84 3-month)
+         - Regulatory clarity: SEC case resolved, 5+ U.S. XRP ETFs approved
+         - All findings INFORMATIONAL or LOW severity, all addressed/documented
+         - Compliance: Maintained 100% with Guide v2.0
+         - Status: Production ready - no code changes required
 """
 from datetime import datetime
 from typing import Dict, Any, Optional, List, Tuple
@@ -134,7 +150,7 @@ except ImportError:
 # REQUIRED: Strategy Metadata
 # =============================================================================
 STRATEGY_NAME = "ratio_trading"
-STRATEGY_VERSION = "4.2.0"
+STRATEGY_VERSION = "4.2.1"
 SYMBOLS = ["XRP/BTC"]
 
 
