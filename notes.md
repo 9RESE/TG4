@@ -23,16 +23,6 @@ I want to develop these strategies.
 | Arbitrage           | Tick-level        | Cross-exchange price differences           |
 
 
-mean_reversion
-ratio
-
-in the ws_paper_tester/ we have the strategy mean_reversion. We need to do a deep code and strategy review. Deep research the strategy technique and its use with the XRP/USDT, BTC/USDT, XRP/BTC pairs. I also want to ensure the strategy meets the requirements in ws_paper_tester/docs/development/strategy-development-guide.md. provide a document in ws_paper_tester/docs/development/review/mean_reversion/ with your findings and recommendations for improvements and fixes. Do not include code in your documentation. ultrathink
-
-in the ws_paper_tester/ we have the strategy mean_reversion. We need to refactor or rewrite it to implement the fixes and recommendations in ws_paper_tester/docs/development/review/mean_reversion/mean-reversion-deep-review-v5.0.md and ensure it meets the requirements in ws_paper_tester/docs/development/strategy-development-guide.md
-
-in the ws_paper_tester/ we have the strategy ratio_trading. We need to do a deep code and strategy review. Deep research the strategy technique and its use with the XRP/USDT, BTC/USDT, XRP/BTC pairs. I also want to ensure the strategy meets the requirements in ws_paper_tester/docs/development/strategy-development-guide.md. provide a document in ws_paper_tester/docs/development/review/ratio_trading/ with your findings and recommendations for improvements and fixes. Do not include code in your documentation. ultrathink
-
-in the ws_paper_tester/ we have the strategy ratio_trading. We need to refactor or rewrite it to implement the fixes and recommendations in ws_paper_tester/docs/development/review/ratio-trading-strategy-review-v4.0.md and ratio-trading-strategy-review-v3.1.md and ensure it meets the requirements in ws_paper_tester/docs/development/strategy-development-guide.md
 
 
 
@@ -237,4 +227,3 @@ After implementation, provide:
 
 
 
-our ws_paper_tester/strategies/ratio_trading.py is getting a bit large. should we make a subfolder for it and split it into more manageable files?

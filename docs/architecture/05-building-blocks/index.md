@@ -59,9 +59,9 @@ Lightweight, WebSocket-native system for rapid strategy development.
 │  └────────────────┘   └────────────────┘   └───────┬────────┘  │
 │                                                     │           │
 │  ┌────────────────────────────────────────────────▼─────────┐  │
-│  │                   Strategy Layer                          │  │
+│  │                   Strategy Layer (Modular Packages)       │  │
 │  │  ┌──────────────┐ ┌──────────────┐ ┌──────────────┐      │  │
-│  │  │market_making │ │ order_flow   │ │mean_reversion│ ...  │  │
+│  │  │market_making/│ │ order_flow/  │ │mean_reversion/│ ... │  │
 │  │  └──────────────┘ └──────────────┘ └──────────────┘      │  │
 │  │         │                │                │               │  │
 │  │         └────────────────┴────────────────┘               │  │
@@ -111,6 +111,29 @@ Lightweight, WebSocket-native system for rapid strategy development.
 | StrategyLoader | `strategy_loader.py` | Auto-discovery, module loading |
 | StrategyWrapper | `strategy_loader.py` | Wraps strategy modules with state |
 
+**Strategy Package Structure:**
+
+All strategies are now modular packages with consistent structure:
+
+```
+strategies/
+├── mean_reversion/     # v4.3.0 - Counter-trend strategy
+├── ratio_trading/      # v4.3.1 - Statistical arbitrage
+├── order_flow/         # v4.1.1 - Momentum/order imbalance
+├── market_making/      # v1.5.0 - Liquidity provision
+├── mean_reversion.py   # Backward-compatible shim
+├── ratio_trading.py    # Backward-compatible shim
+├── order_flow.py       # Backward-compatible shim
+└── market_making.py    # Backward-compatible shim
+```
+
+Each package typically contains:
+- `__init__.py` - Public exports (STRATEGY_NAME, generate_signal, etc.)
+- `config.py` - Configuration and enums
+- `signals.py` - Signal generation logic
+- `lifecycle.py` - on_start, on_fill, on_stop callbacks
+- Additional modules as needed (indicators, risk, etc.)
+
 #### Execution Layer
 
 | Component | File | Responsibility |
@@ -155,4 +178,4 @@ Both systems use structured logging:
 | WS Paper Tester | `ws_paper_tester/tests/` | pytest |
 
 ---
-*Last updated: 2025-12-13*
+*Last updated: 2025-12-14 - Strategy modular package refactoring*

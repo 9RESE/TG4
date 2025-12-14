@@ -7,9 +7,9 @@ Technical reference for all trading strategies in the WebSocket Paper Tester.
 | Strategy | Version | Pairs | Type | Description |
 |----------|---------|-------|------|-------------|
 | [Mean Reversion](#mean-reversion) | 4.3.0 | XRP/USDT, BTC/USDT, XRP/BTC | Counter-trend | Trades price deviations from moving average |
-| [Ratio Trading](#ratio-trading) | 4.2.1 | XRP/BTC | Statistical arbitrage | Trades ratio deviations between correlated pairs |
-| [Order Flow](#order-flow) | 4.1.0 | XRP/USDT | Momentum | Trades based on order book imbalance |
-| [Market Making](#market-making) | 1.5.0 | XRP/USDT | Liquidity provision | Provides liquidity with bid-ask spreads |
+| [Ratio Trading](#ratio-trading) | 4.3.1 | XRP/BTC | Statistical arbitrage | Trades ratio deviations between correlated pairs |
+| [Order Flow](#order-flow) | 4.1.1 | XRP/USDT, BTC/USDT | Momentum | Trades based on order book imbalance |
+| [Market Making](#market-making) | 1.5.0 | XRP/USDT, BTC/USDT, XRP/BTC | Liquidity provision | Provides liquidity with bid-ask spreads |
 
 ---
 
@@ -177,56 +177,180 @@ Ratio trading assumes:
 
 ## Order Flow
 
-**Location:** `ws_paper_tester/strategies/order_flow.py`
+**Location:** `ws_paper_tester/strategies/order_flow/`
+
+### Module Structure
+
+```
+order_flow/
+├── __init__.py      # Public exports
+├── config.py        # Configuration, enums (VolatilityRegime, TradingSession, RejectionReason)
+├── validation.py    # Config validation functions
+├── indicators.py    # Volatility, micro-price, VPIN calculations
+├── regimes.py       # Volatility regime and session classification
+├── risk.py          # Risk management (fee check, trailing stop, correlation)
+├── exits.py         # Exit signal checks (trailing stop, position decay)
+├── signal.py        # Main signal generation logic
+└── lifecycle.py     # on_start, on_fill, on_stop callbacks
+```
 
 ### Strategy Description
 
-Momentum strategy based on order book imbalance. Trades when buy/sell pressure exceeds thresholds.
+Momentum strategy based on trade tape analysis and buy/sell imbalance. Enhanced with VPIN (Volume-Synchronized Probability of Informed Trading), volatility regimes, trading session awareness, and advanced risk management.
+
+### Supported Pairs
+
+| Pair | Position Size | Take Profit | Stop Loss | Notes |
+|------|---------------|-------------|-----------|-------|
+| XRP/USDT | $25 | 1.0% | 0.5% | Primary pair |
+| BTC/USDT | $50 | 0.8% | 0.4% | Higher liquidity |
 
 ### Key Configuration
 
 ```python
 CONFIG = {
-    'imbalance_threshold': 0.6,
-    'position_size_usd': 20.0,
-    'take_profit_pct': 0.3,
-    'stop_loss_pct': 0.2,
+    # Core Parameters
+    'imbalance_threshold': 0.30,
+    'buy_imbalance_threshold': 0.30,
+    'sell_imbalance_threshold': 0.25,  # Asymmetric (sell pressure more impactful)
+    'use_asymmetric_thresholds': True,
+    'volume_spike_mult': 2.0,
+    'lookback_trades': 50,
+
+    # Risk Management
+    'position_size_usd': 25.0,
+    'max_position_usd': 100.0,
+    'take_profit_pct': 1.0,
+    'stop_loss_pct': 0.5,
+
+    # VPIN
+    'use_vpin': True,
+    'vpin_bucket_count': 50,
+    'vpin_high_threshold': 0.7,
+    'vpin_pause_on_high': True,
+
+    # Volatility Regimes
+    'use_volatility_regimes': True,
+    'regime_low_threshold': 0.3,
+    'regime_medium_threshold': 0.8,
+    'regime_high_threshold': 1.5,
+
+    # Trading Sessions
+    'use_session_awareness': True,
+    'session_boundaries': {...},  # Configurable for DST
+
+    # Position Decay
+    'use_position_decay': True,
+    'position_decay_stages': [(180, 0.90), (240, 0.75), (300, 0.50), (360, 0.0)],
+
+    # Correlation Management
+    'use_correlation_management': True,
+    'max_total_long_exposure': 150.0,
+    'max_total_short_exposure': 150.0,
 }
 ```
+
+### Key Features
+
+- **VPIN**: Detects informed trading activity, pauses when high
+- **Volatility Regimes**: Adjusts thresholds and sizes based on market conditions
+- **Session Awareness**: Different parameters for Asia/Europe/US/Overlap sessions
+- **Position Decay**: Progressive TP reduction for stale positions
+- **Correlation Management**: Cross-pair exposure limits
 
 ### Version History
 
 | Version | Date | Changes |
 |---------|------|---------|
-| 4.1.0 | 2025-12-11 | Review recommendations implementation |
+| 4.1.1 | 2025-12-14 | Refactored into modular package structure |
+| 4.1.0 | 2025-12-11 | Signal rejection logging, config validation, enhanced decay |
+| 4.0.0 | 2025-12-11 | VPIN, volatility regimes, session awareness, correlation mgmt |
 | 3.1.0 | 2025-12-10 | Bug fixes and asymmetric thresholds |
+| 3.0.0 | 2025-12-10 | Per-pair PnL, trade flow confirmation, circuit breaker |
 
 ---
 
 ## Market Making
 
-**Location:** `ws_paper_tester/strategies/market_making.py`
+**Location:** `ws_paper_tester/strategies/market_making/`
+
+### Module Structure
+
+```
+market_making/
+├── __init__.py      # Public exports and documentation
+├── config.py        # Strategy metadata, CONFIG, SYMBOL_CONFIGS, validation
+├── calculations.py  # Pure calculation functions (volatility, micro-price, spreads)
+├── signals.py       # Signal generation logic
+└── lifecycle.py     # on_start, on_fill, on_stop callbacks
+```
 
 ### Strategy Description
 
-Provides liquidity by placing limit orders on both sides of the spread. Profits from bid-ask spread while managing inventory risk.
+Provides liquidity by placing limit orders on both sides of the spread. Profits from bid-ask spread while managing inventory risk. Features volatility-adjusted spreads, Avellaneda-Stoikov optimal spread calculation, and time-based position decay.
+
+### Supported Pairs
+
+| Pair | Spread | Order Size | Max Inventory | Notes |
+|------|--------|------------|---------------|-------|
+| XRP/USDT | 0.08% | $15 | $100 | Primary pair |
+| BTC/USDT | 0.06% | $20 | $150 | Tighter spreads |
+| XRP/BTC | 0.12% | $10 | $75 | Wider spreads (lower liquidity) |
 
 ### Key Configuration
 
 ```python
 CONFIG = {
-    'spread_pct': 0.1,
-    'order_size_usd': 10.0,
-    'max_inventory': 100.0,
-    'inventory_skew': 0.5,
+    # Core Parameters
+    'base_spread_pct': 0.08,
+    'order_size_usd': 15.0,
+    'max_inventory_usd': 100.0,
+    'inventory_skew_factor': 0.5,
+
+    # Risk Management
+    'take_profit_pct': 0.15,
+    'stop_loss_pct': 0.15,
+    'cooldown_seconds': 3.0,
+
+    # Volatility Adjustment
+    'use_volatility_adjustment': True,
+    'volatility_spread_mult': 1.5,
+
+    # Avellaneda-Stoikov Model
+    'use_avellaneda_stoikov': True,
+    'as_gamma': 0.1,
+    'as_sigma': 0.01,
+
+    # Micro-Price
+    'use_micro_price': True,
+
+    # Fee Awareness
+    'use_fee_check': True,
+    'fee_rate': 0.001,
+
+    # Position Decay
+    'use_position_decay': True,
+    'position_decay_seconds': 300,
 }
 ```
+
+### Key Features
+
+- **Volatility-Adjusted Spreads**: Wider spreads in high volatility
+- **Avellaneda-Stoikov Model**: Optimal spread calculation based on inventory risk
+- **Micro-Price**: Volume-weighted mid-price for better pricing
+- **Inventory Skew**: Adjusts quotes to manage inventory imbalance
+- **Fee-Aware**: Only trades when profitable after fees
 
 ### Version History
 
 | Version | Date | Changes |
 |---------|------|---------|
-| 1.5.0 | 2025-12-10 | Fee-aware trading and comprehensive improvements |
+| 1.5.0 | 2025-12-14 | Refactored into modular package structure; fee-aware trading |
+| 1.4.0 | 2025-12-11 | Config validation, A-S model, trailing stops |
+| 1.3.0 | 2025-12-10 | Volatility-adjusted spreads, signal cooldown, improved R:R |
+| 1.2.0 | 2025-12-09 | BTC/USDT support |
+| 1.1.0 | 2025-12-09 | XRP/BTC support |
 
 ---
 
@@ -267,4 +391,4 @@ For strategy reviews and research, see:
 
 ---
 
-*Last updated: 2025-12-14*
+*Last updated: 2025-12-14 - Strategy modular refactoring (Order Flow v4.1.1, Market Making v1.5.0)*
