@@ -992,14 +992,14 @@ def generate_signal(
     sl_pct = config.get('stop_loss_pct', 0.6)
 
     # REC-014: Calculate RSI if enabled
-    use_rsi = config.get('use_rsi_confirmation', False)
+    use_rsi = config.get('use_rsi_confirmation', True)  # Default matches CONFIG
     rsi_period = config.get('rsi_period', 14)
     rsi_oversold = config.get('rsi_oversold', 35)
     rsi_overbought = config.get('rsi_overbought', 65)
     rsi = _calculate_rsi(price_history, rsi_period) if use_rsi else 50.0
 
     # REC-015: Detect trend strength if enabled
-    use_trend_filter = config.get('use_trend_filter', False)
+    use_trend_filter = config.get('use_trend_filter', True)  # Default matches CONFIG
     trend_lookback = config.get('trend_lookback', 10)
     trend_threshold = config.get('trend_strength_threshold', 0.7)
     is_strong_trend, trend_direction, trend_strength = _detect_trend_strength(
@@ -1297,10 +1297,10 @@ def on_start(config: Dict[str, Any], state: Dict[str, Any]) -> None:
     print(f"[ratio_trading] Features: VolatilityRegimes={config.get('use_volatility_regimes', True)}, "
           f"CircuitBreaker={config.get('use_circuit_breaker', True)}, "
           f"SpreadFilter={config.get('use_spread_filter', True)}")
-    print(f"[ratio_trading] v2.1 Features: RSI={config.get('use_rsi_confirmation', False)}, "
-          f"TrendFilter={config.get('use_trend_filter', False)}, "
-          f"TrailingStop={config.get('use_trailing_stop', False)}, "
-          f"PositionDecay={config.get('use_position_decay', False)}")
+    print(f"[ratio_trading] v2.1 Features: RSI={config.get('use_rsi_confirmation', True)}, "
+          f"TrendFilter={config.get('use_trend_filter', True)}, "
+          f"TrailingStop={config.get('use_trailing_stop', True)}, "
+          f"PositionDecay={config.get('use_position_decay', True)}")
     print(f"[ratio_trading] Position sizing: {config.get('position_size_usd', 15.0)} USD, "
           f"Max: {config.get('max_position_usd', 50.0)} USD")
     print(f"[ratio_trading] R:R ratio: {config.get('take_profit_pct', 0.6)}/{config.get('stop_loss_pct', 0.6)} "

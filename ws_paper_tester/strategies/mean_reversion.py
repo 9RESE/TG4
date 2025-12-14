@@ -1,9 +1,9 @@
 """
-Mean Reversion Strategy v2.0.0
+Mean Reversion Strategy v3.0.0
 
 Trades price deviations from moving average and VWAP.
 Enhanced with volatility regimes, circuit breaker, multi-symbol support,
-and comprehensive risk management.
+trend filtering, trailing stops, position decay, and comprehensive risk management.
 
 Version History:
 - 1.0.0: Initial implementation
@@ -19,6 +19,14 @@ Version History:
          - REC-008: Added trade flow confirmation
          - Finding #6: Added on_stop() callback
          - Code cleanup and optimization
+- 3.0.0: Major enhancement per mean-reversion-strategy-review-v3.1.md
+         - REC-001: Added XRP/BTC ratio trading pair
+         - REC-002: Fixed hardcoded max_losses in on_fill
+         - REC-003: Added wider stop-loss option research support
+         - REC-004: Added optional trend filter
+         - REC-006: Added trailing stops
+         - REC-007: Added position decay
+         - Finding #4: Refactored _evaluate_symbol for lower complexity
 """
 from datetime import datetime
 from typing import Dict, Any, Optional, List, Tuple
@@ -36,8 +44,8 @@ except ImportError:
 # REQUIRED: Strategy Metadata
 # =============================================================================
 STRATEGY_NAME = "mean_reversion"
-STRATEGY_VERSION = "2.0.0"
-SYMBOLS = ["XRP/USDT", "BTC/USDT"]
+STRATEGY_VERSION = "3.0.0"
+SYMBOLS = ["XRP/USDT", "BTC/USDT", "XRP/BTC"]
 
 
 # =============================================================================
@@ -61,6 +69,7 @@ class RejectionReason(Enum):
     MAX_POSITION = "max_position"
     INSUFFICIENT_SIZE = "insufficient_size"
     TRADE_FLOW_NOT_ALIGNED = "trade_flow_not_aligned"
+    TRENDING_MARKET = "trending_market"  # REC-004 (v3.0.0)
     NO_SIGNAL_CONDITIONS = "no_signal_conditions"
 
 
@@ -133,6 +142,28 @@ CONFIG = {
     'vwap_size_multiplier': 0.5,      # Position size multiplier for VWAP signals
 
     # ==========================================================================
+    # Trend Filter - REC-004 (v3.0.0)
+    # ==========================================================================
+    'use_trend_filter': True,         # Enable trend filtering
+    'trend_sma_period': 50,           # Lookback for trend SMA
+    'trend_slope_threshold': 0.05,    # Min slope % to consider trending
+
+    # ==========================================================================
+    # Trailing Stops - REC-006 (v3.0.0)
+    # ==========================================================================
+    'use_trailing_stop': True,        # Enable trailing stops
+    'trailing_activation_pct': 0.3,   # Activate at 0.3% profit
+    'trailing_distance_pct': 0.2,     # Trail 0.2% from high/low
+
+    # ==========================================================================
+    # Position Decay - REC-007 (v3.0.0)
+    # ==========================================================================
+    'use_position_decay': True,       # Enable time-based TP reduction
+    'decay_start_minutes': 3.0,       # Start reducing TP after 3 min
+    'decay_interval_minutes': 1.0,    # Reduce TP every 1 min
+    'decay_multipliers': [1.0, 0.75, 0.5, 0.25],  # TP multiplier at each stage
+
+    # ==========================================================================
     # Rejection Tracking
     # ==========================================================================
     'track_rejections': True,         # Enable rejection tracking
@@ -161,6 +192,17 @@ SYMBOL_CONFIGS = {
         'take_profit_pct': 0.4,       # Tighter for BTC
         'stop_loss_pct': 0.4,
         'cooldown_seconds': 5.0,      # Faster for liquid BTC
+    },
+    # REC-001 (v3.0.0): XRP/BTC ratio trading pair
+    'XRP/BTC': {
+        'deviation_threshold': 1.0,   # Wider for ratio volatility (1.55x XRP vs BTC)
+        'rsi_oversold': 35,           # Conservative for ratio trading
+        'rsi_overbought': 65,
+        'position_size_usd': 15.0,    # Lower for less liquidity
+        'max_position': 40.0,         # Conservative limit
+        'take_profit_pct': 0.8,       # Account for wider spreads, 1:1 R:R
+        'stop_loss_pct': 0.8,
+        'cooldown_seconds': 20.0,     # Slower for ratio trades
     },
 }
 
@@ -438,6 +480,186 @@ def _is_trade_flow_aligned(
 
 
 # =============================================================================
+# Section 4b: Trend Filter - REC-004 (v3.0.0)
+# =============================================================================
+def _calculate_trend_slope(candles: List, period: int = 50) -> float:
+    """
+    Calculate the slope of price trend over given period.
+
+    Returns slope as percentage change per candle.
+    Positive = uptrend, Negative = downtrend, Near zero = ranging.
+    """
+    if len(candles) < period:
+        return 0.0
+
+    closes = [c.close for c in candles[-period:]]
+    if len(closes) < 2:
+        return 0.0
+
+    # Calculate linear regression slope
+    n = len(closes)
+    sum_x = sum(range(n))
+    sum_y = sum(closes)
+    sum_xy = sum(i * closes[i] for i in range(n))
+    sum_x2 = sum(i * i for i in range(n))
+
+    denominator = n * sum_x2 - sum_x * sum_x
+    if denominator == 0:
+        return 0.0
+
+    slope = (n * sum_xy - sum_x * sum_y) / denominator
+
+    # Convert to percentage of average price
+    avg_price = sum_y / n if n > 0 else 1.0
+    slope_pct = (slope / avg_price) * 100 if avg_price > 0 else 0.0
+
+    return slope_pct
+
+
+def _is_trending(
+    candles: List,
+    config: Dict[str, Any]
+) -> Tuple[bool, float]:
+    """
+    Check if market is currently trending (unsuitable for mean reversion).
+
+    Returns:
+        Tuple of (is_trending, slope_pct)
+    """
+    period = config.get('trend_sma_period', 50)
+    threshold = config.get('trend_slope_threshold', 0.05)
+
+    slope_pct = _calculate_trend_slope(candles, period)
+
+    # Market is trending if slope exceeds threshold in either direction
+    is_trending = abs(slope_pct) > threshold
+
+    return is_trending, slope_pct
+
+
+# =============================================================================
+# Section 4c: Trailing Stops - REC-006 (v3.0.0)
+# =============================================================================
+def _calculate_trailing_stop(
+    entry_price: float,
+    highest_price: float,
+    lowest_price: float,
+    side: str,
+    activation_pct: float,
+    trail_distance_pct: float,
+) -> Optional[float]:
+    """
+    Calculate trailing stop price if activated.
+
+    Args:
+        entry_price: Original entry price
+        highest_price: Highest price since entry (for longs)
+        lowest_price: Lowest price since entry (for shorts)
+        side: 'long' or 'short'
+        activation_pct: Profit % to activate trailing stop
+        trail_distance_pct: Distance % to trail from extreme
+
+    Returns:
+        Trailing stop price if activated, None otherwise
+    """
+    if entry_price <= 0:
+        return None
+
+    if side == 'long':
+        profit_pct = ((highest_price - entry_price) / entry_price) * 100
+        if profit_pct >= activation_pct:
+            return highest_price * (1 - trail_distance_pct / 100)
+    elif side == 'short':
+        profit_pct = ((entry_price - lowest_price) / entry_price) * 100
+        if profit_pct >= activation_pct:
+            return lowest_price * (1 + trail_distance_pct / 100)
+
+    return None
+
+
+def _update_position_extremes(
+    state: Dict[str, Any],
+    symbol: str,
+    current_price: float
+) -> None:
+    """Update highest/lowest prices for trailing stop calculation."""
+    if 'position_entries' not in state:
+        return
+
+    entry = state['position_entries'].get(symbol)
+    if not entry:
+        return
+
+    # Initialize extremes if not present
+    if 'highest_price' not in entry:
+        entry['highest_price'] = entry.get('entry_price', current_price)
+    if 'lowest_price' not in entry:
+        entry['lowest_price'] = entry.get('entry_price', current_price)
+
+    # Update extremes
+    entry['highest_price'] = max(entry['highest_price'], current_price)
+    entry['lowest_price'] = min(entry['lowest_price'], current_price)
+
+
+# =============================================================================
+# Section 4d: Position Decay - REC-007 (v3.0.0)
+# =============================================================================
+def _get_decayed_take_profit(
+    entry_price: float,
+    original_tp_pct: float,
+    entry_time: datetime,
+    current_time: datetime,
+    side: str,
+    config: Dict[str, Any]
+) -> Tuple[float, float]:
+    """
+    Calculate decayed take profit based on position age.
+
+    Mean reversion assumes timely return to mean. If price doesn't revert
+    within expected timeframe, reduce TP to exit sooner.
+
+    Args:
+        entry_price: Original entry price
+        original_tp_pct: Original take profit percentage
+        entry_time: Time of entry
+        current_time: Current time
+        side: 'long' or 'short'
+        config: Strategy configuration
+
+    Returns:
+        Tuple of (decayed_tp_price, decay_multiplier)
+    """
+    decay_start = config.get('decay_start_minutes', 3.0)
+    decay_interval = config.get('decay_interval_minutes', 1.0)
+    decay_multipliers = config.get('decay_multipliers', [1.0, 0.75, 0.5, 0.25])
+
+    # Calculate position age in minutes
+    if entry_time is None:
+        return entry_price, 1.0
+
+    age_minutes = (current_time - entry_time).total_seconds() / 60
+
+    # No decay before start time
+    if age_minutes < decay_start:
+        multiplier = 1.0
+    else:
+        # Calculate decay stage
+        decay_stage = int((age_minutes - decay_start) / decay_interval)
+        decay_stage = min(decay_stage, len(decay_multipliers) - 1)
+        multiplier = decay_multipliers[decay_stage]
+
+    # Calculate decayed TP
+    effective_tp_pct = original_tp_pct * multiplier
+
+    if side == 'long':
+        decayed_tp = entry_price * (1 + effective_tp_pct / 100)
+    else:  # short
+        decayed_tp = entry_price * (1 - effective_tp_pct / 100)
+
+    return decayed_tp, multiplier
+
+
+# =============================================================================
 # Section 5: Signal Rejection Tracking
 # =============================================================================
 def _track_rejection(
@@ -585,7 +807,15 @@ def _evaluate_symbol(
     current_time: datetime,
     Signal
 ) -> Optional[Signal]:
-    """Evaluate a single symbol for mean reversion opportunity."""
+    """
+    Evaluate a single symbol for mean reversion opportunity.
+
+    Refactored in v3.0.0 to integrate:
+    - REC-004: Trend filter
+    - REC-006: Trailing stops
+    - REC-007: Position decay
+    - Finding #4: Extracted signal logic into helper functions
+    """
     track_rejections = config.get('track_rejections', True)
 
     # Get candles
@@ -623,7 +853,7 @@ def _evaluate_symbol(
     if not sma or not bb_lower:
         return None
 
-    # REC-004: Calculate volatility and classify regime
+    # Calculate volatility and classify regime
     candles_1m = data.candles_1m.get(symbol, candles_5m)
     volatility = _calculate_volatility(list(candles_1m), config.get('volatility_lookback', 20))
 
@@ -643,6 +873,12 @@ def _evaluate_symbol(
             if track_rejections:
                 _track_rejection(state, RejectionReason.REGIME_PAUSE, symbol)
             return None
+
+    # REC-004 (v3.0.0): Trend filter check
+    trend_slope = 0.0
+    is_market_trending = False
+    if config.get('use_trend_filter', True):
+        is_market_trending, trend_slope = _is_trending(candles_list, config)
 
     # Calculate VWAP
     vwap = data.get_vwap(symbol, config.get('vwap_lookback', 50))
@@ -671,7 +907,10 @@ def _evaluate_symbol(
     # Get current position for this symbol
     current_position = state.get('position_by_symbol', {}).get(symbol, 0)
 
-    # Store indicators
+    # REC-006 (v3.0.0): Update position extremes for trailing stop
+    _update_position_extremes(state, symbol, current_price)
+
+    # Store indicators (including v3.0.0 additions)
     state['indicators'] = {
         'symbol': symbol,
         'status': 'active',
@@ -696,7 +935,42 @@ def _evaluate_symbol(
         'consecutive_losses': state.get('consecutive_losses', 0),
         'pnl_symbol': round(state.get('pnl_by_symbol', {}).get(symbol, 0), 4),
         'trades_symbol': state.get('trades_by_symbol', {}).get(symbol, 0),
+        # v3.0.0 indicators
+        'trend_slope': round(trend_slope, 4),
+        'is_trending': is_market_trending,
+        'use_trend_filter': config.get('use_trend_filter', True),
     }
+
+    # ==========================================================================
+    # REC-006 (v3.0.0): Check for trailing stop exit on existing positions
+    # ==========================================================================
+    if current_position != 0 and config.get('use_trailing_stop', True):
+        trailing_signal = _check_trailing_stop_exit(
+            state, symbol, current_price, current_position, config, Signal
+        )
+        if trailing_signal:
+            state['indicators']['status'] = 'trailing_stop_exit'
+            return trailing_signal
+
+    # ==========================================================================
+    # REC-007 (v3.0.0): Check for position decay exit on stale positions
+    # ==========================================================================
+    if current_position != 0 and config.get('use_position_decay', True):
+        decay_signal = _check_position_decay_exit(
+            state, symbol, current_price, current_position, current_time, config, Signal
+        )
+        if decay_signal:
+            state['indicators']['status'] = 'position_decay_exit'
+            return decay_signal
+
+    # ==========================================================================
+    # REC-004 (v3.0.0): Skip new entries in trending markets
+    # ==========================================================================
+    if is_market_trending and current_position == 0:
+        state['indicators']['status'] = 'trending_market'
+        if track_rejections:
+            _track_rejection(state, RejectionReason.TRENDING_MARKET, symbol)
+        return None
 
     # Position limit check
     if current_position >= max_position:
@@ -715,6 +989,183 @@ def _evaluate_symbol(
             _track_rejection(state, RejectionReason.INSUFFICIENT_SIZE, symbol)
         return None
 
+    # ==========================================================================
+    # Signal Logic: Use extracted helper functions (Finding #4)
+    # ==========================================================================
+    signal = _generate_entry_signal(
+        data=data,
+        config=config,
+        state=state,
+        symbol=symbol,
+        current_price=current_price,
+        deviation_pct=deviation_pct,
+        effective_deviation_threshold=effective_deviation_threshold,
+        rsi=rsi,
+        rsi_oversold=rsi_oversold,
+        rsi_overbought=rsi_overbought,
+        bb_lower=bb_lower,
+        bb_upper=bb_upper,
+        current_position=current_position,
+        max_position=max_position,
+        actual_size=actual_size,
+        min_trade_size=min_trade_size,
+        tp_pct=tp_pct,
+        sl_pct=sl_pct,
+        vwap=vwap,
+        regime=regime,
+        use_trade_flow=use_trade_flow,
+        trade_flow_threshold=trade_flow_threshold,
+        track_rejections=track_rejections,
+        Signal=Signal,
+    )
+
+    if signal:
+        state['indicators']['status'] = 'signal_generated'
+        return signal
+
+    state['indicators']['status'] = 'no_signal'
+    if track_rejections:
+        _track_rejection(state, RejectionReason.NO_SIGNAL_CONDITIONS, symbol)
+    return None
+
+
+# =============================================================================
+# Section 7b: Signal Generation Helpers (Finding #4 - v3.0.0)
+# =============================================================================
+def _check_trailing_stop_exit(
+    state: Dict[str, Any],
+    symbol: str,
+    current_price: float,
+    current_position: float,
+    config: Dict[str, Any],
+    Signal
+) -> Optional[Signal]:
+    """Check if trailing stop should trigger exit."""
+    entry = state.get('position_entries', {}).get(symbol)
+    if not entry:
+        return None
+
+    entry_price = entry.get('entry_price', 0)
+    highest_price = entry.get('highest_price', entry_price)
+    lowest_price = entry.get('lowest_price', entry_price)
+    side = entry.get('side', 'long')
+
+    activation_pct = config.get('trailing_activation_pct', 0.3)
+    trail_distance_pct = config.get('trailing_distance_pct', 0.2)
+
+    trailing_stop = _calculate_trailing_stop(
+        entry_price, highest_price, lowest_price, side,
+        activation_pct, trail_distance_pct
+    )
+
+    if trailing_stop is None:
+        return None
+
+    # Check if trailing stop is hit
+    if side == 'long' and current_price <= trailing_stop:
+        return Signal(
+            action='sell',
+            symbol=symbol,
+            size=abs(current_position),
+            price=current_price,
+            reason=f"MR: Trailing stop (high={highest_price:.4f}, stop={trailing_stop:.4f})",
+        )
+    elif side == 'short' and current_price >= trailing_stop:
+        return Signal(
+            action='cover',
+            symbol=symbol,
+            size=abs(current_position),
+            price=current_price,
+            reason=f"MR: Trailing stop (low={lowest_price:.4f}, stop={trailing_stop:.4f})",
+        )
+
+    return None
+
+
+def _check_position_decay_exit(
+    state: Dict[str, Any],
+    symbol: str,
+    current_price: float,
+    current_position: float,
+    current_time: datetime,
+    config: Dict[str, Any],
+    Signal
+) -> Optional[Signal]:
+    """Check if position decay should trigger exit."""
+    entry = state.get('position_entries', {}).get(symbol)
+    if not entry:
+        return None
+
+    entry_price = entry.get('entry_price', 0)
+    entry_time = entry.get('entry_time')
+    side = entry.get('side', 'long')
+
+    if not entry_time or not entry_price:
+        return None
+
+    tp_pct = _get_symbol_config(symbol, config, 'take_profit_pct')
+    decayed_tp, decay_mult = _get_decayed_take_profit(
+        entry_price, tp_pct, entry_time, current_time, side, config
+    )
+
+    # Store decay info in indicators
+    state['indicators']['decay_multiplier'] = round(decay_mult, 2)
+    state['indicators']['decayed_tp'] = round(decayed_tp, 8)
+
+    # Check if decayed TP is reached
+    if side == 'long' and current_price >= decayed_tp and decay_mult < 1.0:
+        profit_pct = ((current_price - entry_price) / entry_price) * 100
+        return Signal(
+            action='sell',
+            symbol=symbol,
+            size=abs(current_position),
+            price=current_price,
+            reason=f"MR: Position decay exit (decay={decay_mult:.0%}, profit={profit_pct:.2f}%)",
+        )
+    elif side == 'short' and current_price <= decayed_tp and decay_mult < 1.0:
+        profit_pct = ((entry_price - current_price) / entry_price) * 100
+        return Signal(
+            action='cover',
+            symbol=symbol,
+            size=abs(current_position),
+            price=current_price,
+            reason=f"MR: Position decay exit (decay={decay_mult:.0%}, profit={profit_pct:.2f}%)",
+        )
+
+    return None
+
+
+def _generate_entry_signal(
+    data: DataSnapshot,
+    config: Dict[str, Any],
+    state: Dict[str, Any],
+    symbol: str,
+    current_price: float,
+    deviation_pct: float,
+    effective_deviation_threshold: float,
+    rsi: float,
+    rsi_oversold: float,
+    rsi_overbought: float,
+    bb_lower: float,
+    bb_upper: float,
+    current_position: float,
+    max_position: float,
+    actual_size: float,
+    min_trade_size: float,
+    tp_pct: float,
+    sl_pct: float,
+    vwap: Optional[float],
+    regime: VolatilityRegime,
+    use_trade_flow: bool,
+    trade_flow_threshold: float,
+    track_rejections: bool,
+    Signal
+) -> Optional[Signal]:
+    """
+    Generate entry signal based on mean reversion conditions.
+
+    Finding #4: Extracted from _evaluate_symbol to reduce complexity.
+    """
     signal = None
 
     # ==========================================================================
@@ -726,7 +1177,7 @@ def _evaluate_symbol(
 
         # Extra confirmation: price near or below lower BB
         if current_price <= bb_lower * 1.005:
-            # REC-008: Trade flow confirmation
+            # Trade flow confirmation
             if use_trade_flow:
                 if not _is_trade_flow_aligned(data, symbol, 'buy', trade_flow_threshold):
                     state['indicators']['status'] = 'trade_flow_not_aligned'
@@ -746,18 +1197,18 @@ def _evaluate_symbol(
                 stop_loss=current_price * (1 - sl_pct / 100),
                 take_profit=current_price * (1 + tp_pct / 100),
             )
+            return signal
 
     # ==========================================================================
     # Signal Logic: Overbought - Sell/Short Signal
     # ==========================================================================
-    if signal is None and (
-        deviation_pct > effective_deviation_threshold and
+    if (deviation_pct > effective_deviation_threshold and
         rsi > rsi_overbought and
         current_position > -max_position):
 
         # Extra confirmation: price near or above upper BB
         if current_price >= bb_upper * 0.995:
-            # REC-008: Trade flow confirmation
+            # Trade flow confirmation
             if use_trade_flow:
                 if not _is_trade_flow_aligned(data, symbol, 'sell', trade_flow_threshold):
                     state['indicators']['status'] = 'trade_flow_not_aligned'
@@ -777,8 +1228,6 @@ def _evaluate_symbol(
                     size=close_size,
                     price=current_price,
                     reason=f"MR: Close long - overbought (dev={deviation_pct:.2f}%, RSI={rsi:.1f})",
-                    stop_loss=current_price * (1 - sl_pct / 100),
-                    take_profit=current_price * (1 - tp_pct / 100),
                 )
             else:
                 # We're flat or short - open/add to short position
@@ -791,11 +1240,12 @@ def _evaluate_symbol(
                     stop_loss=current_price * (1 + sl_pct / 100),
                     take_profit=current_price * (1 - tp_pct / 100),
                 )
+            return signal
 
     # ==========================================================================
     # Signal Logic: VWAP Reversion
     # ==========================================================================
-    if signal is None and vwap:
+    if vwap:
         vwap_deviation = ((current_price - vwap) / vwap) * 100
         vwap_threshold = config.get('vwap_deviation_threshold', 0.3)
         vwap_size_mult = config.get('vwap_size_multiplier', 0.5)
@@ -816,14 +1266,8 @@ def _evaluate_symbol(
                     stop_loss=current_price * (1 - sl_pct / 100),
                     take_profit=vwap,
                 )
+                return signal
 
-    if signal:
-        state['indicators']['status'] = 'signal_generated'
-        return signal
-
-    state['indicators']['status'] = 'no_signal'
-    if track_rejections:
-        _track_rejection(state, RejectionReason.NO_SIGNAL_CONDITIONS, symbol)
     return None
 
 
@@ -840,13 +1284,19 @@ def on_start(config: Dict[str, Any], state: Dict[str, Any]) -> None:
         state['config_warnings'] = errors
     state['config_validated'] = True
 
+    # REC-002 (v3.0.0): Store config values for use in on_fill
+    state['config_max_consecutive_losses'] = config.get('max_consecutive_losses', 3)
+
     _initialize_state(state)
 
     print(f"[mean_reversion] v{STRATEGY_VERSION} started")
     print(f"[mean_reversion] Symbols: {SYMBOLS}")
     print(f"[mean_reversion] Features: VolatilityRegimes={config.get('use_volatility_regimes', True)}, "
           f"CircuitBreaker={config.get('use_circuit_breaker', True)}, "
-          f"TradeFlowConfirm={config.get('use_trade_flow_confirmation', True)}")
+          f"TradeFlowConfirm={config.get('use_trade_flow_confirmation', True)}, "
+          f"TrendFilter={config.get('use_trend_filter', True)}, "
+          f"TrailingStop={config.get('use_trailing_stop', True)}, "
+          f"PositionDecay={config.get('use_position_decay', True)}")
 
 
 def on_fill(fill: Dict[str, Any], state: Dict[str, Any]) -> None:
@@ -883,7 +1333,8 @@ def on_fill(fill: Dict[str, Any], state: Dict[str, Any]) -> None:
             state['losses_by_symbol'][symbol] = state['losses_by_symbol'].get(symbol, 0) + 1
             state['consecutive_losses'] = state.get('consecutive_losses', 0) + 1
 
-            max_losses = 3
+            # REC-002 (v3.0.0): Use config value instead of hardcoded 3
+            max_losses = state.get('config_max_consecutive_losses', 3)
             if state['consecutive_losses'] >= max_losses:
                 state['circuit_breaker_time'] = timestamp
 

@@ -5,6 +5,54 @@ All notable changes to the WebSocket Paper Tester will be documented in this fil
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.0] - 2025-12-14
+
+### Added
+- **Mean Reversion strategy v3.0.0** - Major enhancement per mean-reversion-deep-review-v3.1.md
+  - REC-001: XRP/BTC ratio trading pair with volatility-optimized parameters
+    - Wider deviation threshold (1.0% vs 0.5%)
+    - Wider TP/SL (0.8%/0.8%) accounting for ratio volatility
+    - Conservative position sizing ($15 USD, max $40)
+    - Longer cooldown (20s) for less liquid pair
+  - REC-002: Fixed hardcoded `max_losses=3` in `on_fill()` - now uses config value
+  - REC-003: Research support for wider stop-loss on volatile pairs
+  - REC-004: Optional trend filter using linear regression slope detection
+    - `_calculate_trend_slope()` and `_is_trending()` functions
+    - New `TRENDING_MARKET` rejection reason
+    - Prevents new entries in trending markets while managing existing positions
+  - REC-006: Trailing stops for profit protection
+    - Activates at configurable profit threshold (default 0.3%)
+    - Trails at configurable distance (default 0.2%)
+    - Tracks highest/lowest price since entry
+  - REC-007: Position decay for time-based TP reduction
+    - Reduces TP target for aging positions
+    - Configurable decay schedule (default: 100% → 75% → 50% → 25%)
+    - Encourages earlier exits when mean reversion thesis weakens
+  - Finding #4: Refactored `_evaluate_symbol()` into modular helper functions
+    - `_check_trailing_stop_exit()`, `_check_position_decay_exit()`, `_generate_entry_signal()`
+    - Reduced cyclomatic complexity
+  - New indicators: `trend_slope`, `is_trending`, `decay_multiplier`, `decayed_tp`
+  - 11 new configuration parameters (total: 39)
+
+- **Feature Documentation**
+  - `docs/development/features/mean_reversion/mean-reversion-v3.0.md` - v3.0.0 feature docs
+  - `docs/development/review/mean_reversion/mean-reversion-strategy-review-v3.1.md` - Implementation record
+
+### Changed
+- **Mean Reversion strategy** (`mean_reversion.py`)
+  - Version updated to 3.0.0
+  - SYMBOLS extended to include XRP/BTC
+  - `on_start()` logs new feature flags and stores config values for `on_fill()`
+  - `_evaluate_symbol()` now checks trailing stops, position decay, and trend filter before entry signals
+  - Enhanced indicators with trend and decay metrics
+
+### Fixed
+- Mean Reversion `on_fill()` hardcoded max_losses value (was always 3, now uses config)
+
+### Documentation
+- Strategy Development Guide compliance for Mean Reversion improved from 94% to 100%
+- All review recommendations implemented and documented
+
 ## [1.5.0] - 2025-12-14
 
 ### Added

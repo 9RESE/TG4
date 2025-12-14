@@ -1,4 +1,4 @@
-# Development Notes
+# Project Notes
 
 ## Quick Start
 
@@ -16,48 +16,30 @@ python ws_tester.py --duration 30 --no-dashboard
 pytest tests/ -v
 ```
 
-## Strategy Status
+## Current Strategies
 
-| Strategy | Version | Status | Last Updated |
-|----------|---------|--------|--------------|
-| Market Making | 1.5.0 | Production Ready | 2025-12-14 |
-| Order Flow | 4.1.0 | Production Ready | 2025-12-14 |
-| Mean Reversion | 2.0.0 | Production Ready | 2025-12-14 |
-| Ratio Trading | 2.1.0 | Production Ready | 2025-12-14 |
+| Strategy | Version | Symbols | Status |
+|----------|---------|---------|--------|
+| market_making | v1.5.0 | XRP/USDT, BTC/USDT, XRP/BTC | Active |
+| mean_reversion | v3.0.0 | XRP/USDT, BTC/USDT, XRP/BTC | Active |
+| order_flow | v4.1.0 | XRP/USDT, BTC/USDT | Active |
+| ratio_trading | v2.1.0 | XRP/BTC | Active |
 
-## Recent Work
+## Strategy Ideas (Backlog)
 
-### Ratio Trading v2.1.0 (2025-12-14)
-Implemented recommendations from ratio-trading-strategy-review-v2.0.md:
-- REC-013: Higher entry threshold (1.0 -> 1.5 std)
-- REC-014: RSI confirmation filter
-- REC-015: Trend detection warning
-- REC-016: Enhanced accumulation metrics
-- Added trailing stops (from mean reversion patterns)
-- Added position decay (from mean reversion patterns)
-- Fixed hardcoded max_losses bug in on_fill
+| Strategy Type | Timeframe | Description |
+|--------------|-----------|-------------|
+| Scalping (momentum) | 1m-5m | Quick momentum bursts |
+| Arbitrage | Tick-level | Cross-exchange price differences |
 
-### Mean Reversion v2.0.0 (2025-12-14)
-Implemented recommendations from mean-reversion-strategy-review-v1.0.md
+## Research Notes
 
-### Order Flow v4.1.0 (2025-12-14)
-Implemented recommendations from order-flow-strategy-review-v4.0.md
+### XRP/BTC Correlation
+- Does XRP follow BTC predictably enough to trade on?
+- See ratio_trading strategy for implementation
 
-## Future Strategy Ideas
-
-- **Scalping (momentum)**: 1m-5m timeframes, quick momentum bursts
-- **Arbitrage**: Tick-level, cross-exchange price differences
-- **Trend Following**: 9 week MA on 5m/1h, trend confirmation rules
-- **XRP/BTC Correlation**: Does XRP follow BTC predictably enough to trade on?
-
-## Documentation Structure
-
-```
-ws_paper_tester/docs/
-├── development/
-│   ├── features/        # Implementation docs per strategy
-│   └── review/          # Code and strategy reviews
-├── user/
-│   └── how-to/         # Configuration guides
-└── CODE_REVIEW_ISSUES.md
-```
+### Moving Average Strategy
+- 9-week MA on 5m and 1h candles
+- One candle opposite trend closes position
+- 2 candles closed above/below MA = trend signal
+- Trend definition open to improvement
