@@ -5,6 +5,100 @@ All notable changes to the WebSocket Paper Tester will be documented in this fil
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.12.1] - 2025-12-15
+
+### Fixed
+- **Test Infrastructure** - Fixed 17 pre-existing test failures
+  - Updated `create_rich_snapshot()` to include XRP/BTC data for all tests
+  - Added backward compatibility aliases for renamed functions in market_making and mean_reversion
+  - Fixed version assertion in test_strategy_wrapper (validates semver format)
+  - Fixed test_version_is_4_0_0 to test_version_is_4_3_0 (matches current version)
+
+- **Market Making exports** - Added missing function exports for testing
+  - `validate_config`, `calculate_micro_price`, `calculate_reservation_price`
+  - `calculate_optimal_spread`, `check_fee_profitability`, `check_position_decay`
+  - `get_xrp_usdt_price`, `build_entry_signal`, `calculate_trailing_stop`
+  - Backward compatibility aliases with underscore prefix
+
+- **Mean Reversion exports** - Added missing function exports for testing
+  - `calculate_trend_slope`, `is_trending`, `calculate_correlation`
+  - `get_decayed_take_profit`, `calculate_trailing_stop`
+  - Backward compatibility aliases with underscore prefix
+
+### Changed
+- All 153 tests now pass (previously 136 passed, 17 failed)
+
+## [1.12.0] - 2025-12-15
+
+### Added
+- **Whale Sentiment strategy v1.1.0** - Deep Review v1.0 Implementation
+  - REC-001: Recalibrated confidence weights (volume 40%, RSI 15%)
+    - Academic research shows RSI ineffective in crypto markets
+    - Volume spike detection now primary signal
+  - REC-003: Clarified trade flow logic for contrarian mode
+    - Intentionally lenient to allow contrarian entries
+    - Accepts mild opposing flow (±10% threshold)
+  - REC-005: Enhanced indicator logging on circuit breaker/cooldown paths
+    - Includes elapsed/remaining cooldown times
+  - REC-007: XRP/BTC disabled by default (7-10x lower liquidity)
+  - REC-008: Short size multiplier reduced to 0.5x (crypto squeeze risk)
+  - REC-009: Updated research references to deep-review-v1.0.md
+  - REC-010: Documented UTC timezone requirement for session boundaries
+  - Deferred: REC-002 (candle persistence), REC-004 (volatility regime), REC-006 (backtest weights)
+
+### Documentation
+- `docs/development/features/whale_sentiment/whale-sentiment-v1.0.md` updated to v1.1.0
+- `docs/development/review/whale_sentiment/deep-review-v1.0.md` added to version control
+- Version history in config.py and __init__.py updated
+
+## [1.11.1] - 2025-12-15
+
+### Added
+- **Whale Sentiment strategy v1.0.0** - Initial Implementation
+  - Volume spike detection as whale activity proxy (2x average = spike)
+  - RSI-based sentiment zones (Extreme Fear/Fear/Neutral/Greed/Extreme Greed)
+  - Price deviation from recent high/low as supplementary signal
+  - Contrarian mode: buy fear, sell greed (default)
+  - Trade flow confirmation for signal validation
+  - Cross-pair correlation management with blocking at 85%
+  - Session-aware position sizing (Asia 0.8x, Off-Hours 0.5x)
+  - Stricter circuit breaker (2 consecutive losses, 45 min cooldown)
+  - Composite confidence scoring with weighted components
+  - Support for XRP/USDT, BTC/USDT, XRP/BTC (XRP/BTC disabled by default in v1.1.0)
+
+### Documentation
+- `docs/development/features/whale_sentiment/whale-sentiment-v1.0.md` created
+- `docs/development/review/whale_sentiment/master-plan-v1.0.md` updated to IMPLEMENTED
+
+## [1.11.0] - 2025-12-14
+
+### Added
+- **WaveTrend Oscillator strategy v1.1.0** - Deep Review v1.0 Implementation
+  - REC-001: Optimized channel/average lengths (10/21 from 9/12)
+  - REC-002: Zone confirmation requirement (2 candles in zone before signal)
+  - REC-003: Bullish/bearish divergence detection with confidence boost
+  - REC-005: Extreme zone profit taking (exit at ±80)
+  - REC-006: Enhanced indicator logging on all code paths
+  - REC-007: Per-symbol WT parameters in SYMBOL_CONFIGS
+  - Deferred: REC-004 (volatility regime), REC-008 (volume confirmation)
+
+- **WaveTrend Oscillator strategy v1.0.0** - Initial Implementation
+  - WaveTrend (LazyBear) dual-line crossover signals
+  - Overbought/oversold zone filtering (±60 threshold)
+  - Extreme zone detection (±80 threshold)
+  - Session-aware position sizing
+  - Cross-pair correlation management
+  - Volatility regime classification (LOW/MEDIUM/HIGH/EXTREME)
+  - Circuit breaker protection (3 consecutive losses)
+  - Signal rejection tracking
+  - Support for XRP/USDT, BTC/USDT, XRP/BTC
+
+### Documentation
+- `docs/development/features/wavetrend/wavetrend-v1.0.md` created
+- `docs/development/features/wavetrend/wavetrend-v1.1.md` created
+- `docs/development/review/wavetrend/master-plan-v1.0.md` updated to IMPLEMENTED
+- `docs/development/review/wavetrend/deep-review-v1.0.md` created
+
 ## [1.10.2] - 2025-12-14
 
 ### Changed

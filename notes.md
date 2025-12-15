@@ -4,85 +4,6 @@ update the docs with the recent work and ALL the changes in git. Ensure document
 
 
 
-- wavetrend /home/rese/Documents/rese/trading-bots/grok-4_1/src/strategies/wavetrend
-- whale_sentiment /home/rese/Documents/rese/trading-bots/grok-4_1/src/strategies/whale_sentiment
-
-i want to add the whale_sentiment from /home/rese/Documents/rese/trading-bots/grok-4_1/src/strategies/whale_sentiment/ to the ws_paper_tester/. as we are rewriting it for the platform I want to do deep research on the strategy and its use with XRP/usdt, btc/usdt, and xrp/btc. I then want you to make a document on your findings, recommendations, and implementation plan. We need to ensure the new strategy complies with ws_paper_tester/docs/development/strategy-development-guide.md and integrates with existing ws_paper_tester/ infrastructure
-
-
-
----
-Task: Research and Plan Whale Sentiment Strategy for ws_paper_tester
-
-Context
-
-- Source Strategy: Legacy implementation requiring platform adaptation
-  - src/strategies/whale_sentiment/strategy.py
-- Target Location: ws_paper_tester/strategies/whale_sentiment/
-- Must comply with: ws_paper_tester/docs/development/strategy-development-guide.md
-- Must integrate with: Existing ws_paper_tester infrastructure (modular structure: config, indicators, regimes, signals, lifecycle, risk, exits)
-
-Strategy Specifications
-
-- Name: Whale Sentiment
-- Timeframes: 1h primary (with 1m/5m tick-level execution)
-- Style: Contrarian sentiment + volume spike detection (whale proxy)
-- Pairs: XRP/USDT, BTC/USDT, XRP/BTC
-- Core Logic: Volume spikes as whale activity proxy, RSI/price deviation as fear-greed proxy, contrarian entry on extreme sentiment
-
-Required Research Areas
-
-1. Whale tracking and sentiment analysis fundamentals
-  - Academic foundations (behavioral finance, contrarian investing, smart money theory)
-  - Volume spike analysis as institutional activity proxy
-  - Fear & Greed Index methodology and effectiveness
-  - RSI as sentiment indicator vs momentum indicator
-2. Pair-specific characteristics:
-  - XRP/USDT: Volume patterns, whale threshold calibration, retail vs institutional behavior
-  - BTC/USDT: Institutional activity signatures, volume spike accuracy for whale detection
-  - XRP/BTC: Cross-pair sentiment divergence, correlation with BTC dominance cycles
-3. Source code analysis:
-  - Extract core logic from strategy.py (WhaleSentiment class)
-  - Map to ws_paper_tester module structure (config, indicators, signals, regimes, lifecycle)
-  - Identify components requiring WebSocket adaptation (hourly → tick-based execution)
-  - External data integration patterns (Whale Alert, Glassnode, social sentiment)
-4. Entry/exit signal criteria for sentiment + whale proxy
-  - Composite signal aggregation methodology
-  - Confidence thresholds (current: 0.55)
-  - Contrarian vs momentum mode switching
-5. Risk management:
-  - Position sizing based on sentiment confidence
-  - Stop-loss placement for contrarian entries (inherently counter-trend)
-  - Regime-based exposure (extreme fear vs neutral markets)
-  - False signal protection (volume spikes without follow-through)
-6. Known pitfalls and failure modes:
-  - Volume spike false positives (exchange manipulation, wash trading)
-  - Sentiment divergence (external data vs proxy indicators)
-  - Contrarian trap (knife-catching in trending markets)
-  - Cross-pair correlation breakdown
-
-Deliverable
-
-Create a research document at:
-ws_paper_tester/docs/development/review/whale_sentiment/master-plan-v1.0.md
-
-Structure:
-- Executive Summary
-- Research Findings (per area above)
-- Source Code Analysis (legacy → new mapping)
-- Pair-Specific Analysis (XRP/USDT, BTC/USDT, XRP/BTC)
-- Recommended Approach
-- Development Plan (phases, no code)
-- Compliance Checklist (vs strategy-development-guide.md v1.0)
-
-Constraints
-
-- Documentation only - no implementation code
-- Focus on adaptation to WebSocket tick environment, not blind copy
-- Address external data dependency: strategy must function with proxy indicators only
-- Consider circuit breaker and volatility regime requirements from existing strategies
-
-
 
 # REUSABLE STRATEGY PROMPTS
 
@@ -174,10 +95,11 @@ Constraint: Documentation only - no implementation code.
 
 ## Deep Review Prompt (Copy & Fill Placeholders)
 ```
-## Task: Deep Review of grid_rsi_reversion Strategy
+## Task: Deep Review of whale_sentiment Strategy
 ### Scope
-- **Strategy:** `ws_paper_tester/strategies/grid_rsi_reversion/`
-- **Docs:** `ws_paper_tester/docs/development/features/grid_rsi_reversion/` (if exists)
+- **Sources:
+  - **Strategy: `ws_paper_tester/strategies/whale_sentiment/`
+  - **Docs:** `ws_paper_tester/docs/development/features/whale_sentiment/` (if exists)
 - **Pairs:** XRP/USDT, BTC/USDT, XRP/BTC
 ### Review Requirements
 #### 1. Strategy Research
@@ -209,7 +131,7 @@ Review against `ws_paper_tester/docs/development/strategy-development-guide.md` 
 - Edge cases and failure modes
 - Regime change handling
 ### Deliverable
-Create documentation at: `ws_paper_tester/docs/development/review/grid_rsi_reversion/`
+Create documentation at: `ws_paper_tester/docs/development/review/whale_sentiment/`
 Include:
 1. **Executive Summary** - Overall assessment and risk level
 2. **Research Findings** - Academic and industry research
@@ -227,10 +149,11 @@ Include:
 
 ## Implementation Prompt (Copy & Fill Placeholders)
 ```
-## Task: Implement Review Findings for grid_rsi_reversion Strategy
+## Task: Implement Review Findings for whale_sentiment Strategy
 ### Files
-- **Strategy:** `ws_paper_tester/strategies/grid_rsi_reversion/`
-- **Review:** `ws_paper_tester/docs/development/review/grid_rsi_reversion/deep-review-v2.0.md`
+  - **Strategy:** `ws_paper_tester/strategies/whale_sentiment/`
+  - **Docs:** `ws_paper_tester/docs/development/features/whale_sentiment/`
+  - **Review: `ws_paper_tester/docs/development/review/whale_sentiment/deep-review-v1.0.md`
 - **Guide:** `ws_paper_tester/docs/development/strategy-development-guide.md`
 ### Instructions
 1. Read the review document - identify all recommendations (REC-XXX)
@@ -311,7 +234,7 @@ Provide:
     - Volatility expansion signals for regime awareness
 - Watch for: correlation breakdown on XRP/BTC, BTC trending markets (ADX>30)
 
-## WaveTrend Oscillator (v1.0.0 - 2025-12-14)
+## WaveTrend Oscillator (v1.1.0 - 2025-12-14)
 - Pairs: XRP/USDT, BTC/USDT, XRP/BTC
 - Key concepts: WaveTrend (LazyBear) dual-line crossover, zone-based filtering (OB/OS), divergence confirmation
 - Core logic:
@@ -332,4 +255,42 @@ Provide:
   - wt_ma_length: 4 (WT2 signal line)
   - Zones: ±60 (OB/OS), ±80 (extreme)
   - R:R ratio: 2:1 (1.5% SL, 3.0% TP for XRP/USDT)
+- v1.1.0 additions (Deep Review v1.0):
+  - REC-001: Optimized channel/average lengths (10/21)
+  - REC-002: Zone confirmation (2 candles in zone)
+  - REC-003: Divergence detection with confidence boost
+  - REC-005: Extreme zone profit taking
+  - REC-006: Enhanced indicator logging
+  - REC-007: Per-symbol WT parameters
 - Watch for: neutral zone entries (less reliable), zone exit timing
+
+## Whale Sentiment (v1.1.0 - 2025-12-15)
+- Pairs: XRP/USDT, BTC/USDT (XRP/BTC disabled by default)
+- Key concepts: Volume spike detection (whale proxy), RSI sentiment zones, contrarian mode
+- Core logic:
+  - Volume spikes >= 2x average detected as whale activity
+  - RSI-based sentiment classification (Extreme Fear/Fear/Neutral/Greed/Extreme Greed)
+  - Price deviation from recent high/low as supplementary signal
+  - Composite confidence scoring with weighted components
+- Entry (Contrarian mode - default):
+  - Long: Fear sentiment + volume spike (buy fear)
+  - Short: Greed sentiment + volume spike (sell greed)
+- Exit:
+  - Stop loss / Take profit (2.5% SL, 5.0% TP default)
+  - Position decay for aging positions
+- Config highlights:
+  - weight_volume_spike: 0.40 (primary signal per REC-001)
+  - weight_rsi_sentiment: 0.15 (reduced from 0.25, RSI ineffective in crypto)
+  - weight_price_deviation: 0.20
+  - short_size_multiplier: 0.50 (crypto squeeze risk per REC-008)
+  - Stricter circuit breaker: 2 losses, 45 min cooldown
+  - Session-aware sizing: Asia 0.8x, Off-Hours 0.5x
+- v1.1.0 additions (Deep Review v1.0):
+  - REC-001: Volume weight 40%, RSI weight 15%
+  - REC-003: Trade flow logic clarified for contrarian mode
+  - REC-005: Enhanced indicator logging on all paths
+  - REC-007: XRP/BTC disabled by default (low liquidity)
+  - REC-008: Short multiplier 0.50x (crypto squeeze risk)
+  - REC-010: UTC timezone documented for sessions
+  - Deferred: REC-002 (candle persistence), REC-004 (volatility regime)
+- Watch for: 25+ hour warmup requirement, XRP/BTC liquidity concerns
