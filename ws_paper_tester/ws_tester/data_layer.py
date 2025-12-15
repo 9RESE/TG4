@@ -256,8 +256,17 @@ class DataManager:
                 self._prices[symbol] = float(last)
 
     async def _handle_book(self, data: dict):
-        """Handle orderbook message."""
+        """
+        Handle orderbook message.
+
+        Kraken sends two types of book messages:
+        - 'snapshot': Full orderbook state - replace entirely
+        - 'update': Incremental changes - apply to existing orderbook
+          - qty=0 means remove that price level
+          - qty>0 means add/update that price level
+        """
         book_data = data.get('data', [])
+        msg_type = data.get('type', 'update')  # 'snapshot' or 'update'
 
         for book in book_data:
             symbol = book.get('symbol', '')
@@ -267,34 +276,76 @@ class DataManager:
             bids = book.get('bids', [])
             asks = book.get('asks', [])
 
-            # Parse orderbook
-            parsed_bids = []
-            parsed_asks = []
+            if msg_type == 'snapshot':
+                # Snapshot: Replace entire orderbook
+                parsed_bids = []
+                parsed_asks = []
 
-            for bid in bids:
-                price = float(bid.get('price', 0))
-                qty = float(bid.get('qty', 0))
-                if price > 0 and qty > 0:
-                    parsed_bids.append((price, qty))
+                for bid in bids:
+                    price = float(bid.get('price', 0))
+                    qty = float(bid.get('qty', 0))
+                    if price > 0 and qty > 0:
+                        parsed_bids.append((price, qty))
 
-            for ask in asks:
-                price = float(ask.get('price', 0))
-                qty = float(ask.get('qty', 0))
-                if price > 0 and qty > 0:
-                    parsed_asks.append((price, qty))
+                for ask in asks:
+                    price = float(ask.get('price', 0))
+                    qty = float(ask.get('qty', 0))
+                    if price > 0 and qty > 0:
+                        parsed_asks.append((price, qty))
 
-            # Sort bids descending, asks ascending
-            parsed_bids.sort(key=lambda x: x[0], reverse=True)
-            parsed_asks.sort(key=lambda x: x[0])
+                # Sort bids descending, asks ascending
+                parsed_bids.sort(key=lambda x: x[0], reverse=True)
+                parsed_asks.sort(key=lambda x: x[0])
 
-            self._orderbooks[symbol] = {
-                'bids': parsed_bids[:10],
-                'asks': parsed_asks[:10]
-            }
+                self._orderbooks[symbol] = {
+                    'bids': parsed_bids[:10],
+                    'asks': parsed_asks[:10]
+                }
+            else:
+                # Update: Apply incremental changes to existing orderbook
+                # Initialize if not exists
+                if symbol not in self._orderbooks:
+                    self._orderbooks[symbol] = {'bids': [], 'asks': []}
+
+                # Convert existing to dict for fast lookup
+                bid_dict = {price: qty for price, qty in self._orderbooks[symbol].get('bids', [])}
+                ask_dict = {price: qty for price, qty in self._orderbooks[symbol].get('asks', [])}
+
+                # Apply bid updates
+                for bid in bids:
+                    price = float(bid.get('price', 0))
+                    qty = float(bid.get('qty', 0))
+                    if price > 0:
+                        if qty > 0:
+                            bid_dict[price] = qty  # Add/update
+                        elif price in bid_dict:
+                            del bid_dict[price]  # Remove (qty=0)
+
+                # Apply ask updates
+                for ask in asks:
+                    price = float(ask.get('price', 0))
+                    qty = float(ask.get('qty', 0))
+                    if price > 0:
+                        if qty > 0:
+                            ask_dict[price] = qty  # Add/update
+                        elif price in ask_dict:
+                            del ask_dict[price]  # Remove (qty=0)
+
+                # Convert back to sorted lists and store top 10
+                parsed_bids = sorted(bid_dict.items(), key=lambda x: x[0], reverse=True)[:10]
+                parsed_asks = sorted(ask_dict.items(), key=lambda x: x[0])[:10]
+
+                self._orderbooks[symbol] = {
+                    'bids': parsed_bids,
+                    'asks': parsed_asks
+                }
 
             # Update price from orderbook mid
-            if parsed_bids and parsed_asks:
-                mid = (parsed_bids[0][0] + parsed_asks[0][0]) / 2
+            ob = self._orderbooks.get(symbol, {})
+            ob_bids = ob.get('bids', [])
+            ob_asks = ob.get('asks', [])
+            if ob_bids and ob_asks:
+                mid = (ob_bids[0][0] + ob_asks[0][0]) / 2
                 self._prices[symbol] = mid
 
     async def _handle_ohlc(self, data: dict):

@@ -153,7 +153,7 @@ Include:
 ### Files
   - **Strategy:** `ws_paper_tester/strategies/whale_sentiment/`
   - **Docs:** `ws_paper_tester/docs/development/features/whale_sentiment/`
-  - **Review: `ws_paper_tester/docs/development/review/whale_sentiment/deep-review-v1.0.md`
+  - **Review: `ws_paper_tester/docs/development/review/whale_sentiment/deep-review-v3.0.md`
 - **Guide:** `ws_paper_tester/docs/development/strategy-development-guide.md`
 ### Instructions
 1. Read the review document - identify all recommendations (REC-XXX)
