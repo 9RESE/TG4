@@ -1,18 +1,52 @@
 """
-Momentum Scalping Strategy v2.0.0
+Momentum Scalping Strategy v2.1.0
 
 Trades based on RSI, MACD, and EMA momentum indicators on 1-minute timeframes.
 Targets quick momentum bursts with strict risk management.
 
 Based on research from master-plan-v1.0.md:
-- RSI period 7 for fast momentum detection
+- RSI period 7-8 for fast momentum detection (8 for XRP per REC-003)
 - MACD settings (6, 13, 5) optimized for 1-minute scalping
 - EMA 8/21/50 ribbon for trend direction
 - Volume spike confirmation
+- Trade flow confirmation (REC-007)
+- ATR-based trailing stops (REC-005)
 - 2:1 risk-reward ratio
 - Maximum 3-minute hold time
 
 Version History:
+- 2.1.0: Deep Review v2.0 Implementation
+         - REC-001 (P0/CRITICAL): Raised XRP/BTC pause threshold
+           - Config: correlation_pause_threshold raised from 0.50 to 0.60
+           - Config: correlation_warn_threshold raised from 0.55 to 0.60
+           - Pauses XRP/BTC trading until correlation stabilizes
+         - REC-002 (P1/HIGH): Raised ADX threshold for BTC
+           - Config: adx_strong_trend_threshold raised from 25 to 30
+           - More conservative filtering of strong trending markets
+         - REC-003 (P1/HIGH): Changed RSI period for XRP/USDT
+           - Config: XRP/USDT rsi_period changed from 7 to 8
+           - Reduces noise while maintaining responsiveness
+         - REC-005 (P2/MEDIUM): Implemented ATR-based trailing stops
+           - New: check_trailing_stop_exit() in exits.py
+           - Config: use_trailing_stop, trail_atr_mult, trail_activation_pct
+           - Trails at highest - (ATR * multiplier) after activation
+         - REC-006 (P2/LOW): Documented DST handling
+           - Module docstring in regimes.py with DST configuration guide
+           - Session boundaries are configurable for DST adjustments
+         - REC-007 (P2/MEDIUM): Trade flow confirmation
+           - Uses data.get_trade_imbalance() for entry confirmation
+           - New: TRADE_FLOW_MISALIGNMENT rejection reason
+           - Config: use_trade_flow_confirmation, trade_imbalance_threshold
+         - REC-008 (P2/LOW): Increased correlation lookback
+           - Config: correlation_lookback increased from 50 to 100 (~8.3 hours)
+           - More stable correlation readings
+         - REC-009 (P3/LOW): Breakeven momentum exit option
+           - Config: exit_breakeven_on_momentum_exhaustion (default: False)
+           - Optional exit near breakeven on RSI extreme
+         - REC-010 (P3/LOW): Structured logging
+           - Uses Python logging module instead of print statements
+           - Compatible with log aggregation tools
+
 - 2.0.0: Deep Review v1.0 Implementation
          - REC-001 (CRITICAL): XRP/BTC correlation monitoring with pause thresholds
            - New: calculate_correlation() for XRP-BTC correlation calculation
@@ -118,6 +152,8 @@ from .exits import (
     check_momentum_exhaustion_exit,
     check_ema_cross_exit,
     check_all_exits,
+    # v2.1.0 additions
+    check_trailing_stop_exit,
 )
 
 from .signal import (
@@ -190,6 +226,8 @@ __all__ = [
     'check_momentum_exhaustion_exit',
     'check_ema_cross_exit',
     'check_all_exits',
+    # v2.1.0 exit additions
+    'check_trailing_stop_exit',
     # Signal helpers
     'initialize_state',
     'track_rejection',

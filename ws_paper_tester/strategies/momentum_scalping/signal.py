@@ -35,6 +35,8 @@ from .indicators import (
     calculate_volatility, check_ema_alignment, check_momentum_signal,
     # REC-002 (v2.0.0): 5m trend filter
     check_5m_trend_alignment,
+    # REC-005 (v2.1.0): ATR for trailing stops
+    calculate_atr,
 )
 from .regimes import (
     classify_volatility_regime, get_regime_adjustments,
@@ -288,6 +290,15 @@ def _evaluate_symbol(
     volume_ratio = calculate_volume_ratio(volumes, volume_lookback)
     volume_threshold = get_symbol_config(symbol, config, 'volume_spike_threshold') or config.get('volume_spike_threshold', 1.5)
 
+    # REC-005 (v2.1.0): Calculate ATR for trailing stops
+    atr = calculate_atr(candles_1m, period=14)
+
+    # REC-007 (v2.1.0): Calculate trade imbalance for flow confirmation
+    trade_imbalance = None
+    if config.get('use_trade_flow_confirmation', True):
+        trade_imbalance = data.get_trade_imbalance(symbol, n_trades=50)
+        state['indicators']['trade_imbalance'] = round(trade_imbalance, 3) if trade_imbalance else None
+
     # ==========================================================================
     # REC-004 (v2.0.0): Regime-Based RSI Adjustment
     # Widen RSI bands during HIGH volatility regime to account for crypto's
@@ -368,10 +379,13 @@ def _evaluate_symbol(
         'position_size_symbol': round(state.get('position_by_symbol', {}).get(symbol, 0), 2),
         'consecutive_losses': state.get('consecutive_losses', 0),
         'pnl_symbol': round(state.get('pnl_by_symbol', {}).get(symbol, 0), 4),
+        # REC-005 (v2.1.0): ATR for trailing stops
+        'atr': round(atr, 8) if atr else None,
     }
 
     # ==========================================================================
     # Check Exits First (For Existing Positions)
+    # REC-005 (v2.1.0): Pass ATR for trailing stop check
     # ==========================================================================
     exit_signal = check_all_exits(
         state=state,
@@ -380,7 +394,8 @@ def _evaluate_symbol(
         current_time=current_time,
         rsi=rsi,
         ema_fast=ema_fast,
-        config=config
+        config=config,
+        atr=atr
     )
 
     if exit_signal:
@@ -491,8 +506,41 @@ def _evaluate_symbol(
                 state['indicators']['status'] = 'volume_not_confirmed_long'
                 if track_rejections:
                     track_rejection(state, RejectionReason.VOLUME_NOT_CONFIRMED, symbol)
+            # REC-007 (v2.1.0): Trade flow confirmation - require positive imbalance for longs
+            elif config.get('use_trade_flow_confirmation', True):
+                imbalance_threshold = config.get('trade_imbalance_threshold', 0.1)
+                if trade_imbalance is not None and trade_imbalance < imbalance_threshold:
+                    state['indicators']['status'] = 'trade_flow_misalignment_long'
+                    if track_rejections:
+                        track_rejection(state, RejectionReason.TRADE_FLOW_MISALIGNMENT, symbol)
+                else:
+                    # Check correlation limits
+                    can_enter, final_size = check_correlation_exposure(
+                        state, symbol, 'buy', available_size, config
+                    )
+
+                    if not can_enter:
+                        state['indicators']['status'] = 'correlation_limit'
+                        if track_rejections:
+                            track_rejection(state, RejectionReason.CORRELATION_LIMIT, symbol)
+                    else:
+                        reasons = ', '.join(momentum_signal['reasons'][:2])
+                        signal = Signal(
+                            action='buy',
+                            symbol=symbol,
+                            size=final_size,
+                            price=current_price,
+                            reason=f"MS: Long ({reasons}, vol={volume_ratio:.1f}x, {regime.name})",
+                            stop_loss=current_price * (1 - sl_pct / 100),
+                            take_profit=current_price * (1 + tp_pct / 100),
+                            metadata={
+                                'entry_type': 'momentum_long',
+                                'rsi': rsi,
+                                'signal_strength': momentum_signal['signal_strength'],
+                            }
+                        )
             else:
-                # Check correlation limits
+                # Trade flow confirmation disabled - check correlation limits directly
                 can_enter, final_size = check_correlation_exposure(
                     state, symbol, 'buy', available_size, config
                 )
@@ -540,8 +588,41 @@ def _evaluate_symbol(
                 state['indicators']['status'] = 'volume_not_confirmed_short'
                 if track_rejections:
                     track_rejection(state, RejectionReason.VOLUME_NOT_CONFIRMED, symbol)
+            # REC-007 (v2.1.0): Trade flow confirmation - require negative imbalance for shorts
+            elif config.get('use_trade_flow_confirmation', True):
+                imbalance_threshold = config.get('trade_imbalance_threshold', 0.1)
+                if trade_imbalance is not None and trade_imbalance > -imbalance_threshold:
+                    state['indicators']['status'] = 'trade_flow_misalignment_short'
+                    if track_rejections:
+                        track_rejection(state, RejectionReason.TRADE_FLOW_MISALIGNMENT, symbol)
+                else:
+                    # Check correlation limits
+                    can_enter, final_size = check_correlation_exposure(
+                        state, symbol, 'short', available_size, config
+                    )
+
+                    if not can_enter:
+                        state['indicators']['status'] = 'correlation_limit'
+                        if track_rejections:
+                            track_rejection(state, RejectionReason.CORRELATION_LIMIT, symbol)
+                    else:
+                        reasons = ', '.join(momentum_signal['reasons'][:2])
+                        signal = Signal(
+                            action='short',
+                            symbol=symbol,
+                            size=final_size,
+                            price=current_price,
+                            reason=f"MS: Short ({reasons}, vol={volume_ratio:.1f}x, {regime.name})",
+                            stop_loss=current_price * (1 + sl_pct / 100),
+                            take_profit=current_price * (1 - tp_pct / 100),
+                            metadata={
+                                'entry_type': 'momentum_short',
+                                'rsi': rsi,
+                                'signal_strength': momentum_signal['signal_strength'],
+                            }
+                        )
             else:
-                # Check correlation limits
+                # Trade flow confirmation disabled - check correlation limits directly
                 can_enter, final_size = check_correlation_exposure(
                     state, symbol, 'short', available_size, config
                 )

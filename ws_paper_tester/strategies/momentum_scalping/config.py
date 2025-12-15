@@ -12,7 +12,7 @@ from typing import Dict, Any
 # Strategy Metadata
 # =============================================================================
 STRATEGY_NAME = "momentum_scalping"
-STRATEGY_VERSION = "2.0.0"
+STRATEGY_VERSION = "2.1.0"
 SYMBOLS = ["XRP/USDT", "BTC/USDT", "XRP/BTC"]
 
 
@@ -60,6 +60,8 @@ class RejectionReason(Enum):
     TIMEFRAME_MISALIGNMENT = "timeframe_misalignment"
     # REC-003 (v2.0.0): ADX strong trend filter for BTC
     ADX_STRONG_TREND = "adx_strong_trend"
+    # REC-007 (v2.1.0): Trade flow misalignment
+    TRADE_FLOW_MISALIGNMENT = "trade_flow_misalignment"
 
 
 class MomentumDirection(Enum):
@@ -191,24 +193,27 @@ CONFIG: Dict[str, Any] = {
     '5m_ema_period': 50,            # REC-002: EMA period for 5m trend filter
 
     # ==========================================================================
-    # XRP/BTC Correlation Monitoring (REC-001 v2.0.0)
+    # XRP/BTC Correlation Monitoring (REC-001 v2.0.0, v2.1.0)
     # Deep Review v1.0: XRP-BTC correlation has declined from 0.85 to 0.40-0.67
     # Momentum signals on XRP/BTC are unreliable when correlation is low
+    # REC-001 v2.1.0: Raised pause threshold from 0.50 to 0.60
+    # REC-008 v2.1.0: Increased lookback from 50 to 100 (~8.3 hours)
     # ==========================================================================
     'use_correlation_monitoring': True,         # Enable correlation monitoring
-    'correlation_lookback': 50,                 # Candles for correlation calculation
-    'correlation_warn_threshold': 0.55,         # Warn when correlation drops below
-    'correlation_pause_threshold': 0.50,        # Pause XRP/BTC when below this
+    'correlation_lookback': 100,                # REC-008: Candles for correlation (was 50)
+    'correlation_warn_threshold': 0.60,         # Warn when correlation drops below
+    'correlation_pause_threshold': 0.60,        # REC-001: Pause XRP/BTC (was 0.50)
     'correlation_pause_enabled': True,          # Enable auto-pause for XRP/BTC
 
     # ==========================================================================
-    # ADX Trend Strength Filter (REC-003 v2.0.0)
+    # ADX Trend Strength Filter (REC-003 v2.0.0, REC-002 v2.1.0)
     # Deep Review v1.0: BTC exhibits strong trending behavior at price extremes
-    # ADX > 25 indicates strong trend where momentum scalping may fail
+    # REC-002 v2.1.0: Raised threshold from 25 to 30 for BTC
+    # ADX > 30 indicates strong trend where momentum scalping may fail
     # ==========================================================================
     'use_adx_filter': True,                     # Enable ADX filtering for BTC
     'adx_period': 14,                           # ADX calculation period
-    'adx_strong_trend_threshold': 25,           # Strong trend threshold
+    'adx_strong_trend_threshold': 30,           # REC-002: Strong trend threshold (was 25)
     'adx_filter_btc_only': True,                # Only apply ADX filter to BTC/USDT
 
     # ==========================================================================
@@ -218,6 +223,30 @@ CONFIG: Dict[str, Any] = {
     # ==========================================================================
     'regime_high_rsi_overbought': 75,           # RSI overbought in HIGH regime
     'regime_high_rsi_oversold': 25,             # RSI oversold in HIGH regime
+
+    # ==========================================================================
+    # ATR-Based Trailing Stop (REC-005 v2.1.0)
+    # Trail stop at entry + (profit / 2) once activation threshold achieved
+    # ==========================================================================
+    'use_trailing_stop': True,                  # REC-005: Enable trailing stops
+    'trail_atr_mult': 1.5,                      # ATR multiplier for trail distance
+    'trail_activation_pct': 0.4,                # Activate after 0.4% profit
+
+    # ==========================================================================
+    # Trade Flow Confirmation (REC-007 v2.1.0)
+    # Confirm entry signals with trade imbalance direction
+    # Long entries require positive imbalance, short entries negative
+    # ==========================================================================
+    'use_trade_flow_confirmation': True,        # REC-007: Enable trade flow filter
+    'trade_imbalance_threshold': 0.1,           # Require >10% imbalance for entry
+
+    # ==========================================================================
+    # Breakeven Momentum Exit (REC-009 v2.1.0)
+    # Allow exit on momentum exhaustion even near breakeven
+    # Default: Off (exits only when profitable)
+    # ==========================================================================
+    'exit_breakeven_on_momentum_exhaustion': False,  # REC-009: Off by default
+    'breakeven_tolerance_pct': 0.1,             # Within 0.1% of breakeven
 }
 
 
@@ -230,12 +259,13 @@ SYMBOL_CONFIGS: Dict[str, Dict[str, Any]] = {
     # XRP/USDT Configuration
     # Research: High liquidity, 5.1% intraday volatility, 0.15% spread
     # Suitability: HIGH
+    # REC-003 v2.1.0: Raised RSI period from 7 to 8 for reduced noise
     # ==========================================================================
     'XRP/USDT': {
         'ema_fast_period': 8,
         'ema_slow_period': 21,
         'ema_filter_period': 50,
-        'rsi_period': 7,
+        'rsi_period': 8,            # REC-003: Was 7, raised to reduce noise
         'position_size_usd': 25.0,
         'take_profit_pct': 0.8,     # Account for 0.15% spread
         'stop_loss_pct': 0.4,       # 2:1 R:R ratio

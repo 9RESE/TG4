@@ -2,12 +2,18 @@
 Momentum Scalping Strategy - Lifecycle Callbacks
 
 Contains on_start, on_fill, and on_stop callbacks for strategy lifecycle management.
+
+REC-010 (v2.1.0): Structured logging using Python logging module.
 """
+import logging
 from datetime import datetime
 from typing import Dict, Any
 
-from .config import STRATEGY_VERSION
+from .config import STRATEGY_NAME, STRATEGY_VERSION
 from .validation import validate_config
+
+# REC-010 (v2.1.0): Configure structured logger
+logger = logging.getLogger(STRATEGY_NAME)
 
 
 def initialize_state(state: Dict[str, Any]) -> None:
@@ -41,12 +47,14 @@ def on_start(config: Dict[str, Any], state: Dict[str, Any]) -> None:
     Initialize strategy state on startup.
 
     Called once when the strategy is loaded.
+    REC-010 (v2.1.0): Uses structured logging.
     """
     # Validate configuration
     errors = validate_config(config)
     if errors:
         for error in errors:
-            print(f"[momentum_scalping] Config warning: {error}")
+            # REC-010: Use structured logging instead of print
+            logger.warning("Config warning", extra={'warning': error})
         state['config_warnings'] = errors
     state['config_validated'] = True
 
@@ -56,24 +64,47 @@ def on_start(config: Dict[str, Any], state: Dict[str, Any]) -> None:
     # Store circuit breaker config for on_fill access
     state['max_consecutive_losses'] = config.get('max_consecutive_losses', 3)
 
-    print(f"[momentum_scalping] v{STRATEGY_VERSION} started")
-    print(f"[momentum_scalping] Features: "
-          f"Regimes={config.get('use_volatility_regimes', True)}, "
-          f"Sessions={config.get('use_session_awareness', True)}, "
-          f"Correlation={config.get('use_correlation_management', True)}, "
-          f"5m_Filter={config.get('use_5m_trend_filter', True)}, "
-          f"MACD_Confirm={config.get('use_macd_confirmation', True)}")
+    # REC-010 (v2.1.0): Structured logging for startup
+    logger.info(f"v{STRATEGY_VERSION} started", extra={
+        'version': STRATEGY_VERSION,
+        'features': {
+            'regimes': config.get('use_volatility_regimes', True),
+            'sessions': config.get('use_session_awareness', True),
+            'correlation': config.get('use_correlation_management', True),
+            '5m_filter': config.get('use_5m_trend_filter', True),
+            'macd_confirm': config.get('use_macd_confirmation', True),
+        }
+    })
+
     # v2.0.0 features
-    print(f"[momentum_scalping] v2.0 Features: "
-          f"CorrelationPause={config.get('correlation_pause_enabled', True)}, "
-          f"ADXFilter={config.get('use_adx_filter', True)}, "
-          f"RegimeRSI={config.get('regime_high_rsi_overbought', 75)}/{config.get('regime_high_rsi_oversold', 25)}")
+    logger.info("v2.0 features enabled", extra={
+        'correlation_pause': config.get('correlation_pause_enabled', True),
+        'adx_filter': config.get('use_adx_filter', True),
+        'regime_rsi_overbought': config.get('regime_high_rsi_overbought', 75),
+        'regime_rsi_oversold': config.get('regime_high_rsi_oversold', 25),
+    })
+
+    # v2.1.0 features
+    logger.info("v2.1 features enabled", extra={
+        'trailing_stop': config.get('use_trailing_stop', True),
+        'trail_atr_mult': config.get('trail_atr_mult', 1.5),
+        'trade_flow_confirm': config.get('use_trade_flow_confirmation', True),
+        'imbalance_threshold': config.get('trade_imbalance_threshold', 0.1),
+        'breakeven_exit': config.get('exit_breakeven_on_momentum_exhaustion', False),
+    })
+
     if config.get('correlation_pause_enabled', True):
-        print(f"[momentum_scalping] Correlation: warn<{config.get('correlation_warn_threshold', 0.55)}, "
-              f"pause<{config.get('correlation_pause_threshold', 0.50)}")
+        logger.info("Correlation monitoring active", extra={
+            'warn_threshold': config.get('correlation_warn_threshold', 0.60),
+            'pause_threshold': config.get('correlation_pause_threshold', 0.60),
+            'lookback': config.get('correlation_lookback', 100),
+        })
+
     if config.get('use_adx_filter', True):
-        print(f"[momentum_scalping] ADX: threshold>{config.get('adx_strong_trend_threshold', 25)} "
-              f"(BTC only={config.get('adx_filter_btc_only', True)})")
+        logger.info("ADX filter active", extra={
+            'threshold': config.get('adx_strong_trend_threshold', 30),
+            'btc_only': config.get('adx_filter_btc_only', True),
+        })
 
 
 def on_fill(fill: Dict[str, Any], state: Dict[str, Any]) -> None:
@@ -203,6 +234,8 @@ def on_fill(fill: Dict[str, Any], state: Dict[str, Any]) -> None:
 def on_stop(state: Dict[str, Any]) -> None:
     """
     Called when strategy stops. Log summary statistics.
+
+    REC-010 (v2.1.0): Uses structured logging.
     """
     final_position = state.get('position_size', 0)
     final_side = state.get('position_side')
@@ -240,11 +273,20 @@ def on_stop(state: Dict[str, Any]) -> None:
         'total_rejections': total_rejections,
     }
 
-    print(f"[momentum_scalping] Stopped. PnL: ${total_pnl:.2f}, "
-          f"Trades: {total_trades}, Win Rate: {win_rate:.1f}%")
+    # REC-010 (v2.1.0): Structured logging for shutdown
+    logger.info("Strategy stopped", extra={
+        'pnl': total_pnl,
+        'trades': total_trades,
+        'win_rate': win_rate,
+        'wins': total_wins,
+        'losses': total_losses,
+        'final_position': final_position,
+        'final_side': final_side,
+    })
 
-    # Print rejection summary
+    # Log rejection summary
     if rejection_counts:
-        print(f"[momentum_scalping] Signal rejections ({total_rejections} total):")
-        for reason, count in sorted(rejection_counts.items(), key=lambda x: -x[1])[:5]:
-            print(f"[momentum_scalping]   - {reason}: {count}")
+        logger.info("Signal rejections summary", extra={
+            'total_rejections': total_rejections,
+            'top_rejections': dict(sorted(rejection_counts.items(), key=lambda x: -x[1])[:5]),
+        })

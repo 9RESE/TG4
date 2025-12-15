@@ -3,6 +3,50 @@ Momentum Scalping Strategy - Regime and Session Classification
 
 Contains volatility regime classification and trading session awareness logic.
 Based on research from master-plan-v1.0.md.
+
+REC-006 (v2.1.0): Session Boundaries and DST Handling
+=====================================================
+
+Session boundaries are defined in UTC and are CONFIGURABLE via the
+'session_boundaries' config option. This allows adjustment for Daylight
+Saving Time (DST) transitions without code changes.
+
+Standard Time (Winter) - Default Boundaries:
+- ASIA:             00:00 - 08:00 UTC
+- EUROPE:           08:00 - 14:00 UTC
+- US_EUROPE_OVERLAP: 14:00 - 17:00 UTC (peak liquidity)
+- US:               17:00 - 21:00 UTC
+- OFF_HOURS:        21:00 - 24:00 UTC (thin liquidity)
+
+Daylight Saving Time (Summer) Adjustments:
+When DST is active (typically March-November in US, March-October in Europe):
+- US markets open/close 1 hour earlier in UTC
+- European markets open/close 1 hour earlier in UTC
+- US/Europe overlap shifts by 1 hour
+
+To configure for DST, update 'session_boundaries' in config:
+
+    # Summer (DST Active)
+    'session_boundaries': {
+        'asia_start': 0,
+        'asia_end': 8,
+        'europe_start': 7,      # Was 8, shifted -1 hour
+        'europe_end': 13,       # Was 14, shifted -1 hour
+        'overlap_start': 13,    # Was 14, shifted -1 hour
+        'overlap_end': 16,      # Was 17, shifted -1 hour
+        'us_start': 16,         # Was 17, shifted -1 hour
+        'us_end': 20,           # Was 21, shifted -1 hour
+        'off_hours_start': 20,  # Was 21, shifted -1 hour
+        'off_hours_end': 24,
+    }
+
+DST Transition Dates (approximate):
+- US: Second Sunday in March → First Sunday in November
+- Europe: Last Sunday in March → Last Sunday in October
+
+IMPORTANT: Session boundaries only need adjustment when your target markets
+observe DST. Crypto markets are 24/7, but liquidity still follows traditional
+market hours.
 """
 from datetime import datetime
 from typing import Dict, Any

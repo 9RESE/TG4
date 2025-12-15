@@ -108,7 +108,7 @@ Include:
 ## Task: Implement Review Findings for momentum_scalping Strategy
 ### Files
 - **Strategy:** `ws_paper_tester/strategies/momentum_scalping/`
-- **Review:** `ws_paper_tester/docs/development/review/momentum_scalping/deep-review-v1.0.md`
+- **Review:** `ws_paper_tester/docs/development/review/momentum_scalping/README.md`
 - **Guide:** `ws_paper_tester/docs/development/strategy-development-guide.md`
 ### Instructions
 1. Read the review document - identify all recommendations (REC-XXX)
@@ -125,6 +125,7 @@ Include:
 5. Update STRATEGY_VERSION (semver)
 ### Acceptance Criteria
 - All CRITICAL/HIGH, MEDIUM,and LOW findings addressed or justified
+- ALL Recommendations implemented or explained why not
 - All existing tests pass
 - Indicators populated on all code paths
 - R:R ratio >= 1:1 maintained
@@ -157,12 +158,22 @@ Provide:
 - Pairs: XRP/USDT, BTC/USDT, XRP/BTC
 - Key concepts: Avellaneda-Stoikov, inventory skew, micro-price
 - Watch for: minimum spread > 0.2% (fees), stale inventory decay
-## Momentum Scalping (v2.0.0 - 2025-12-14)
+## Momentum Scalping (v2.1.0 - 2025-12-14)
 - Pairs: XRP/USDT, BTC/USDT, XRP/BTC
-- Key concepts: RSI 7, MACD (6,13,5), EMA 8/21/50 ribbon, volume spikes
+- Key concepts: RSI 7-8, MACD (6,13,5), EMA 8/21/50 ribbon, volume spikes
 - v2.0 additions:
   - REC-001: XRP/BTC correlation pause (threshold 0.50)
   - REC-002: 5m trend filter (50 EMA alignment)
   - REC-003: ADX filter for BTC (threshold 25)
   - REC-004: Regime-based RSI bands (75/25 in HIGH vol)
-- Watch for: correlation breakdown on XRP/BTC, BTC trending markets (ADX>25)
+- v2.1 additions (Deep Review v2.0 implementation):
+  - REC-001: Raised correlation pause threshold to 0.60 (was 0.50)
+  - REC-002: Raised ADX threshold for BTC to 30 (was 25)
+  - REC-003: Changed RSI period for XRP to 8 (was 7)
+  - REC-005: ATR-based trailing stops (1.5x ATR after 0.4% profit)
+  - REC-006: DST handling documented in regimes.py
+  - REC-007: Trade flow confirmation (imbalance threshold 0.1)
+  - REC-008: Correlation lookback increased to 100 (was 50)
+  - REC-009: Breakeven momentum exit option (disabled by default)
+  - REC-010: Structured logging using Python logging module
+- Watch for: correlation breakdown on XRP/BTC, BTC trending markets (ADX>30)
