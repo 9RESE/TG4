@@ -5,8 +5,12 @@ All data structures are immutable for thread safety and reproducibility.
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, TYPE_CHECKING
 from functools import cached_property
+
+# Type-only import to avoid circular dependency
+if TYPE_CHECKING:
+    from ws_tester.regime.types import RegimeSnapshot
 
 
 @dataclass(frozen=True)
@@ -127,6 +131,9 @@ class DataSnapshot:
 
     # Recent trades
     trades: Dict[str, Tuple[Trade, ...]]  # Last 100 trades per symbol
+
+    # Market regime (optional, populated by RegimeDetector)
+    regime: Optional['RegimeSnapshot'] = None
 
     @cached_property
     def spreads(self) -> Dict[str, float]:

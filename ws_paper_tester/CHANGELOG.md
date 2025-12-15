@@ -5,6 +5,49 @@ All notable changes to the WebSocket Paper Tester will be documented in this fil
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.14.0] - 2025-12-15
+
+### Added
+- **Market Regime Detection System v1.0.0** - Comprehensive Bull/Bear/Sideways detector
+  - New `ws_tester/regime/` module with 6 components:
+    - `RegimeDetector`: Main orchestrator with hysteresis to prevent rapid regime switching
+    - `CompositeScorer`: Weighted indicator scoring (ADX 25%, Chop 20%, MA 20%, RSI 15%, Volume 10%, Sentiment 10%)
+    - `MTFAnalyzer`: Multi-timeframe confluence analysis (1m, 5m, 15m, 1h)
+    - `ExternalDataFetcher`: Fear & Greed Index, BTC Dominance (cached, async)
+    - `ParameterRouter`: Strategy-specific parameter adjustments
+  - 5 market regimes: STRONG_BULL, BULL, SIDEWAYS, BEAR, STRONG_BEAR
+  - 4 volatility states: LOW, MEDIUM, HIGH, EXTREME
+  - 5 trend strength levels: ABSENT, WEAK, EMERGING, STRONG, VERY_STRONG
+  - Pre-configured adjustments for mean_reversion, momentum_scalping, grid_trading, whale_sentiment
+  - `RegimeSnapshot` frozen dataclass with helper methods (`is_favorable_for_mean_reversion()`, `should_reduce_exposure()`)
+
+- **New Indicators for Regime Detection**
+  - `calculate_choppiness()`: Choppiness Index (0-100, >61.8 = choppy, <38.2 = trending)
+  - `calculate_adx_with_di()`: ADX with +DI/-DI returning `ADXResult` NamedTuple
+  - `calculate_ma_alignment()`: MA alignment scoring returning `MAAlignmentResult`
+
+- **DataSnapshot Extension**
+  - Added optional `regime: Optional[RegimeSnapshot]` field for strategy access
+
+- **Comprehensive Test Suite**
+  - `tests/test_regime.py`: 39 tests covering all components
+  - Tests for indicators, composite scoring, MTF analysis, parameter routing, and detector
+
+- **Feature Documentation**
+  - `docs/development/features/regime_detection/regime-detection-v1.0.md`: Complete API reference with architecture diagram
+
+### Changed
+- `ws_tester/indicators/_types.py`: Added `ADXResult` and `MAAlignmentResult` NamedTuples
+- `ws_tester/indicators/__init__.py`: Exports for new indicator functions and types
+- `ws_tester/types.py`: Extended DataSnapshot with TYPE_CHECKING import for regime field
+
+### Technical Details
+- Composite score uses weighted combination of 6 indicator categories
+- Score smoothing via moving average to prevent whipsaw
+- Hysteresis requires confirmation bars (default: 3) and minimum duration (default: 60s)
+- External data cached for 5 minutes with graceful fallback
+- All regime types use frozen dataclasses for thread safety
+
 ## [1.13.1] - 2025-12-15
 
 ### Fixed

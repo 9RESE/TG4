@@ -27,6 +27,8 @@ from ._types import (
     PriceInput,
     BollingerResult,
     ATRResult,
+    ADXResult,
+    MAAlignmentResult,
     TradeFlowResult,
     TrendResult,
     CorrelationTrendResult,
@@ -42,6 +44,8 @@ from .moving_averages import (
     calculate_sma_series,
     calculate_ema,
     calculate_ema_series,
+    calculate_ma_alignment,
+    calculate_ma_alignment_from_data,
 )
 
 # Oscillators
@@ -49,8 +53,18 @@ from .oscillators import (
     calculate_rsi,
     calculate_rsi_series,
     calculate_adx,
+    calculate_adx_with_di,
     calculate_macd,
     calculate_macd_with_history,
+)
+
+# Choppiness (consolidation/trending detection)
+from .choppiness import (
+    calculate_choppiness,
+    calculate_choppiness_series,
+    is_choppy,
+    is_trending_chop,
+    get_choppiness_state,
 )
 
 # Volatility
@@ -94,6 +108,8 @@ __all__ = [
     'PriceInput',
     'BollingerResult',
     'ATRResult',
+    'ADXResult',
+    'MAAlignmentResult',
     'TradeFlowResult',
     'TrendResult',
     'CorrelationTrendResult',
@@ -105,12 +121,21 @@ __all__ = [
     'calculate_sma_series',
     'calculate_ema',
     'calculate_ema_series',
+    'calculate_ma_alignment',
+    'calculate_ma_alignment_from_data',
     # Oscillators
     'calculate_rsi',
     'calculate_rsi_series',
     'calculate_adx',
+    'calculate_adx_with_di',
     'calculate_macd',
     'calculate_macd_with_history',
+    # Choppiness
+    'calculate_choppiness',
+    'calculate_choppiness_series',
+    'is_choppy',
+    'is_trending_chop',
+    'get_choppiness_state',
     # Volatility
     'calculate_volatility',
     'calculate_atr',

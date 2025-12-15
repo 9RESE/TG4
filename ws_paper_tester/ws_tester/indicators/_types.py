@@ -64,6 +64,24 @@ class CorrelationTrendResult(NamedTuple):
     direction: str  # 'declining', 'stable', 'improving'
 
 
+class ADXResult(NamedTuple):
+    """Structured result for ADX calculation with directional indicators."""
+    adx: float
+    plus_di: float
+    minus_di: float
+    trend_strength: str  # 'ABSENT', 'WEAK', 'EMERGING', 'STRONG', 'VERY_STRONG'
+
+
+class MAAlignmentResult(NamedTuple):
+    """Structured result for moving average alignment analysis."""
+    score: float  # -1.0 to +1.0
+    alignment: str  # 'PERFECT_BULL', 'BULL', 'NEUTRAL', 'BEAR', 'PERFECT_BEAR'
+    price_above_sma20: bool
+    price_above_sma50: bool
+    price_above_sma200: bool
+    sma50_above_sma200: bool
+
+
 # =============================================================================
 # HELPER FUNCTIONS
 # =============================================================================

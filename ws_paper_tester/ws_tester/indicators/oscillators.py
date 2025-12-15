@@ -12,7 +12,7 @@ Note: RSI uses Wilder's smoothing method (industry standard) per user decision.
 """
 from typing import List, Dict, Any, Optional
 
-from ._types import PriceInput, extract_closes, extract_hlc
+from ._types import PriceInput, ADXResult, extract_closes, extract_hlc
 from .moving_averages import calculate_ema_series
 
 
@@ -221,6 +221,152 @@ def calculate_adx(data: PriceInput, period: int = 14) -> Optional[float]:
         return None
 
     return adx_values[-1]
+
+
+def calculate_adx_with_di(data: PriceInput, period: int = 14) -> Optional[ADXResult]:
+    """
+    Calculate Average Directional Index with Directional Indicators (+DI/-DI).
+
+    This enhanced version returns the full ADX analysis including:
+    - ADX value (trend strength, 0-100)
+    - +DI (positive directional indicator)
+    - -DI (negative directional indicator)
+    - Trend strength classification
+
+    ADX interpretation:
+    - ADX < 15: Absent trend (ABSENT)
+    - ADX 15-20: Weak trend (WEAK)
+    - ADX 20-25: Emerging trend (EMERGING)
+    - ADX 25-40: Strong trend (STRONG)
+    - ADX > 40: Very strong trend (VERY_STRONG)
+
+    Directional interpretation:
+    - +DI > -DI: Bullish trend direction
+    - -DI > +DI: Bearish trend direction
+
+    Args:
+        data: Must be Candle data with high, low, close attributes
+        period: ADX period (default 14)
+
+    Returns:
+        ADXResult with (adx, plus_di, minus_di, trend_strength) or None if insufficient data
+
+    Example:
+        >>> result = calculate_adx_with_di(candles)
+        >>> if result and result.adx > 25 and result.plus_di > result.minus_di:
+        ...     print("Strong bullish trend")
+    """
+    highs, lows, closes = extract_hlc(data)
+
+    if len(closes) < period * 2:
+        return None
+
+    # Calculate True Range, +DM, -DM
+    true_ranges: List[float] = []
+    plus_dm: List[float] = []
+    minus_dm: List[float] = []
+
+    for i in range(1, len(closes)):
+        high = highs[i]
+        low = lows[i]
+        prev_high = highs[i - 1]
+        prev_low = lows[i - 1]
+        prev_close = closes[i - 1]
+
+        # True Range
+        tr = max(
+            high - low,
+            abs(high - prev_close),
+            abs(low - prev_close)
+        )
+        true_ranges.append(tr)
+
+        # Directional Movement
+        up_move = high - prev_high
+        down_move = prev_low - low
+
+        if up_move > down_move and up_move > 0:
+            plus_dm.append(up_move)
+        else:
+            plus_dm.append(0)
+
+        if down_move > up_move and down_move > 0:
+            minus_dm.append(down_move)
+        else:
+            minus_dm.append(0)
+
+    if len(true_ranges) < period:
+        return None
+
+    # Wilder's smoothing
+    def wilder_smooth(values: List[float], period: int) -> List[float]:
+        if len(values) < period:
+            return []
+        smoothed = [sum(values[:period]) / period]
+        for i in range(period, len(values)):
+            smoothed.append((smoothed[-1] * (period - 1) + values[i]) / period)
+        return smoothed
+
+    atr = wilder_smooth(true_ranges, period)
+    smooth_plus_dm = wilder_smooth(plus_dm, period)
+    smooth_minus_dm = wilder_smooth(minus_dm, period)
+
+    if not atr or not smooth_plus_dm or not smooth_minus_dm:
+        return None
+
+    # Calculate +DI, -DI, and DX series
+    plus_di_series: List[float] = []
+    minus_di_series: List[float] = []
+    dx_values: List[float] = []
+
+    for i in range(len(atr)):
+        if atr[i] == 0:
+            plus_di_series.append(0)
+            minus_di_series.append(0)
+            dx_values.append(0)
+        else:
+            plus_di = 100 * smooth_plus_dm[i] / atr[i]
+            minus_di = 100 * smooth_minus_dm[i] / atr[i]
+            plus_di_series.append(plus_di)
+            minus_di_series.append(minus_di)
+
+            di_sum = plus_di + minus_di
+            if di_sum == 0:
+                dx_values.append(0)
+            else:
+                dx_values.append(100 * abs(plus_di - minus_di) / di_sum)
+
+    if len(dx_values) < period:
+        return None
+
+    # Calculate ADX (smoothed DX)
+    adx_values = wilder_smooth(dx_values, period)
+
+    if not adx_values:
+        return None
+
+    adx = adx_values[-1]
+    plus_di = plus_di_series[-1]
+    minus_di = minus_di_series[-1]
+
+    # Classify trend strength
+    if adx < 15:
+        trend_strength = 'ABSENT'
+    elif adx < 20:
+        trend_strength = 'WEAK'
+    elif adx < 25:
+        trend_strength = 'EMERGING'
+    elif adx < 40:
+        trend_strength = 'STRONG'
+    else:
+        trend_strength = 'VERY_STRONG'
+
+    return ADXResult(
+        adx=adx,
+        plus_di=plus_di,
+        minus_di=minus_di,
+        trend_strength=trend_strength
+    )
 
 
 def calculate_macd(
