@@ -11,6 +11,10 @@ uvicorn>=0.27.0
 numpy>=1.26.0
 pyyaml>=6.0
 
+# Historical Data System (TimescaleDB)
+asyncpg>=0.29.0
+pandas>=2.1.0
+
 # Logging
 python-json-logger>=2.0.0
 

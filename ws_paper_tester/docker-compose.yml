@@ -1,0 +1,90 @@
+version: '3.8'
+
+services:
+  # =============================================
+  # TimescaleDB (PostgreSQL with time-series)
+  # =============================================
+  timescaledb:
+    image: timescale/timescaledb:latest-pg15
+    container_name: kraken_timescaledb
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: trading
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-changeme}
+      POSTGRES_DB: kraken_data
+      TIMESCALEDB_TELEMETRY: "off"
+    volumes:
+      - timescaledb_data:/var/lib/postgresql/data
+      - ./scripts/init-db.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    command: >
+      postgres
+        -c shared_preload_libraries=timescaledb
+        -c timescaledb.max_background_workers=8
+        -c max_parallel_workers_per_gather=4
+        -c max_worker_processes=16
+        -c shared_buffers=2GB
+        -c effective_cache_size=6GB
+        -c maintenance_work_mem=512MB
+        -c work_mem=64MB
+        -c wal_buffers=64MB
+        -c checkpoint_completion_target=0.9
+        -c random_page_cost=1.1
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U trading -d kraken_data"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # =============================================
+  # PgAdmin (Optional - Database Management UI)
+  # =============================================
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: kraken_pgadmin
+    restart: unless-stopped
+    ports:
+      - "5050:80"
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@local.dev
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD:-admin}
+      PGADMIN_CONFIG_SERVER_MODE: "False"
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+    profiles:
+      - tools
+
+  # =============================================
+  # Data Ingester Service (Optional)
+  # =============================================
+  # Uncomment and configure if you want a dedicated ingester container
+  # ingester:
+  #   build:
+  #     context: .
+  #     dockerfile: Dockerfile.ingester
+  #   container_name: kraken_ingester
+  #   restart: unless-stopped
+  #   environment:
+  #     DATABASE_URL: postgresql://trading:${DB_PASSWORD:-changeme}@timescaledb:5432/kraken_data
+  #     KRAKEN_API_KEY: ${KRAKEN_API_KEY:-}
+  #     KRAKEN_API_SECRET: ${KRAKEN_API_SECRET:-}
+  #     SYMBOLS: "XRP/USDT,BTC/USDT,XRP/BTC"
+  #   depends_on:
+  #     timescaledb:
+  #       condition: service_healthy
+  #   profiles:
+  #     - ingester
+
+volumes:
+  timescaledb_data:
+    driver: local
+  pgadmin_data:
+    driver: local
+
+networks:
+  default:
+    name: kraken_network

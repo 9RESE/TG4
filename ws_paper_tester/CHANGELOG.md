@@ -5,6 +5,65 @@ All notable changes to the WebSocket Paper Tester will be documented in this fil
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.15.0] - 2025-12-15
+
+### Added
+- **Historical Data System v1.0.0** - Comprehensive TimescaleDB-based historical data storage
+  - New `data/` module with 7 components:
+    - `types.py`: Data types (HistoricalTrade, HistoricalCandle, DataGap, etc.)
+    - `websocket_db_writer.py`: Real-time WebSocket data persistence with buffering
+    - `historical_provider.py`: Query API for backtesting and strategy warmup
+    - `gap_filler.py`: Automatic gap detection and filling on startup
+    - `bulk_csv_importer.py`: Import Kraken historical CSV files
+    - `historical_backfill.py`: Fetch complete trade history from Kraken API
+  - Database schema with TimescaleDB hypertables:
+    - `trades`: Individual trade ticks (daily partitioning, 7-day compression)
+    - `candles`: OHLCV candles (weekly partitioning, 30-day compression)
+    - `data_sync_status`: Sync state for gap detection and resumption
+    - `external_indicators`: External data (Fear & Greed, BTC Dominance)
+    - `backtest_runs`: Backtest results storage
+  - Continuous aggregates for automatic multi-timeframe rollup:
+    - 5m, 15m, 30m, 1h, 4h, 12h, 1d, 1w candles auto-computed from 1m base
+  - 90%+ compression via TimescaleDB columnar compression
+  - Docker Compose configuration for TimescaleDB deployment
+  - Extended entry point (`main_with_historical.py`) with gap filler integration
+
+- **HistoricalDataProvider API**
+  - `get_candles()`: Query candles in time range with automatic view routing
+  - `get_latest_candles()`: Get N most recent candles for indicator warmup
+  - `replay_candles()`: AsyncIterator for backtesting with speed control
+  - `get_warmup_data()`: Convenience method for strategy indicator warmup
+  - `get_multi_timeframe_candles()`: Aligned MTF data for multi-timeframe analysis
+  - `health_check()`: Provider health and data status
+
+- **GapFiller System**
+  - Runs on startup before WebSocket connection
+  - Small gaps (< 12h): Uses OHLC REST API (fast, limited to 720 candles)
+  - Large gaps (>= 12h): Uses Trades REST API (complete, slower)
+  - Parallel gap filling with configurable concurrency
+  - Automatic continuous aggregate refresh after filling
+
+- **Test Suite**
+  - `tests/test_historical_data.py`: 17 unit tests for data types and provider logic
+  - Integration tests (skipped without DATABASE_URL) for provider connectivity
+
+- **Documentation**
+  - `docs/development/features/historical-data-system/historical-data-system-v1.0.md`: Feature documentation
+  - `docs/user/how-to/operate-historical-data.md`: Complete startup and operating guide
+  - `docs/development/plans/historical-data-system/`: Design documents and ADR
+
+### Changed
+- Updated `requirements.txt`: Added asyncpg>=0.29.0, pandas>=2.1.0
+- Updated parent `.gitignore`: Added exception for `ws_paper_tester/data/`
+
+### Technical Details
+- TimescaleDB with PostgreSQL 15 for optimal time-series performance
+- asyncpg for high-performance async database access
+- Buffered writes (100 trades / 5 seconds) to reduce database round-trips
+- COPY protocol for efficient bulk inserts
+- Conflict handling with upsert for candle updates
+- Rate limiting (1.1s delay) for Kraken API compliance
+
 ## [1.14.0] - 2025-12-15
 
 ### Added
