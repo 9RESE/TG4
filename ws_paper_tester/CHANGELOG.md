@@ -5,6 +5,39 @@ All notable changes to the WebSocket Paper Tester will be documented in this fil
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.12.2] - 2025-12-15
+
+### Added
+- **Whale Sentiment strategy v1.4.0** - Deep Review v4.0 Implementation
+  - REC-030: CRITICAL - Fixed undefined `_classify_volatility_regime` function reference in signal metadata
+  - REC-031: Added EXTREME volatility regime (ATR > 6%) with trading pause
+    - New `volatility_extreme_threshold` config parameter (default: 6.0%)
+    - New `EXTREME_VOLATILITY` rejection reason for tracking
+    - `should_pause` flag in volatility adjustments
+  - REC-032: Removed deprecated RSI code per clean code principles
+    - Removed `calculate_rsi` function from indicators.py
+    - Removed RSI config parameters from CONFIG
+    - `detect_rsi_divergence` retained as stub returning 'none'
+  - REC-033: Added scope and limitations documentation section
+    - Strategy scope and intended use documented
+    - Known limitations with mitigations
+    - Conditions where strategy should NOT trade
+
+### Changed
+- **Whale Sentiment strategy** (`strategies/whale_sentiment/`)
+  - Version updated to 1.4.0
+  - Guide v2.0 compliance increased from 89% to 100%
+  - `VolatilityRegime` enum now includes EXTREME
+  - `classify_volatility_regime()` handles EXTREME threshold
+  - `get_volatility_adjustments()` returns `should_pause` flag
+  - `generate_signal()` checks for extreme volatility pause
+  - Updated `__init__.py` exports (removed `calculate_rsi`, added `calculate_atr`)
+
+### Documentation
+- `docs/development/features/whale_sentiment/whale-sentiment-v1.4.md` created
+- `docs/development/review/whale_sentiment/deep-review-v4.0.md` added
+- Version history updated in config.py and __init__.py
+
 ## [1.12.1] - 2025-12-15
 
 ### Fixed

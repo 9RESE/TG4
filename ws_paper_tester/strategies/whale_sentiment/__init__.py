@@ -1,25 +1,27 @@
 """
-Whale Sentiment Strategy v1.2.0
+Whale Sentiment Strategy v1.4.0
 
 Trades based on whale activity proxy (volume spikes) and price deviation
 sentiment indicators using a contrarian approach.
 
-REC-009: Research Foundation (Updated for v1.2.0)
+REC-009: Research Foundation (Updated for v1.4.0)
 Based on academic literature analysis:
 - "The Moby Dick Effect" (Magner & Sanhueza, 2025): Whale contagion effects
 - Philadelphia Federal Reserve (2024): Whale vs retail behavior
 - PMC/NIH (2023): RSI ineffectiveness in crypto markets
-See deep-review-v2.0.md Section 7 for full research references.
+See deep-review-v4.0.md Section 7 for full research references.
 
-Key Features (v1.2.0):
-- Volume spike detection as PRIMARY signal (55% weight per REC-013)
-- Price deviation for sentiment classification (35% weight per REC-013)
-- RSI REMOVED from confidence calculation (academically ineffective per REC-013)
-- Candle data persistence for fast restart recovery (REC-011)
+Key Features (v1.4.0):
+- Volume spike detection as PRIMARY signal (55% weight)
+- Price deviation for sentiment classification (35% weight)
+- RSI code REMOVED per REC-032 (deprecated code cleanup)
+- EXTREME volatility regime with trading pause (REC-031)
+- Candle data persistence for fast restart recovery
 - Contrarian mode: buy fear, sell greed
 - Trade flow confirmation (10% weight)
 - Cross-pair correlation management
 - Session-aware position sizing (UTC validated)
+- Guide v2.0 compliance: 100%
 
 Entry Logic:
 - Long: Fear sentiment (price deviation) + whale accumulation or neutral
@@ -31,23 +33,18 @@ Exit Logic:
 - Trailing stop (optional)
 
 Version History:
+- 1.4.0: Deep Review v4.0 Implementation
+         - REC-030: CRITICAL - Fixed undefined function reference
+         - REC-031: Added EXTREME volatility regime with trading pause
+         - REC-032: Removed deprecated RSI code (calculate_rsi, config settings)
+         - REC-033: Added scope and limitations documentation
+         - Guide v2.0 compliance: 100%
+- 1.3.0: Deep Review v3.0 Implementation
+         - REC-021 to REC-027: RSI removal, volatility regimes, dynamic confidence
 - 1.2.0: Deep Review v2.0 Implementation
-         - REC-011: Candle data persistence for fast restarts
-         - REC-012: Warmup progress indicator (pct, ETA)
-         - REC-013: REMOVED RSI from confidence (volume 55%, price dev 35%, flow 10%)
-         - REC-016: XRP/BTC re-enablement guard with explicit flag
-         - REC-017: UTC timezone validation on startup
-         - REC-018: Trade flow expected indicator for clarity
-         - REC-019: Volume window now per-symbol configurable
-         - REC-020: Extracted magic numbers to config
-         - REC-014/REC-015: Documented for future (volatility regimes, backtesting)
+         - REC-011 to REC-020: Persistence, warmup, RSI removal from confidence
 - 1.1.0: Deep Review v1.0 Implementation
-         - REC-001: Recalibrated confidence weights (volume 40%, RSI 15%)
-         - REC-005: Enhanced indicator logging on all code paths
-         - REC-007: Disabled XRP/BTC by default (liquidity concerns)
-         - REC-008: Reduced short size multiplier to 0.5x (squeeze risk)
-         - REC-009: Updated research documentation references
-         - REC-010: Documented UTC timezone requirement for sessions
+         - REC-001 to REC-010: Initial improvements
 - 1.0.0: Initial implementation
 """
 
@@ -82,7 +79,7 @@ from .validation import validate_config, validate_config_overrides
 from .indicators import (
     calculate_ema,
     calculate_sma,
-    calculate_rsi,
+    calculate_atr,  # REC-023: Volatility regime
     detect_volume_spike,
     classify_whale_signal,
     calculate_fear_greed_proxy,
@@ -91,12 +88,13 @@ from .indicators import (
     is_fear_zone,
     is_greed_zone,
     is_extreme_zone,
-    detect_rsi_divergence,
+    detect_rsi_divergence,  # Stub only - returns 'none' always
     calculate_trade_flow,
     check_trade_flow_confirmation,
     calculate_rolling_correlation,
     calculate_composite_confidence,
     validate_volume_spike,
+    # REC-032: calculate_rsi REMOVED
 )
 
 from .regimes import (
@@ -105,6 +103,14 @@ from .regimes import (
     get_sentiment_regime_adjustments,
     is_contrarian_opportunity,
     should_reduce_size_for_sentiment,
+    # REC-023/REC-031: Volatility regime
+    VolatilityRegime,
+    classify_volatility_regime,
+    get_volatility_adjustments,
+    # REC-025: Extended fear period
+    check_extended_fear_period,
+    # REC-027: Dynamic confidence
+    calculate_dynamic_confidence_threshold,
 )
 
 from .risk import (
@@ -160,6 +166,7 @@ __all__ = [
     'SignalDirection',
     'TradingSession',
     'RejectionReason',
+    'VolatilityRegime',  # REC-031
     # Helpers
     'get_symbol_config',
     # Validation
@@ -168,7 +175,7 @@ __all__ = [
     # Indicators
     'calculate_ema',
     'calculate_sma',
-    'calculate_rsi',
+    'calculate_atr',  # REC-023
     'detect_volume_spike',
     'classify_whale_signal',
     'calculate_fear_greed_proxy',
@@ -177,7 +184,7 @@ __all__ = [
     'is_fear_zone',
     'is_greed_zone',
     'is_extreme_zone',
-    'detect_rsi_divergence',
+    'detect_rsi_divergence',  # Stub only
     'calculate_trade_flow',
     'check_trade_flow_confirmation',
     'calculate_rolling_correlation',
@@ -189,6 +196,10 @@ __all__ = [
     'get_sentiment_regime_adjustments',
     'is_contrarian_opportunity',
     'should_reduce_size_for_sentiment',
+    'classify_volatility_regime',  # REC-023
+    'get_volatility_adjustments',  # REC-023/REC-031
+    'check_extended_fear_period',  # REC-025
+    'calculate_dynamic_confidence_threshold',  # REC-027
     # Risk
     'check_fee_profitability',
     'check_circuit_breaker',

@@ -17,12 +17,14 @@ from .config import TradingSession, SentimentZone
 
 # =============================================================================
 # REC-023: Volatility Regime Classification
+# REC-031: Added EXTREME regime with trading pause (v1.4.0)
 # =============================================================================
 class VolatilityRegime:
     """Volatility regime classifications."""
     LOW = 'low'
     MEDIUM = 'medium'
     HIGH = 'high'
+    EXTREME = 'extreme'  # REC-031: Added for trading pause in extreme conditions
     UNKNOWN = 'unknown'
 
 
@@ -32,22 +34,26 @@ def classify_volatility_regime(
 ) -> str:
     """
     REC-023: Classify volatility regime based on ATR percentage.
+    REC-031: Added EXTREME regime classification (v1.4.0).
 
     Args:
         atr_pct: ATR as percentage of price
         config: Strategy configuration
 
     Returns:
-        Volatility regime string ('low', 'medium', 'high', 'unknown')
+        Volatility regime string ('low', 'medium', 'high', 'extreme', 'unknown')
     """
     if atr_pct is None:
         return VolatilityRegime.UNKNOWN
 
     low_threshold = config.get('volatility_low_threshold', 1.5)
     high_threshold = config.get('volatility_high_threshold', 3.5)
+    extreme_threshold = config.get('volatility_extreme_threshold', 6.0)  # REC-031
 
     if atr_pct < low_threshold:
         return VolatilityRegime.LOW
+    elif atr_pct >= extreme_threshold:
+        return VolatilityRegime.EXTREME  # REC-031: Pause trading in extreme conditions
     elif atr_pct >= high_threshold:
         return VolatilityRegime.HIGH
     else:
@@ -57,24 +63,32 @@ def classify_volatility_regime(
 def get_volatility_adjustments(
     volatility_regime: str,
     config: Dict[str, Any]
-) -> Dict[str, float]:
+) -> Dict[str, Any]:
     """
     REC-023: Get parameter adjustments based on volatility regime.
+    REC-031: Added should_pause flag for EXTREME regime (v1.4.0).
 
     Args:
         volatility_regime: Current volatility regime
         config: Strategy configuration
 
     Returns:
-        Dict with size_mult, stop_mult, cooldown_mult adjustments
+        Dict with size_mult, stop_mult, cooldown_mult, should_pause adjustments
     """
     adjustments = {
         'size_mult': 1.0,
         'stop_mult': 1.0,
         'cooldown_mult': 1.0,
+        'should_pause': False,  # REC-031: Pause trading flag
     }
 
-    if volatility_regime == VolatilityRegime.HIGH:
+    if volatility_regime == VolatilityRegime.EXTREME:
+        # REC-031: Extreme volatility - pause trading entirely
+        adjustments['size_mult'] = 0.0  # No new entries
+        adjustments['stop_mult'] = 2.0  # Very wide stops if position exists
+        adjustments['cooldown_mult'] = 3.0  # Long cooldown
+        adjustments['should_pause'] = True
+    elif volatility_regime == VolatilityRegime.HIGH:
         adjustments['size_mult'] = config.get('volatility_high_size_mult', 0.75)
         adjustments['stop_mult'] = config.get('volatility_high_stop_mult', 1.5)
         adjustments['cooldown_mult'] = config.get('volatility_high_cooldown_mult', 1.5)

@@ -9,8 +9,9 @@ Contains functions for calculating:
 - Composite confidence calculation
 - Rolling correlation
 
-REC-021: RSI COMPLETELY REMOVED from strategy (v1.3.0)
-RSI functions retained but marked deprecated - not called anywhere.
+REC-032: RSI code REMOVED (v1.4.0)
+- calculate_rsi function removed per REC-032 clean code principles
+- detect_rsi_divergence retained as stub for backwards compatibility
 Academic research (PMC/NIH 2023, QuantifiedStrategies 2024) shows RSI
 ineffectiveness in crypto markets.
 
@@ -140,84 +141,6 @@ def calculate_atr(candles, period: int = 14) -> Dict[str, Any]:
     current_price = candles[-1].close
     if current_price > 0:
         result['atr_pct'] = (atr / current_price) * 100
-
-    return result
-
-
-def calculate_rsi(candles, period: int = 14) -> Dict[str, Any]:
-    """
-    DEPRECATED: RSI removed per REC-021 (v1.3.0).
-
-    Academic research shows RSI ineffectiveness in crypto markets.
-    Function retained for backwards compatibility but not called.
-
-    Calculate Relative Strength Index (RSI).
-
-    RSI = 100 - (100 / (1 + RS))
-    RS = Average Gain / Average Loss
-
-    Uses Wilder's smoothing (EMA with period N).
-
-    Args:
-        candles: Tuple/list of candle objects with close prices
-        period: RSI period (default 14)
-
-    Returns:
-        Dict with rsi, avg_gain, avg_loss, and rsi_series
-    """
-    result = {
-        'rsi': None,
-        'prev_rsi': None,
-        'avg_gain': None,
-        'avg_loss': None,
-        'rsi_series': [],
-    }
-
-    if len(candles) < period + 1:
-        return result
-
-    # Calculate price changes
-    closes = [c.close for c in candles]
-    changes = [closes[i] - closes[i - 1] for i in range(1, len(closes))]
-
-    if len(changes) < period:
-        return result
-
-    # Calculate initial average gain and loss
-    gains = [max(0, c) for c in changes[:period]]
-    losses = [abs(min(0, c)) for c in changes[:period]]
-
-    avg_gain = sum(gains) / period
-    avg_loss = sum(losses) / period
-
-    rsi_series = []
-
-    # Calculate RSI using Wilder's smoothing
-    for i in range(period, len(changes)):
-        change = changes[i]
-        current_gain = max(0, change)
-        current_loss = abs(min(0, change))
-
-        # Wilder's smoothing
-        avg_gain = (avg_gain * (period - 1) + current_gain) / period
-        avg_loss = (avg_loss * (period - 1) + current_loss) / period
-
-        if avg_loss == 0:
-            rsi = 100.0
-        else:
-            rs = avg_gain / avg_loss
-            rsi = 100.0 - (100.0 / (1 + rs))
-
-        rsi_series.append(rsi)
-
-    if not rsi_series:
-        return result
-
-    result['rsi'] = rsi_series[-1]
-    result['prev_rsi'] = rsi_series[-2] if len(rsi_series) >= 2 else None
-    result['avg_gain'] = avg_gain
-    result['avg_loss'] = avg_loss
-    result['rsi_series'] = rsi_series
 
     return result
 
@@ -504,71 +427,25 @@ def detect_rsi_divergence(
     lookback: int = 14
 ) -> Dict[str, Any]:
     """
-    DEPRECATED: RSI divergence removed per REC-021 (v1.3.0).
+    REC-032: RSI divergence REMOVED (v1.4.0).
 
-    RSI-based indicators removed from strategy. This function is retained
-    for backwards compatibility but always returns no divergence.
-
-    Detect price/RSI divergence for additional confirmation.
-
-    Bullish divergence: Price lower low + RSI higher low
-    Bearish divergence: Price higher high + RSI lower high
+    RSI-based indicators removed from strategy per REC-021. Function retained
+    as stub for backwards compatibility with signal.py call at line 286.
+    Always returns no divergence.
 
     Args:
-        closes: List of closing prices
-        rsi_series: List of RSI values
-        lookback: Number of candles for comparison
+        closes: List of closing prices (ignored)
+        rsi_series: List of RSI values (ignored)
+        lookback: Number of candles for comparison (ignored)
 
     Returns:
-        Dict with divergence type and details (always 'none' per REC-021)
+        Dict with divergence_type: 'none' (always)
     """
-    # REC-021: RSI divergence removed - always return no divergence
     return {
         'bullish_divergence': False,
         'bearish_divergence': False,
         'divergence_type': 'none',
     }
-
-    # Original implementation below (not executed)
-    result = {
-        'bullish_divergence': False,
-        'bearish_divergence': False,
-        'divergence_type': 'none',
-    }
-
-    min_data = lookback * 2 + 5
-
-    if len(closes) < min_data or len(rsi_series) < min_data:
-        return result
-
-    # Recent vs Prior period comparison
-    recent_close = closes[-lookback:]
-    prior_close = closes[-2 * lookback:-lookback]
-    recent_rsi = rsi_series[-lookback:]
-    prior_rsi = rsi_series[-2 * lookback:-lookback]
-
-    # Find swing points
-    recent_close_min = min(recent_close)
-    recent_close_max = max(recent_close)
-    prior_close_min = min(prior_close)
-    prior_close_max = max(prior_close)
-
-    recent_rsi_min = min(recent_rsi)
-    recent_rsi_max = max(recent_rsi)
-    prior_rsi_min = min(prior_rsi)
-    prior_rsi_max = max(prior_rsi)
-
-    # Bullish divergence: Price lower low, RSI higher low
-    if recent_close_min < prior_close_min and recent_rsi_min > prior_rsi_min:
-        result['bullish_divergence'] = True
-        result['divergence_type'] = 'bullish'
-
-    # Bearish divergence: Price higher high, RSI lower high
-    if recent_close_max > prior_close_max and recent_rsi_max < prior_rsi_max:
-        result['bearish_divergence'] = True
-        result['divergence_type'] = 'bearish'
-
-    return result
 
 
 def calculate_trade_flow(trades, lookback: int = 50) -> Dict[str, Any]:

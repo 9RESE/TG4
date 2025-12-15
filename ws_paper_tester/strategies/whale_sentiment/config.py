@@ -52,6 +52,12 @@ REC-024 (HIGH, High Effort): Backtest Confidence Weights
 ===============================================================================
 
 Version History:
+- 1.4.0: Deep Review v4.0 Implementation
+         - REC-030: CRITICAL - Fixed undefined _classify_volatility_regime function reference
+         - REC-031: Added EXTREME volatility regime (ATR > 6%) with trading pause
+         - REC-032: Removed deprecated RSI code (calculate_rsi, config settings)
+         - REC-033: Added scope and limitations documentation section
+         - Guide v2.0 compliance: 100% (all 9 requirements met)
 - 1.3.0: Deep Review v3.0 Implementation
          - REC-021: COMPLETELY REMOVED RSI from strategy (zones now use price deviation)
          - REC-022: Widened BTC/USDT stop loss from 1.5% to 2.0% (4.0% TP)
@@ -95,7 +101,7 @@ from typing import Dict, Any
 # Strategy Metadata
 # =============================================================================
 STRATEGY_NAME = "whale_sentiment"
-STRATEGY_VERSION = "1.3.0"  # Deep Review v3.0 Implementation
+STRATEGY_VERSION = "1.4.0"  # Deep Review v4.0 Implementation
 # REC-007: XRP/BTC disabled by default due to 7-10x lower liquidity than USD pairs.
 # REC-016: To re-enable, add to SYMBOLS AND set enable_xrpbtc: true in config.
 SYMBOLS = ["XRP/USDT", "BTC/USDT"]
@@ -157,6 +163,7 @@ class RejectionReason(Enum):
     TRADE_FLOW_AGAINST = "trade_flow_against"
     WHALE_SIGNAL_MISMATCH = "whale_signal_mismatch"
     SENTIMENT_ZONE_MISMATCH = "sentiment_zone_mismatch"
+    EXTREME_VOLATILITY = "extreme_volatility"  # REC-031: Trading paused in extreme conditions
 
 
 # =============================================================================
@@ -174,15 +181,10 @@ CONFIG: Dict[str, Any] = {
     'volume_spike_price_move_pct': 0.1, # Min price move with spike (wash trading filter)
 
     # ==========================================================================
-    # RSI Settings - DEPRECATED per REC-021 (v1.3.0)
-    # RSI completely removed from strategy. These settings are retained for
-    # backwards compatibility but are NOT used in signal generation.
+    # REC-032: RSI Settings REMOVED (v1.4.0)
+    # RSI completely removed from strategy per REC-021. Settings removed per
+    # REC-032 clean code principles after transition period.
     # ==========================================================================
-    'rsi_period': 14,                   # DEPRECATED - not used
-    'rsi_extreme_fear': 25,             # DEPRECATED - not used
-    'rsi_fear': 40,                     # DEPRECATED - not used
-    'rsi_greed': 60,                    # DEPRECATED - not used
-    'rsi_extreme_greed': 75,            # DEPRECATED - not used
 
     # ==========================================================================
     # Fear/Greed Price Deviation - PRIMARY SENTIMENT SIGNAL (REC-021)
@@ -364,9 +366,11 @@ CONFIG: Dict[str, Any] = {
     # ==========================================================================
     # REC-023: Volatility Regime Parameters
     # ATR-based adjustments for different market conditions
+    # REC-031: Added EXTREME threshold for trading pause (v1.4.0)
     # ==========================================================================
     'volatility_low_threshold': 1.5,          # ATR% below this = low volatility
     'volatility_high_threshold': 3.5,         # ATR% above this = high volatility
+    'volatility_extreme_threshold': 6.0,      # REC-031: ATR% above this = EXTREME (pause trading)
     'volatility_high_size_mult': 0.75,        # Reduce size in high volatility
     'volatility_high_stop_mult': 1.5,         # Widen stops in high volatility
     'volatility_high_cooldown_mult': 1.5,     # Extend cooldown in high volatility

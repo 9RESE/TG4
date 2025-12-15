@@ -153,7 +153,7 @@ Include:
 ### Files
   - **Strategy:** `ws_paper_tester/strategies/whale_sentiment/`
   - **Docs:** `ws_paper_tester/docs/development/features/whale_sentiment/`
-  - **Review: `ws_paper_tester/docs/development/review/whale_sentiment/deep-review-v3.0.md`
+  - **Review: `ws_paper_tester/docs/development/review/whale_sentiment/deep-review-v4.0.md`
 - **Guide:** `ws_paper_tester/docs/development/strategy-development-guide.md`
 ### Instructions
 1. Read the review document - identify all recommendations (REC-XXX)
@@ -264,33 +264,38 @@ Provide:
   - REC-007: Per-symbol WT parameters
 - Watch for: neutral zone entries (less reliable), zone exit timing
 
-## Whale Sentiment (v1.1.0 - 2025-12-15)
+## Whale Sentiment (v1.4.0 - 2025-12-15)
 - Pairs: XRP/USDT, BTC/USDT (XRP/BTC disabled by default)
-- Key concepts: Volume spike detection (whale proxy), RSI sentiment zones, contrarian mode
+- Key concepts: Volume spike detection (whale proxy), price deviation sentiment, contrarian mode
 - Core logic:
   - Volume spikes >= 2x average detected as whale activity
-  - RSI-based sentiment classification (Extreme Fear/Fear/Neutral/Greed/Extreme Greed)
-  - Price deviation from recent high/low as supplementary signal
+  - Price deviation sentiment classification (RSI REMOVED per REC-021/REC-032)
+  - ATR-based volatility regime classification with EXTREME pause
   - Composite confidence scoring with weighted components
 - Entry (Contrarian mode - default):
   - Long: Fear sentiment + volume spike (buy fear)
   - Short: Greed sentiment + volume spike (sell greed)
 - Exit:
   - Stop loss / Take profit (2.5% SL, 5.0% TP default)
-  - Position decay for aging positions
+  - Sentiment reversal (primary)
 - Config highlights:
-  - weight_volume_spike: 0.40 (primary signal per REC-001)
-  - weight_rsi_sentiment: 0.15 (reduced from 0.25, RSI ineffective in crypto)
-  - weight_price_deviation: 0.20
-  - short_size_multiplier: 0.50 (crypto squeeze risk per REC-008)
+  - weight_volume_spike: 0.55 (primary signal)
+  - weight_price_deviation: 0.35 (primary sentiment - RSI removed)
+  - weight_trade_flow: 0.10 (confirmation)
+  - short_size_multiplier: 0.60 (increased for extreme fear per REC-026)
   - Stricter circuit breaker: 2 losses, 45 min cooldown
   - Session-aware sizing: Asia 0.8x, Off-Hours 0.5x
-- v1.1.0 additions (Deep Review v1.0):
-  - REC-001: Volume weight 40%, RSI weight 15%
-  - REC-003: Trade flow logic clarified for contrarian mode
-  - REC-005: Enhanced indicator logging on all paths
-  - REC-007: XRP/BTC disabled by default (low liquidity)
-  - REC-008: Short multiplier 0.50x (crypto squeeze risk)
-  - REC-010: UTC timezone documented for sessions
-  - Deferred: REC-002 (candle persistence), REC-004 (volatility regime)
-- Watch for: 25+ hour warmup requirement, XRP/BTC liquidity concerns
+- v1.4.0 additions (Deep Review v4.0):
+  - REC-030: CRITICAL - Fixed undefined function reference bug
+  - REC-031: Added EXTREME volatility regime (ATR > 6%) with trading pause
+  - REC-032: Removed deprecated RSI code (calculate_rsi removed)
+  - REC-033: Added scope and limitations documentation
+  - Guide v2.0 compliance: 100%
+- Previous versions: v1.3.0 (REC-021-027), v1.2.0 (REC-011-020), v1.1.0 (REC-001-010)
+- Watch for: 25+ hour warmup requirement, XRP/BTC liquidity concerns, EXTREME volatility pause
+
+
+
+
+- i want to look at the different strategies for redundant logic and data processing. Like does more then one strategy calculate the rsi?
+- is there a algorithm we can make to track the tokens and overall market direction. Like a bear, bull, or flat/sideways detector that the strategies can use in their evals. Maybe a strategy can have different parameters based o the algorithms output to maximize it effectiveness.

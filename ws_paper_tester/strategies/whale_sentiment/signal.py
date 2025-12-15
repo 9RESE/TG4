@@ -354,9 +354,11 @@ def _evaluate_symbol(
         'is_fear': is_fear_zone(sentiment_zone),
         'is_greed': is_greed_zone(sentiment_zone),
         # REC-023: Volatility Regime
+        # REC-031: Added should_pause indicator
         'atr_pct': round(atr_pct, 3) if atr_pct else None,
         'volatility_regime': volatility_regime,
         'volatility_size_mult': round(volatility_adjustments['size_mult'], 2),
+        'volatility_should_pause': volatility_adjustments.get('should_pause', False),
         # REC-025: Extended Fear Period
         'extended_fear_active': extended_fear['is_extended'],
         'hours_in_extreme': round(extended_fear['hours_in_extreme'], 1),
@@ -410,6 +412,16 @@ def _evaluate_symbol(
         state['indicators']['status'] = 'neutral_sentiment'
         if track_rejections:
             track_rejection(state, RejectionReason.NEUTRAL_SENTIMENT, symbol)
+        return None
+
+    # ==========================================================================
+    # REC-031: Extreme Volatility Check
+    # ==========================================================================
+    if volatility_adjustments.get('should_pause', False):
+        state['indicators']['status'] = 'extreme_volatility_paused'
+        state['indicators']['volatility_pause_reason'] = f"ATR {atr_pct:.2f}% exceeds extreme threshold"
+        if track_rejections:
+            track_rejection(state, RejectionReason.EXTREME_VOLATILITY, symbol)
         return None
 
     # ==========================================================================
@@ -611,7 +623,7 @@ def _evaluate_symbol(
                 'trade_flow_imbalance': flow_data.get('imbalance'),
                 'correlation_adjustment': corr_adj,
                 'atr_pct': atr_pct,  # REC-023
-                'volatility_regime': _classify_volatility_regime(atr_pct),  # REC-023
+                'volatility_regime': volatility_regime,  # REC-030: Fixed undefined function reference
             }
         )
     else:  # short
@@ -632,7 +644,7 @@ def _evaluate_symbol(
                 'trade_flow_imbalance': flow_data.get('imbalance'),
                 'correlation_adjustment': corr_adj,
                 'atr_pct': atr_pct,  # REC-023
-                'volatility_regime': _classify_volatility_regime(atr_pct),  # REC-023
+                'volatility_regime': volatility_regime,  # REC-030: Fixed undefined function reference
             }
         )
 
