@@ -12,7 +12,7 @@ Run with: python -m pytest tests/test_regime.py -v
 """
 import pytest
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch, MagicMock
 
 from ws_tester.types import Candle, DataSnapshot, OrderbookSnapshot, Trade
@@ -144,14 +144,16 @@ def generate_sideways_candles(n: int = 250, center_price: float = 2.0) -> tuple:
 def generate_high_volatility_candles(n: int = 250, center_price: float = 2.0) -> tuple:
     """Generate candles for a high volatility market."""
     import random
-    random.seed(42)  # Reproducible
+    # Use local Random instance to avoid affecting global state
+    # This ensures reproducibility even if other tests modify global random
+    rng = random.Random(42)
     candles = []
     base = datetime.now() - timedelta(minutes=n)
     price = center_price
 
     for i in range(n):
         # Large random moves
-        change = (random.random() - 0.5) * 0.04  # +/- 2% moves
+        change = (rng.random() - 0.5) * 0.04  # +/- 2% moves
         price = price * (1 + change)
         high = price * (1 + abs(change) + 0.005)
         low = price * (1 - abs(change) - 0.005)
@@ -163,7 +165,7 @@ def generate_high_volatility_candles(n: int = 250, center_price: float = 2.0) ->
             high=high,
             low=low,
             close=price,
-            volume=2000 + random.randint(0, 1000)
+            volume=2000 + rng.randint(0, 1000)
         ))
 
     return tuple(candles)
@@ -457,7 +459,7 @@ class TestExternalDataFetcher:
                 fear_greed_value=50,
                 fear_greed_classification="Neutral",
                 btc_dominance=55.0,
-                last_updated=datetime.utcnow()
+                last_updated=datetime.now(timezone.utc)
             )
             mock_fetch.return_value = mock_sentiment
 
@@ -480,9 +482,9 @@ class TestExternalDataFetcher:
             fear_greed_value=45,
             fear_greed_classification="Fear",
             btc_dominance=58.0,
-            last_updated=datetime.utcnow()
+            last_updated=datetime.now(timezone.utc)
         )
-        fetcher._cache_time = datetime.utcnow() - timedelta(hours=1)  # Stale
+        fetcher._cache_time = datetime.now(timezone.utc) - timedelta(hours=1)  # Stale
 
         # Mock fetch to raise error
         async def error_fetch():

@@ -14,9 +14,28 @@ Timeframe Hierarchy (weighted):
 Higher timeframes have more weight because they represent
 stronger/more established trends.
 
-Note: Currently DataSnapshot only provides 1m and 5m candles.
-This analyzer works with available timeframes and can be extended
-when more timeframes become available.
+IMPORTANT LIMITATION - Pseudo-Timeframes:
+    Currently DataSnapshot only provides 1m and 5m candles. For 15m and 1h
+    analysis, this module builds "pseudo-timeframes" by aggregating recent
+    1-minute candles. This approach has known limitations:
+
+    1. Pseudo-timeframes are LESS RELIABLE than real aggregated candles
+       because they don't capture true OHLC values for the period.
+
+    2. The 15m pseudo-timeframe looks at the last 15 1-minute candles,
+       which approximates but doesn't equal a real 15-minute candle.
+
+    3. Similarly, the 1h pseudo-timeframe uses the last 60 1-minute candles.
+
+    4. For production systems requiring high accuracy, consider:
+       - Enhancing DataManager to build actual 15m/1h/4h candles
+       - Using exchange APIs that provide multi-timeframe data
+       - Implementing proper OHLC aggregation in the data layer
+
+    The current implementation provides a reasonable approximation for
+    most use cases but should not be relied upon for precise timing decisions.
+
+TODO: Enhance DataManager to provide real aggregated candles for 15m, 1h, 4h.
 """
 from typing import Dict, Optional, Tuple
 
@@ -92,16 +111,19 @@ class MTFAnalyzer:
             regime_5m = self._classify_timeframe(candles_5m)
             per_timeframe['5m'] = regime_5m
 
-        # Note: 15m, 1h, 4h would be added here when available
-        # For now, we can build longer timeframes from 1m data if needed
+        # Build pseudo-timeframes from 1-minute data
+        # WARNING: These are approximations, not true aggregated candles!
+        # See module docstring for limitations and recommendations.
         if candles_1m and len(candles_1m) >= 60:
             # Build pseudo-15m from last 15 1-minute candles
+            # Note: This is less reliable than real 15m candles
             regime_15m = self._classify_from_recent(candles_1m, 15)
             if regime_15m:
                 per_timeframe['15m'] = regime_15m
 
         if candles_1m and len(candles_1m) >= 60:
             # Build pseudo-1h from last 60 1-minute candles
+            # Note: This is less reliable than real 1h candles
             regime_1h = self._classify_from_recent(candles_1m, 60)
             if regime_1h:
                 per_timeframe['1h'] = regime_1h

@@ -66,12 +66,15 @@ def load_config(config_path: str = None) -> Dict[str, Any]:
         print(f"[Config] Error loading config: {e}")
         return {}
 
+import dataclasses
+
 from ws_tester.data_layer import KrakenWSClient, DataManager, SimulatedDataManager
 from ws_tester.strategy_loader import discover_strategies, get_all_symbols
 from ws_tester.executor import PaperExecutor
 from ws_tester.portfolio import PortfolioManager, STARTING_CAPITAL
 from ws_tester.logger import TesterLogger, LogConfig
 from ws_tester.types import DataSnapshot
+from ws_tester.regime import RegimeDetector
 
 
 class WebSocketPaperTester:
@@ -149,7 +152,7 @@ class WebSocketPaperTester:
                 print(f"[Config] Applied overrides to strategy '{strategy_name}': {list(config_updates.keys())}")
 
     def _initialize_components(self):
-        """Initialize portfolio manager, data manager, executor, and stats."""
+        """Initialize portfolio manager, data manager, executor, regime detector, and stats."""
         # Initialize portfolio manager with all strategies and starting assets
         strategy_names = list(self.strategies.keys())
         self.portfolio_manager = PortfolioManager(
@@ -172,6 +175,13 @@ class WebSocketPaperTester:
             max_short_leverage=executor_config.get('max_short_leverage', 2.0),
             slippage_rate=executor_config.get('slippage_rate', 0.0005),
             fee_rate=executor_config.get('fee_rate', 0.001),
+        )
+
+        # Initialize regime detector for market regime analysis
+        regime_config = self.config.get('regime_detection', {})
+        self.regime_detector = RegimeDetector(
+            symbols=self.symbols,
+            config=regime_config
         )
 
         # Stats
@@ -303,6 +313,14 @@ class WebSocketPaperTester:
                 if not snapshot or not snapshot.prices:
                     await asyncio.sleep(interval_ms / 1000)
                     continue
+
+                # Calculate market regime and populate snapshot
+                try:
+                    regime_snapshot = await self.regime_detector.detect(snapshot)
+                    snapshot = dataclasses.replace(snapshot, regime=regime_snapshot)
+                except Exception as e:
+                    self.logger.log_error("regime_detector", str(e))
+                    # Continue with None regime on error
 
                 # Hash for reproducibility/logging
                 data_hash = hashlib.sha256(

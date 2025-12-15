@@ -15,10 +15,13 @@ Interpretation:
 References:
     - LuxAlgo: https://www.luxalgo.com/blog/choppiness-index-quantifying-consolidation/
 """
+import logging
 import math
 from typing import Optional, List
 
 from ._types import PriceInput, extract_hlc
+
+logger = logging.getLogger(__name__)
 
 
 def calculate_choppiness(data: PriceInput, period: int = 14) -> Optional[float]:
@@ -80,7 +83,11 @@ def calculate_choppiness(data: PriceInput, period: int = 14) -> Optional[float]:
 
     # Handle edge case of zero range (flat market)
     if range_hl == 0:
-        return 50.0  # Neutral default
+        logger.debug(
+            f"Zero price range detected over {period} periods - "
+            "returning neutral chop value (50.0). This indicates a flat/stale market."
+        )
+        return 50.0  # Neutral default for flat market
 
     # Calculate Choppiness Index
     # CHOP = 100 * LOG10(ATR_SUM / HL_RANGE) / LOG10(period)

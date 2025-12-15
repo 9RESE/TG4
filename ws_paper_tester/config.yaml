@@ -45,6 +45,44 @@ logging:
   enable_aggregated: true
   console_output: true
 
+# Regime Detection Configuration
+# See docs/development/features/regime_detection/ for details
+regime_detection:
+  enabled: true
+
+  # Indicator weights for composite scoring (must sum to 1.0)
+  weights:
+    adx: 0.25            # ADX for trend strength
+    chop: 0.20           # Choppiness Index for trend/range detection
+    ma: 0.20             # MA alignment for trend direction
+    rsi: 0.15            # RSI for momentum
+    volume: 0.10         # Volume analysis
+    sentiment: 0.10      # External sentiment (Fear & Greed)
+
+  # Classification thresholds
+  thresholds:
+    strong_bull: 0.5     # Composite score > 0.5 = Strong Bull
+    bull: 0.2            # Score > 0.2 = Bull
+    bear: -0.2           # Score < -0.2 = Bear
+    strong_bear: -0.5    # Score < -0.5 = Strong Bear
+
+  # Hysteresis settings (prevent rapid regime switching)
+  min_regime_duration: 60      # Minimum seconds before regime can change
+  confirmation_bars: 3         # Consecutive bars required to confirm change
+  smoothing_period: 3          # Score smoothing window
+
+  # External data settings
+  external_enabled: true       # Enable Fear & Greed / BTC Dominance fetching
+  cache_ttl_minutes: 5         # How long to cache external data
+
+  # Multi-timeframe analysis
+  mtf_weights:
+    4h: 5
+    1h: 4
+    15m: 3
+    5m: 2
+    1m: 1
+
 # Strategy overrides (optional)
 # Override default strategy config values
 strategy_overrides:

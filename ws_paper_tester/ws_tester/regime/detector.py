@@ -84,10 +84,27 @@ class RegimeDetector:
         self._transition_history: deque = deque(maxlen=100)
         self._last_snapshot: Optional[RegimeSnapshot] = None
 
-        # Hysteresis settings
+        # Hysteresis settings with validation
         self._min_regime_duration = self.config.get('min_regime_duration', 60)  # seconds
         self._confirmation_count = 0
         self._confirmation_threshold = self.config.get('confirmation_bars', 3)
+
+        # Validate hysteresis parameters
+        if self._min_regime_duration < 10:
+            logger.warning(
+                f"min_regime_duration={self._min_regime_duration}s is very low, "
+                "may cause excessive regime switching. Recommended: >= 30s"
+            )
+        if self._confirmation_threshold < 2:
+            logger.warning(
+                f"confirmation_bars={self._confirmation_threshold} is very low, "
+                "reduces regime stability. Recommended: >= 2"
+            )
+        if self._min_regime_duration > 600:
+            logger.warning(
+                f"min_regime_duration={self._min_regime_duration}s is very high, "
+                "may cause slow regime adaptation. Recommended: <= 300s"
+            )
 
     async def detect(self, data: DataSnapshot) -> RegimeSnapshot:
         """
