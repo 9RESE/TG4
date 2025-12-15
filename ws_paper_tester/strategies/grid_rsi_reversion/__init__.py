@@ -1,5 +1,5 @@
 """
-Grid RSI Reversion Strategy v1.1.0
+Grid RSI Reversion Strategy v1.2.0
 
 Combines grid trading mechanics with RSI-based mean reversion signals.
 Grid levels provide primary entry signals, while RSI acts as a confidence
@@ -16,6 +16,14 @@ Based on research from master-plan-v1.0.md:
 Target Pairs: XRP/USDT, BTC/USDT, XRP/BTC
 
 Version History:
+- 1.2.0: Deep Review v2.1 Implementation (REC-009 through REC-010)
+         - REC-009: BTC/USDT grid_spacing_pct increased from 1.0% to 1.5%
+           for improved R:R ratio (0.10:1 → 0.15:1)
+         - REC-010: Aligned adx_recenter_threshold from 25 to 30 to match
+           main trend filter threshold for consistency
+         - REC-011: Documented VPIN for regime detection as future enhancement
+         - Compliance score: 97% per deep-review-v2.1
+
 - 1.1.0: Deep Review v2.0 Implementation (REC-001 through REC-008)
          - REC-001: Signal rejection tracking verified on all paths
          - REC-002: Complete indicator logging on all early exits
@@ -38,6 +46,10 @@ Version History:
          - Trend filter using ADX
          - Volatility regime classification
          - Per-symbol configuration
+
+Future Enhancements (documented per REC-011):
+- VPIN (Volume-Synchronized Probability of Informed Trading) for regime detection
+- Would provide order flow-based regime classification complementing price volatility
 """
 
 # =============================================================================

@@ -24,7 +24,7 @@ from typing import Dict, Any
 # Strategy Metadata
 # =============================================================================
 STRATEGY_NAME = "grid_rsi_reversion"
-STRATEGY_VERSION = "1.1.0"
+STRATEGY_VERSION = "1.2.0"
 SYMBOLS = ["XRP/USDT", "BTC/USDT", "XRP/BTC"]
 
 
@@ -105,8 +105,9 @@ CONFIG: Dict[str, Any] = {
     'min_recenter_interval': 3600,      # Minimum seconds between recenters (1 hour)
     'slippage_tolerance_pct': 0.5,      # Price tolerance for grid level matching
     # REC-008: Trend check before recentering
+    # REC-010: Aligned threshold to match main trend filter (adx_threshold: 30)
     'check_trend_before_recenter': True,  # Check ADX before recentering
-    'adx_recenter_threshold': 25,       # Don't recenter if ADX > this (trending)
+    'adx_recenter_threshold': 30,       # Don't recenter if ADX > this (trending)
 
     # ==========================================================================
     # RSI Settings
@@ -222,11 +223,13 @@ SYMBOL_CONFIGS: Dict[str, Dict[str, Any]] = {
     # Research: Deepest liquidity, 12-18% monthly volatility, institutional dominated
     # Suitability: MEDIUM-HIGH (requires wider range, conservative RSI)
     # REC-004: stop_loss_pct 10% for BTC (higher volatility swings)
+    # REC-009: grid_spacing_pct increased from 1.0% to 1.5% for better R:R ratio
+    #          Old R:R = 1.0/10.0 = 0.10:1, New R:R = 1.5/10.0 = 0.15:1
     # ==========================================================================
     'BTC/USDT': {
         'grid_type': 'arithmetic',      # Works well for established ranges
         'num_grids': 20,
-        'grid_spacing_pct': 1.0,
+        'grid_spacing_pct': 1.5,        # REC-009: Wider for better R:R ratio
         'range_pct': 10.0,
         'position_size_usd': 50.0,
         'max_position_usd': 150.0,

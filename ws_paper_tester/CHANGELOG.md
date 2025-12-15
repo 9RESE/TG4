@@ -5,6 +5,52 @@ All notable changes to the WebSocket Paper Tester will be documented in this fil
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.10.2] - 2025-12-14
+
+### Changed
+- **Grid RSI Reversion strategy v1.2.0** - Deep Review v2.1 Implementation
+  - REC-009: BTC/USDT `grid_spacing_pct` increased from 1.0% to 1.5%
+    - Improves R:R ratio from 0.10:1 to 0.15:1 (50% improvement)
+    - Trade-off: Fewer grid fills per range traversal vs better risk-adjusted returns
+  - REC-010: Aligned `adx_recenter_threshold` from 25 to 30
+    - Now matches main trend filter threshold for consistent behavior
+    - Grid recentering blocked when market is trending (ADX > 30)
+  - REC-011: Documented VPIN as future enhancement for regime detection
+    - Would provide order flow-based regime classification complementing price volatility
+
+### Documentation
+- Deep review v2.1 updated with implementation status (97% compliance)
+- Version history updated in `__init__.py` with detailed changelog
+
+## [1.10.1] - 2025-12-14
+
+### Changed
+- **Grid RSI Reversion strategy v1.1.0** - Deep Review v2.0 Implementation
+  - REC-001: Signal rejection tracking verified on all paths via `track_rejection()` function
+    - 14 distinct rejection reasons tracked (WARMING_UP, REGIME_PAUSE, TREND_FILTER, etc.)
+  - REC-002: Complete indicator logging on all code paths via `build_base_indicators()`
+  - REC-003: Trade flow confirmation with volume analysis
+    - `calculate_trade_flow()`, `calculate_volume_ratio()`, `check_trade_flow_confirmation()`
+    - New rejection reasons: `FLOW_AGAINST_TRADE`, `LOW_VOLUME`
+  - REC-004: Widened stop-loss parameters based on research
+    - Default: 8% (was 3%), XRP/USDT: 5%, BTC/USDT: 10%, XRP/BTC: 8%
+  - REC-005: Real correlation monitoring between symbols
+    - `calculate_rolling_correlation()` for Pearson correlation on returns
+    - `correlation_block_threshold: 0.85` to prevent correlated exposure
+  - REC-006: Liquidity validation for XRP/BTC
+    - `check_liquidity_threshold()` with `min_volume_usd: $100M` requirement
+    - New rejection reason: `LOW_LIQUIDITY`
+  - REC-007: Explicit R:R ratio calculation and validation
+    - `calculate_grid_rr_ratio()` with signal metadata
+    - R:R warnings in `validate_config()`
+  - REC-008: Trend check before grid recentering
+    - `check_trend_before_recenter` config option with ADX threshold
+
+### Documentation
+- Deep review v2.0 updated to IMPLEMENTED status
+- Compliance score increased to ~95%
+- All 8 recommendations from previous review implemented
+
 ## [1.10.0] - 2025-12-14
 
 ### Added
