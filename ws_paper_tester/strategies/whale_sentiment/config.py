@@ -6,62 +6,65 @@ Contains strategy metadata, enums for type safety, and default configuration.
 REC-009: Research Foundation
 This strategy is based on internal research documented in the whale_sentiment
 feature documentation. Key research sources include:
-- QuantifiedStrategies.com: RSI effectiveness analysis
-- PMC Academic Studies: Cryptocurrency market indicators
-- Kaiko Research: XRP liquidity analysis
-- CME Group: XRP correlation studies
-See deep-review-v1.0.md Section 7 for full research references.
+- "The Moby Dick Effect" (Magner & Sanhueza, 2025): Whale contagion effects
+- Philadelphia Federal Reserve (2024): Whale vs retail behavior
+- PMC/NIH (2023): RSI ineffectiveness in crypto markets
+- QuantifiedStrategies.com (2024): RSI as momentum vs mean reversion
+See deep-review-v2.0.md Section 7 for full research references.
 
 The Whale Sentiment Strategy combines institutional activity detection (via volume
-spike analysis) with market sentiment indicators (RSI, price deviation) to identify
-contrarian trading opportunities.
+spike analysis) with price deviation sentiment indicators to identify contrarian
+trading opportunities.
 
-Key Features:
-- Volume spike detection as whale activity proxy (2x-3x average)
-- RSI + price deviation for sentiment classification
+Key Features (v1.2.0):
+- Volume spike detection as whale activity proxy (PRIMARY signal - 55% weight)
+- Price deviation for sentiment classification (35% weight)
+- Trade flow confirmation (10% weight)
+- RSI REMOVED from confidence calculation per REC-013 (academic evidence)
 - Contrarian mode: buy fear, sell greed
-- Trade flow confirmation for signal validation
+- Candle data persistence for fast restart recovery
 - Cross-pair correlation management
 
 ===============================================================================
-REC-010: WARMUP REQUIREMENT WARNING
+REC-012: WARMUP WITH PERSISTENCE
 ===============================================================================
-This strategy requires 300 candles (5-minute timeframe) before generating signals.
+Warmup time is significantly reduced with candle persistence (REC-011):
+- Fresh start: 310 candles @ 5m = 25.8 hours
+- With persistence: Resume from saved data (typically < 30 min gap)
 
-Warmup Calculation:
-- min_candle_buffer: 300 candles
-- candle_timeframe: 5 minutes (using data.candles_5m)
-- Warmup time: 300 * 5 = 1500 minutes = 25 hours minimum
+Persistence saves candle data every 5 minutes to:
+- data/candles/{symbol}_5m.json
 
-NO SIGNALS will be generated until warmup is complete. This is by design:
-- Volume spike detection requires 24h volume baseline (288 candles @ 5m)
-- RSI calculation needs historical data for smoothing
-- Fear/greed deviation needs recent high/low reference points
+On restart, data is reloaded if:
+- File exists and is valid JSON
+- Last candle timestamp within max_candle_age_hours (default: 4 hours)
 
 ===============================================================================
 DEFERRED RECOMMENDATIONS (Future Implementation)
 ===============================================================================
-REC-002 (CRITICAL, Medium Effort): Candle Data Persistence
-- Current: 25+ hour warmup on every restart
-- Proposed: Implement candle persistence/reload mechanism
-- Benefits: Faster recovery after restarts, no missed opportunities
-- Implementation: Serialize candle buffer to file, reload on startup
-
-REC-004 (HIGH, High Effort): Volatility Regime Classification
+REC-014 (HIGH, High Effort): Volatility Regime Classification
 - Current: Uses sentiment regimes only
-- Proposed: Add volatility regime detection (low/medium/high volatility)
+- Proposed: Add ATR-based volatility regime detection
 - Benefits: Adjust parameters for different market conditions
-- Implementation: ATR-based classification, dynamic thresholds
 - Reference: Strategy Development Guide Section 15 (when available)
 
-REC-006 (MEDIUM, High Effort): Backtest Confidence Weights
-- Current: Weights based on theoretical analysis
+REC-015 (HIGH, High Effort): Backtest Confidence Weights
+- Current: Weights based on theoretical analysis + REC-013 removal
 - Proposed: Validate weights with historical backtesting
 - Benefits: Empirically optimized confidence calculation
-- Implementation: Run historical simulation, optimize weights
 ===============================================================================
 
 Version History:
+- 1.2.0: Deep Review v2.0 Implementation
+         - REC-011: Implemented candle data persistence for fast restarts
+         - REC-012: Added warmup progress indicator (pct, ETA)
+         - REC-013: REMOVED RSI from confidence calculation (academic evidence)
+         - REC-016: Added XRP/BTC re-enablement guard with explicit flag
+         - REC-017: Added UTC timezone validation on startup
+         - REC-018: Added trade flow expected indicator for clarity
+         - REC-019: Volume window now configurable per-symbol
+         - REC-020: Extracted magic numbers to config parameters
+         - REC-014/REC-015: Documented for future implementation
 - 1.1.0: Deep Review v1.0 Implementation
          - REC-001: Recalibrated confidence weights (volume 40%, RSI 15%)
          - REC-005: Enhanced indicator logging on all code paths
@@ -87,11 +90,11 @@ from typing import Dict, Any
 # Strategy Metadata
 # =============================================================================
 STRATEGY_NAME = "whale_sentiment"
-STRATEGY_VERSION = "1.1.0"  # Deep Review v1.0 Implementation
+STRATEGY_VERSION = "1.2.0"  # Deep Review v2.0 Implementation
 # REC-007: XRP/BTC disabled by default due to 7-10x lower liquidity than USD pairs.
-# Re-enable with caution and increased volume spike threshold if needed.
+# REC-016: To re-enable, add to SYMBOLS AND set enable_xrpbtc: true in config.
 SYMBOLS = ["XRP/USDT", "BTC/USDT"]
-# SYMBOLS_WITH_XRPBTC = ["XRP/USDT", "BTC/USDT", "XRP/BTC"]  # Use with caution
+# SYMBOLS_WITH_XRPBTC = ["XRP/USDT", "BTC/USDT", "XRP/BTC"]  # Requires enable_xrpbtc: true
 
 
 # =============================================================================
@@ -192,16 +195,20 @@ CONFIG: Dict[str, Any] = {
 
     # ==========================================================================
     # Composite Confidence Weights
-    # REC-001: Recalibrated based on academic research showing RSI ineffectiveness
-    # in crypto markets. Increased volume spike weight as primary signal.
+    # REC-013: RSI REMOVED from confidence calculation based on academic evidence
+    # showing RSI ineffectiveness in crypto markets (PMC/NIH 2023, QuantifiedStrategies 2024).
+    # Weight redistributed to volume spike (primary signal) and price deviation.
     # ==========================================================================
-    'weight_volume_spike': 0.40,        # Volume spike contribution (REC-001: increased from 0.30)
-    'weight_rsi_sentiment': 0.15,       # RSI sentiment contribution (REC-001: reduced from 0.25)
-    'weight_price_deviation': 0.20,     # Price deviation contribution
-    'weight_trade_flow': 0.15,          # Trade flow confirmation
-    'weight_divergence': 0.10,          # RSI divergence bonus
-    'min_confidence': 0.55,             # Minimum confidence for signal
+    'weight_volume_spike': 0.55,        # Volume spike contribution (REC-013: increased from 0.40)
+    'weight_rsi_sentiment': 0.00,       # REC-013: RSI REMOVED - academically ineffective in crypto
+    'weight_price_deviation': 0.35,     # Price deviation contribution (REC-013: increased from 0.20)
+    'weight_trade_flow': 0.10,          # Trade flow confirmation (REC-013: reduced from 0.15)
+    'weight_divergence': 0.00,          # REC-013: RSI divergence removed with RSI
+    'min_confidence': 0.50,             # Minimum confidence (lowered due to fewer components)
     'max_confidence': 0.90,             # Maximum confidence cap
+    # REC-020: Extracted magic numbers for volume confidence calculation
+    'volume_confidence_base': 0.50,     # Base contribution when volume spike detected
+    'volume_confidence_bonus_per_ratio': 0.05,  # Additional per volume ratio above threshold
 
     # ==========================================================================
     # Position Sizing
@@ -309,6 +316,29 @@ CONFIG: Dict[str, Any] = {
     # Signal Tracking
     # ==========================================================================
     'track_rejections': True,
+
+    # ==========================================================================
+    # REC-011: Candle Data Persistence
+    # Saves candle data to disk for fast restart recovery
+    # ==========================================================================
+    'use_candle_persistence': True,
+    'candle_persistence_dir': 'data/candles',  # Directory for candle files
+    'candle_save_interval_candles': 1,         # Save every N new candles
+    'max_candle_age_hours': 4.0,               # Max age for reloaded data
+    'candle_file_format': '{symbol}_5m.json',  # Filename format
+
+    # ==========================================================================
+    # REC-016: XRP/BTC Re-enablement Guard
+    # Requires explicit flag to enable XRP/BTC trading
+    # ==========================================================================
+    'enable_xrpbtc': False,  # Must be explicitly set to True to trade XRP/BTC
+
+    # ==========================================================================
+    # REC-017: Timezone Validation
+    # Validates server timezone on startup
+    # ==========================================================================
+    'require_utc_timezone': True,   # Warn if server not in UTC
+    'timezone_warning_only': True,  # False = block trading if not UTC
 }
 
 
@@ -325,6 +355,7 @@ SYMBOL_CONFIGS: Dict[str, Dict[str, Any]] = {
     # ==========================================================================
     'XRP/USDT': {
         'volume_spike_mult': 2.0,       # Standard threshold
+        'volume_window': 288,           # REC-019: 24h in 5m candles (per-symbol configurable)
         'rsi_extreme_fear': 25,
         'rsi_extreme_greed': 75,
         'fear_deviation_pct': -5.0,
@@ -344,6 +375,7 @@ SYMBOL_CONFIGS: Dict[str, Dict[str, Any]] = {
     # ==========================================================================
     'BTC/USDT': {
         'volume_spike_mult': 2.5,       # Higher threshold (more noise)
+        'volume_window': 288,           # REC-019: 24h in 5m candles (per-symbol configurable)
         'rsi_extreme_fear': 22,         # More extreme fear required
         'rsi_extreme_greed': 78,        # More extreme greed required
         'fear_deviation_pct': -7.0,     # Larger deviation required
@@ -360,9 +392,11 @@ SYMBOL_CONFIGS: Dict[str, Dict[str, Any]] = {
     # Research: 7-10x lower liquidity than USD pairs
     # Whale Threshold: 500K+ XRP equivalent
     # Suitability: MEDIUM (approach cautiously)
+    # REC-016: Requires enable_xrpbtc: true to activate
     # ==========================================================================
     'XRP/BTC': {
         'volume_spike_mult': 3.0,       # Higher threshold (low liquidity)
+        'volume_window': 288,           # REC-019: 24h in 5m candles (per-symbol configurable)
         'rsi_extreme_fear': 28,
         'rsi_extreme_greed': 72,
         'fear_deviation_pct': -8.0,     # Larger moves in ratio pair

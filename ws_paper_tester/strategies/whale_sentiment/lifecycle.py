@@ -2,12 +2,18 @@
 Whale Sentiment Strategy - Lifecycle Callbacks
 
 Contains on_start, on_fill, and on_stop callbacks for strategy lifecycle management.
+
+v1.2.0 Changes:
+- REC-016: XRP/BTC re-enablement guard validation
+- REC-017: UTC timezone validation on startup
+- REC-011: Candle persistence state tracking
 """
 import logging
-from datetime import datetime
+import time
+from datetime import datetime, timezone
 from typing import Dict, Any
 
-from .config import STRATEGY_NAME, STRATEGY_VERSION, SYMBOL_CONFIGS, CONFIG
+from .config import STRATEGY_NAME, STRATEGY_VERSION, SYMBOL_CONFIGS, CONFIG, SYMBOLS
 from .validation import validate_config, validate_symbol_configs
 
 # Configure structured logger
@@ -41,12 +47,21 @@ def initialize_state(state: Dict[str, Any]) -> None:
     state['rejection_counts'] = {}
     state['rejection_counts_by_symbol'] = {}
 
+    # REC-011: Candle persistence state
+    state['candle_saves'] = {}
+    state['candle_loads'] = {}
+    state['last_saved_candle_count'] = {}
+
 
 def on_start(config: Dict[str, Any], state: Dict[str, Any]) -> None:
     """
     Initialize strategy state on startup.
 
     Called once when the strategy is loaded.
+
+    v1.2.0 additions:
+    - REC-016: XRP/BTC re-enablement guard validation
+    - REC-017: UTC timezone validation
 
     Args:
         config: Strategy configuration
@@ -56,6 +71,29 @@ def on_start(config: Dict[str, Any], state: Dict[str, Any]) -> None:
     errors = validate_config(config)
     symbol_errors = validate_symbol_configs(SYMBOL_CONFIGS, CONFIG)
     all_errors = errors + symbol_errors
+
+    # REC-017: Timezone validation
+    if config.get('require_utc_timezone', True):
+        is_utc, tz_name = _check_timezone()
+        state['server_timezone'] = tz_name
+        state['is_utc'] = is_utc
+        if not is_utc:
+            tz_msg = f"Server timezone is {tz_name}, not UTC. Session boundaries may be incorrect."
+            if config.get('timezone_warning_only', True):
+                logger.warning("REC-017: %s", tz_msg)
+                all_errors.append(f"WARNING: {tz_msg}")
+            else:
+                logger.error("REC-017 BLOCKING: %s", tz_msg)
+                all_errors.append(f"BLOCKING: {tz_msg}")
+
+    # REC-016: XRP/BTC re-enablement guard
+    if 'XRP/BTC' in SYMBOLS:
+        if not config.get('enable_xrpbtc', False):
+            xrpbtc_msg = "XRP/BTC in SYMBOLS but enable_xrpbtc is not True. Set enable_xrpbtc: true to trade XRP/BTC."
+            logger.error("REC-016 BLOCKING: %s", xrpbtc_msg)
+            all_errors.append(f"BLOCKING: {xrpbtc_msg}")
+        else:
+            logger.warning("REC-016: XRP/BTC enabled - note 7-10x lower liquidity than USD pairs")
 
     if all_errors:
         blocking_errors = [e for e in all_errors if e.startswith('BLOCKING:')]
@@ -97,22 +135,47 @@ def on_start(config: Dict[str, Any], state: Dict[str, Any]) -> None:
                 'trade_flow': config.get('use_trade_flow_confirmation', True),
                 'sessions': config.get('use_session_awareness', True),
                 'correlation': config.get('use_correlation_management', True),
+                'candle_persistence': config.get('use_candle_persistence', True),  # REC-011
             }
         }
     )
 
-    # Log whale sentiment specific settings
+    # Log whale sentiment specific settings (REC-013: RSI now informational only)
     logger.info(
         "Whale Sentiment settings",
         extra={
             'volume_spike_mult': config.get('volume_spike_mult', 2.0),
             'volume_window': config.get('volume_window', 288),
-            'rsi_period': config.get('rsi_period', 14),
-            'rsi_fear': config.get('rsi_extreme_fear', 25),
-            'rsi_greed': config.get('rsi_extreme_greed', 75),
+            'weight_volume_spike': config.get('weight_volume_spike', 0.55),  # REC-013
+            'weight_price_deviation': config.get('weight_price_deviation', 0.35),  # REC-013
+            'weight_rsi': config.get('weight_rsi_sentiment', 0.00),  # REC-013: Should be 0
             'contrarian_mode': config.get('contrarian_mode', True),
         }
     )
+
+
+def _check_timezone() -> tuple:
+    """
+    REC-017: Check if server is running in UTC timezone.
+
+    Returns:
+        Tuple of (is_utc: bool, timezone_name: str)
+    """
+    try:
+        # Get local timezone offset
+        local_offset = time.timezone if time.localtime().tm_isdst == 0 else time.altzone
+
+        # Check if offset is 0 (UTC)
+        is_utc = local_offset == 0
+
+        # Get timezone name
+        tz_name = time.tzname[0] if not time.daylight else time.tzname[time.localtime().tm_isdst]
+
+        return is_utc, tz_name
+
+    except Exception as e:
+        logger.warning("Could not determine timezone: %s", e)
+        return False, "Unknown"
 
 
 def on_fill(fill: Dict[str, Any], state: Dict[str, Any]) -> None:

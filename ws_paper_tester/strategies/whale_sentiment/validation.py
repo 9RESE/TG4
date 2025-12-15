@@ -109,16 +109,21 @@ def validate_config(config: Dict[str, Any]) -> List[str]:
     if min_candles < required:
         errors.append(f"min_candle_buffer ({min_candles}) should be >= {required} based on indicator settings")
 
-    # Weight validation
+    # Weight validation - REC-013: RSI and divergence weights should be 0
     weight_total = (
-        config.get('weight_volume_spike', 0.30) +
-        config.get('weight_rsi_sentiment', 0.25) +
-        config.get('weight_price_deviation', 0.20) +
-        config.get('weight_trade_flow', 0.15) +
-        config.get('weight_divergence', 0.10)
+        config.get('weight_volume_spike', 0.55) +
+        config.get('weight_rsi_sentiment', 0.00) +
+        config.get('weight_price_deviation', 0.35) +
+        config.get('weight_trade_flow', 0.10) +
+        config.get('weight_divergence', 0.00)
     )
     if abs(weight_total - 1.0) > 0.01:
         errors.append(f"Confidence weights should sum to 1.0, got {weight_total:.2f}")
+
+    # REC-013: Warn if RSI weight is non-zero (academically ineffective)
+    rsi_weight = config.get('weight_rsi_sentiment', 0.00)
+    if rsi_weight > 0:
+        errors.append(f"WARNING: weight_rsi_sentiment ({rsi_weight}) > 0. RSI is academically ineffective in crypto (REC-013).")
 
     # Circuit breaker validation
     max_losses = config.get('max_consecutive_losses', 2)
@@ -187,15 +192,17 @@ def validate_config_overrides(overrides: Dict[str, Any]) -> List[str]:
         # Whale Detection
         'volume_spike_mult', 'volume_window', 'min_spike_trades',
         'max_spread_pct', 'volume_spike_price_move_pct',
-        # RSI Settings
+        # RSI Settings (kept for legacy compatibility, weight should be 0)
         'rsi_period', 'rsi_extreme_fear', 'rsi_fear', 'rsi_greed', 'rsi_extreme_greed',
         # Fear/Greed
         'fear_deviation_pct', 'greed_deviation_pct', 'price_lookback',
         # Mode
         'contrarian_mode',
-        # Confidence
+        # Confidence - REC-013: RSI/divergence weights should be 0
         'weight_volume_spike', 'weight_rsi_sentiment', 'weight_price_deviation',
         'weight_trade_flow', 'weight_divergence', 'min_confidence', 'max_confidence',
+        # REC-020: Extracted magic numbers
+        'volume_confidence_base', 'volume_confidence_bonus_per_ratio',
         # Position Sizing
         'position_size_usd', 'max_position_usd', 'max_position_per_symbol_usd',
         'min_trade_size_usd', 'short_size_multiplier', 'high_correlation_size_mult',
@@ -222,6 +229,13 @@ def validate_config_overrides(overrides: Dict[str, Any]) -> List[str]:
         'use_trade_flow_confirmation', 'trade_flow_threshold', 'trade_flow_lookback',
         # Tracking
         'track_rejections',
+        # REC-011: Candle Persistence
+        'use_candle_persistence', 'candle_persistence_dir', 'candle_save_interval_candles',
+        'max_candle_age_hours', 'candle_file_format',
+        # REC-016: XRP/BTC Guard
+        'enable_xrpbtc',
+        # REC-017: Timezone Validation
+        'require_utc_timezone', 'timezone_warning_only',
     }
 
     for key in overrides:

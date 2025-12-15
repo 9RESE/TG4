@@ -1,23 +1,29 @@
 """
-Whale Sentiment Strategy v1.1.0
+Whale Sentiment Strategy v1.2.0
 
-Trades based on whale activity proxy (volume spikes) and market sentiment
-indicators (RSI, price deviation) using a contrarian approach.
+Trades based on whale activity proxy (volume spikes) and price deviation
+sentiment indicators using a contrarian approach.
 
-REC-009: Research Foundation
-Based on internal research and academic literature analysis. Key features:
-- Volume spike detection as whale activity proxy (primary signal per REC-001)
-- RSI + price deviation for sentiment classification (reduced weight per REC-001)
+REC-009: Research Foundation (Updated for v1.2.0)
+Based on academic literature analysis:
+- "The Moby Dick Effect" (Magner & Sanhueza, 2025): Whale contagion effects
+- Philadelphia Federal Reserve (2024): Whale vs retail behavior
+- PMC/NIH (2023): RSI ineffectiveness in crypto markets
+See deep-review-v2.0.md Section 7 for full research references.
+
+Key Features (v1.2.0):
+- Volume spike detection as PRIMARY signal (55% weight per REC-013)
+- Price deviation for sentiment classification (35% weight per REC-013)
+- RSI REMOVED from confidence calculation (academically ineffective per REC-013)
+- Candle data persistence for fast restart recovery (REC-011)
 - Contrarian mode: buy fear, sell greed
-- Trade flow confirmation for signal validation
+- Trade flow confirmation (10% weight)
 - Cross-pair correlation management
-- Session-aware position sizing
-
-See deep-review-v1.0.md Section 7 for full research references.
+- Session-aware position sizing (UTC validated)
 
 Entry Logic:
-- Long: Fear sentiment (RSI < 40) + whale accumulation or neutral
-- Short: Greed sentiment (RSI > 60) + whale distribution or neutral
+- Long: Fear sentiment (price deviation) + whale accumulation or neutral
+- Short: Greed sentiment (price deviation) + whale distribution or neutral
 
 Exit Logic:
 - Sentiment reversal (primary - sentiment shifts opposite)
@@ -25,6 +31,16 @@ Exit Logic:
 - Trailing stop (optional)
 
 Version History:
+- 1.2.0: Deep Review v2.0 Implementation
+         - REC-011: Candle data persistence for fast restarts
+         - REC-012: Warmup progress indicator (pct, ETA)
+         - REC-013: REMOVED RSI from confidence (volume 55%, price dev 35%, flow 10%)
+         - REC-016: XRP/BTC re-enablement guard with explicit flag
+         - REC-017: UTC timezone validation on startup
+         - REC-018: Trade flow expected indicator for clarity
+         - REC-019: Volume window now per-symbol configurable
+         - REC-020: Extracted magic numbers to config
+         - REC-014/REC-015: Documented for future (volatility regimes, backtesting)
 - 1.1.0: Deep Review v1.0 Implementation
          - REC-001: Recalibrated confidence weights (volume 40%, RSI 15%)
          - REC-005: Enhanced indicator logging on all code paths
@@ -32,15 +48,7 @@ Version History:
          - REC-008: Reduced short size multiplier to 0.5x (squeeze risk)
          - REC-009: Updated research documentation references
          - REC-010: Documented UTC timezone requirement for sessions
-         - REC-002/REC-004: Documented for future implementation
-         - REC-003: Clarified trade flow logic for contrarian mode
 - 1.0.0: Initial implementation
-         - Volume spike detection as whale proxy
-         - RSI sentiment classification
-         - Fear/greed price deviation proxy
-         - Contrarian mode signal generation
-         - Trade flow confirmation
-         - Cross-pair correlation management
 """
 
 # =============================================================================
@@ -124,6 +132,16 @@ from .signal import (
 
 from .lifecycle import initialize_state
 
+# REC-011: Candle persistence exports
+from .persistence import (
+    save_candles,
+    load_candles,
+    should_save_candles,
+    get_candle_file_path,
+    delete_candle_file,
+    get_persistence_status,
+)
+
 
 __all__ = [
     # Required strategy interface
@@ -189,4 +207,11 @@ __all__ = [
     'initialize_state',
     'track_rejection',
     'build_base_indicators',
+    # REC-011: Persistence
+    'save_candles',
+    'load_candles',
+    'should_save_candles',
+    'get_candle_file_path',
+    'delete_candle_file',
+    'get_persistence_status',
 ]

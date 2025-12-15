@@ -683,12 +683,14 @@ def calculate_composite_confidence(
     """
     Calculate weighted confidence from multiple signals.
 
-    Weights (configurable):
-    - Volume spike (whale proxy): 0.30
-    - Sentiment zone (RSI): 0.25
-    - Sentiment zone (price dev): 0.20
-    - Trade flow confirmation: 0.15
-    - Divergence bonus: 0.10
+    REC-013: RSI REMOVED from confidence calculation based on academic evidence
+    showing RSI ineffectiveness in crypto markets (PMC/NIH 2023, QuantifiedStrategies 2024).
+
+    Weights (configurable, v1.2.0):
+    - Volume spike (whale proxy): 0.55 (PRIMARY signal)
+    - Price deviation: 0.35 (sentiment classification)
+    - Trade flow confirmation: 0.10
+    - RSI/Divergence: 0.00 (REMOVED per REC-013)
 
     Maximum confidence capped at 0.90.
 
@@ -697,7 +699,7 @@ def calculate_composite_confidence(
         sentiment_zone: Sentiment zone classification
         volume_ratio: Current volume ratio
         trade_flow_imbalance: Trade flow imbalance (-1 to +1)
-        divergence: Divergence detection result
+        divergence: Divergence detection result (IGNORED per REC-013)
         is_contrarian: Whether in contrarian mode
         direction: Signal direction ('buy' or 'short')
         config: Configuration dict
@@ -709,34 +711,44 @@ def calculate_composite_confidence(
     reasons = []
 
     # Get weights from config
-    weight_volume = config.get('weight_volume_spike', 0.30)
-    weight_rsi = config.get('weight_rsi_sentiment', 0.25)
-    weight_price = config.get('weight_price_deviation', 0.20)
-    weight_flow = config.get('weight_trade_flow', 0.15)
-    weight_div = config.get('weight_divergence', 0.10)
+    weight_volume = config.get('weight_volume_spike', 0.55)
+    # REC-013: RSI weight should be 0 - removed from calculation
+    weight_rsi = config.get('weight_rsi_sentiment', 0.00)
+    weight_price = config.get('weight_price_deviation', 0.35)
+    weight_flow = config.get('weight_trade_flow', 0.10)
+    # REC-013: Divergence weight should be 0 - removed with RSI
+    weight_div = config.get('weight_divergence', 0.00)
 
-    # 1. Volume spike contribution
+    # REC-020: Extracted magic numbers from config
+    vol_conf_base = config.get('volume_confidence_base', 0.50)
+    vol_conf_bonus = config.get('volume_confidence_bonus_per_ratio', 0.05)
+
+    # 1. Volume spike contribution (PRIMARY signal per REC-013)
     if whale_signal != WhaleSignal.NEUTRAL:
-        vol_conf = min(weight_volume, weight_volume * 0.5 + (volume_ratio - 2.0) * 0.05)
+        vol_conf = min(weight_volume, weight_volume * vol_conf_base + (volume_ratio - 2.0) * vol_conf_bonus)
         confidence += vol_conf
         reasons.append(f"Volume {volume_ratio:.1f}x ({whale_signal.name.lower()})")
 
-    # 2. RSI sentiment contribution
-    if sentiment_zone == SentimentZone.EXTREME_FEAR:
-        confidence += weight_rsi
-        reasons.append(f"Extreme fear")
-    elif sentiment_zone == SentimentZone.EXTREME_GREED:
-        confidence += weight_rsi
-        reasons.append(f"Extreme greed")
-    elif sentiment_zone in (SentimentZone.FEAR, SentimentZone.GREED):
-        confidence += weight_rsi * 0.6
-        reasons.append(f"{sentiment_zone.name.lower()}")
+    # 2. REC-013: RSI contribution REMOVED - skip if weight is 0
+    if weight_rsi > 0:
+        # Legacy RSI contribution (only if explicitly enabled)
+        if sentiment_zone == SentimentZone.EXTREME_FEAR:
+            confidence += weight_rsi
+            reasons.append("Extreme fear (RSI)")
+        elif sentiment_zone == SentimentZone.EXTREME_GREED:
+            confidence += weight_rsi
+            reasons.append("Extreme greed (RSI)")
+        elif sentiment_zone in (SentimentZone.FEAR, SentimentZone.GREED):
+            confidence += weight_rsi * 0.6
+            reasons.append(f"{sentiment_zone.name.lower()} (RSI)")
 
-    # 3. Price deviation contribution (implicit in sentiment zone)
+    # 3. Price deviation contribution (now PRIMARY sentiment signal per REC-013)
     if is_extreme_zone(sentiment_zone):
         confidence += weight_price
+        reasons.append(f"Price dev: extreme {sentiment_zone.name.lower().replace('extreme_', '')}")
     elif sentiment_zone != SentimentZone.NEUTRAL:
-        confidence += weight_price * 0.5
+        confidence += weight_price * 0.6
+        reasons.append(f"Price dev: {sentiment_zone.name.lower()}")
 
     # 4. Trade flow confirmation
     if abs(trade_flow_imbalance) > 0.10:
@@ -752,18 +764,20 @@ def calculate_composite_confidence(
         else:
             if direction == 'buy' and trade_flow_imbalance > 0.10:
                 confidence += flow_conf
-                reasons.append(f"Buy pressure ({trade_flow_imbalance:.2f})")
+                reasons.append(f"Buy flow ({trade_flow_imbalance:.2f})")
             elif direction == 'short' and trade_flow_imbalance < -0.10:
                 confidence += flow_conf
-                reasons.append(f"Sell pressure ({trade_flow_imbalance:.2f})")
+                reasons.append(f"Sell flow ({trade_flow_imbalance:.2f})")
 
-    # 5. Divergence bonus
-    if direction == 'buy' and divergence.get('bullish_divergence', False):
-        confidence += weight_div
-        reasons.append("Bullish divergence")
-    elif direction == 'short' and divergence.get('bearish_divergence', False):
-        confidence += weight_div
-        reasons.append("Bearish divergence")
+    # 5. REC-013: Divergence bonus REMOVED - skip if weight is 0
+    if weight_div > 0:
+        # Legacy divergence contribution (only if explicitly enabled)
+        if direction == 'buy' and divergence.get('bullish_divergence', False):
+            confidence += weight_div
+            reasons.append("Bullish divergence")
+        elif direction == 'short' and divergence.get('bearish_divergence', False):
+            confidence += weight_div
+            reasons.append("Bearish divergence")
 
     # Cap confidence
     max_conf = config.get('max_confidence', 0.90)

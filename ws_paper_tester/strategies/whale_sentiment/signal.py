@@ -222,10 +222,21 @@ def _evaluate_symbol(
     # Minimum candles required (25h warmup at 5m)
     min_candles = config.get('min_candle_buffer', 300)
     if len(candles) < min_candles:
+        # REC-012: Add warmup progress indicator
+        warmup_pct = (len(candles) / min_candles) * 100
+        warmup_remaining = min_candles - len(candles)
+        warmup_eta_minutes = warmup_remaining * 5  # 5m candles
+        warmup_eta_hours = warmup_eta_minutes / 60
+
         state['indicators'] = build_base_indicators(
             symbol=symbol, candle_count=len(candles), status='warming_up', state=state
         )
         state['indicators']['required_candles'] = min_candles
+        # REC-012: Warmup progress fields
+        state['indicators']['warmup_pct'] = round(warmup_pct, 1)
+        state['indicators']['warmup_remaining_candles'] = warmup_remaining
+        state['indicators']['warmup_eta_minutes'] = warmup_eta_minutes
+        state['indicators']['warmup_eta_hours'] = round(warmup_eta_hours, 1)
         if track_rejections:
             track_rejection(state, RejectionReason.INSUFFICIENT_CANDLES, symbol)
         return None
@@ -461,6 +472,14 @@ def _evaluate_symbol(
         # Add flow data to indicators
         state['indicators']['trade_flow_imbalance'] = round(flow_data.get('imbalance', 0), 3)
         state['indicators']['trade_flow_confirms'] = flow_confirmed
+        # REC-018: Add trade flow expected indicator for clarity
+        # In contrarian mode, opposite flow is actually expected (buy during selling pressure)
+        if is_contrarian:
+            state['indicators']['trade_flow_expected'] = 'negative' if direction == 'buy' else 'positive'
+            state['indicators']['trade_flow_mode'] = 'contrarian'
+        else:
+            state['indicators']['trade_flow_expected'] = 'positive' if direction == 'buy' else 'negative'
+            state['indicators']['trade_flow_mode'] = 'momentum'
 
     if not flow_confirmed:
         state['indicators']['status'] = 'trade_flow_against'
