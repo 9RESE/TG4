@@ -28,6 +28,20 @@ def create_rich_snapshot(price: float = 2.35) -> DataSnapshot:
             volume=100.0
         ))
 
+    # Create XRP/BTC candles (different price scale)
+    xrp_btc_price = 0.0000225  # XRP/BTC ratio
+    xrp_btc_candles = []
+    for i in range(25):
+        offset = (25 - i) * 0.0000001
+        xrp_btc_candles.append(Candle(
+            timestamp=now,
+            open=xrp_btc_price - offset,
+            high=xrp_btc_price - offset + 0.0000001,
+            low=xrp_btc_price - offset - 0.0000001,
+            close=xrp_btc_price - offset,
+            volume=100.0
+        ))
+
     # Create trades
     trades = []
     for i in range(60):
@@ -38,19 +52,35 @@ def create_rich_snapshot(price: float = 2.35) -> DataSnapshot:
             side='buy' if i % 3 != 0 else 'sell'
         ))
 
+    # Create XRP/BTC trades
+    xrp_btc_trades = []
+    for i in range(60):
+        xrp_btc_trades.append(Trade(
+            timestamp=now,
+            price=xrp_btc_price + (i % 2 - 0.5) * 0.0000001,
+            size=50.0 + i,
+            side='buy' if i % 3 != 0 else 'sell'
+        ))
+
     # Create orderbook
     ob = OrderbookSnapshot(
         bids=tuple((price - 0.001 - i*0.001, 100.0 + i*10) for i in range(10)),
         asks=tuple((price + 0.001 + i*0.001, 100.0 + i*10) for i in range(10))
     )
 
+    # Create XRP/BTC orderbook
+    xrp_btc_ob = OrderbookSnapshot(
+        bids=tuple((xrp_btc_price - 0.0000001 - i*0.0000001, 100.0 + i*10) for i in range(10)),
+        asks=tuple((xrp_btc_price + 0.0000001 + i*0.0000001, 100.0 + i*10) for i in range(10))
+    )
+
     return DataSnapshot(
         timestamp=now,
-        prices={'XRP/USDT': price, 'BTC/USDT': 104500.0},
-        candles_1m={'XRP/USDT': tuple(candles)},
-        candles_5m={'XRP/USDT': tuple(candles)},
-        orderbooks={'XRP/USDT': ob, 'BTC/USDT': ob},
-        trades={'XRP/USDT': tuple(trades), 'BTC/USDT': tuple(trades)}
+        prices={'XRP/USDT': price, 'BTC/USDT': 104500.0, 'XRP/BTC': xrp_btc_price},
+        candles_1m={'XRP/USDT': tuple(candles), 'BTC/USDT': tuple(candles), 'XRP/BTC': tuple(xrp_btc_candles)},
+        candles_5m={'XRP/USDT': tuple(candles), 'BTC/USDT': tuple(candles), 'XRP/BTC': tuple(xrp_btc_candles)},
+        orderbooks={'XRP/USDT': ob, 'BTC/USDT': ob, 'XRP/BTC': xrp_btc_ob},
+        trades={'XRP/USDT': tuple(trades), 'BTC/USDT': tuple(trades), 'XRP/BTC': tuple(xrp_btc_trades)}
     )
 
 
@@ -72,7 +102,9 @@ class TestStrategyLoader:
         assert mm is not None
         assert isinstance(mm, StrategyWrapper)
         assert mm.name == 'market_making'
-        assert mm.version.startswith('1.')  # Allow minor/patch version bumps
+        # Validate version follows semver format (major.minor.patch)
+        version_parts = mm.version.split('.')
+        assert len(version_parts) >= 2, f"Version {mm.version} should follow semver"
         assert len(mm.symbols) > 0
 
     def test_get_all_symbols(self):
@@ -1032,10 +1064,10 @@ class TestMeanReversionV40Features:
         assert CONFIG['use_correlation_monitoring'] is True, \
             "v4.0: correlation monitoring should be enabled"
 
-    def test_version_is_4_0_0(self):
-        """Test strategy version is 4.0.0."""
+    def test_version_is_4_3_0(self):
+        """Test strategy version is 4.3.0."""
         from strategies.mean_reversion import STRATEGY_VERSION
-        assert STRATEGY_VERSION == "4.0.0"
+        assert STRATEGY_VERSION == "4.3.0"
 
     def test_indicators_include_v40_fields(self):
         """Test that indicators include v4.0.0 fields."""

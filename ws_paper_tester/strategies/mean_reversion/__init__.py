@@ -99,6 +99,26 @@ from .signals import generate_signal
 # Lifecycle callbacks
 from .lifecycle import on_start, on_fill, on_stop
 
+# Indicator calculations (exported for testing)
+from .indicators import (
+    calculate_trend_slope,
+    calculate_correlation,
+)
+
+# Risk management functions (exported for testing)
+from .risk import (
+    is_trending,
+    get_decayed_take_profit,
+    calculate_trailing_stop,
+)
+
+# Backward compatibility aliases for tests (functions renamed without underscore)
+_calculate_trend_slope = calculate_trend_slope
+_is_trending = is_trending
+_calculate_correlation = calculate_correlation
+_get_decayed_take_profit = get_decayed_take_profit
+_calculate_trailing_stop = calculate_trailing_stop
+
 # Define public API
 __all__ = [
     # Metadata
@@ -116,4 +136,17 @@ __all__ = [
     'on_start',
     'on_fill',
     'on_stop',
+    # Exported indicators (for testing)
+    'calculate_trend_slope',
+    'calculate_correlation',
+    # Exported risk functions (for testing)
+    'is_trending',
+    'get_decayed_take_profit',
+    'calculate_trailing_stop',
+    # Backward compatibility aliases
+    '_calculate_trend_slope',
+    '_is_trending',
+    '_calculate_correlation',
+    '_get_decayed_take_profit',
+    '_calculate_trailing_stop',
 ]

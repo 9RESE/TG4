@@ -73,13 +73,37 @@ from .config import (
     # v2.0.0 enums
     VolatilityRegime,
     RejectionReason,
+    # Validation
+    validate_config,
 )
 
 # Main signal generation
-from .signals import generate_signal
+from .signals import generate_signal, build_entry_signal
 
 # Lifecycle callbacks
 from .lifecycle import on_start, on_fill, on_stop
+
+# Calculation utilities (exported for testing)
+from .calculations import (
+    get_xrp_usdt_price,
+    calculate_trailing_stop,
+    calculate_micro_price,
+    check_fee_profitability,
+    check_position_decay,
+    calculate_reservation_price,
+    calculate_optimal_spread,
+)
+
+# Backward compatibility aliases for tests (functions renamed without underscore)
+_get_xrp_usdt_price = get_xrp_usdt_price
+_build_entry_signal = build_entry_signal
+_calculate_trailing_stop = calculate_trailing_stop
+_validate_config = validate_config
+_calculate_micro_price = calculate_micro_price
+_calculate_reservation_price = calculate_reservation_price
+_calculate_optimal_spread = calculate_optimal_spread
+_check_fee_profitability = check_fee_profitability
+_check_position_decay = check_position_decay
 
 # Re-export for backwards compatibility and explicit interface
 __all__ = [
@@ -97,4 +121,24 @@ __all__ = [
     # v2.0.0: Enums for external inspection
     'VolatilityRegime',
     'RejectionReason',
+    # Exported calculations (for testing)
+    'build_entry_signal',
+    'get_xrp_usdt_price',
+    'calculate_trailing_stop',
+    'calculate_micro_price',
+    'check_fee_profitability',
+    'check_position_decay',
+    'validate_config',
+    'calculate_reservation_price',
+    'calculate_optimal_spread',
+    # Backward compatibility aliases
+    '_get_xrp_usdt_price',
+    '_build_entry_signal',
+    '_calculate_trailing_stop',
+    '_validate_config',
+    '_calculate_micro_price',
+    '_calculate_reservation_price',
+    '_calculate_optimal_spread',
+    '_check_fee_profitability',
+    '_check_position_decay',
 ]
