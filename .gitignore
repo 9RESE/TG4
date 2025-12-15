@@ -8,3 +8,8 @@ config/api_keys.yaml
 /models/
 tensorboard/
 .env
+
+# Logs
+logs/
+*.log
+*.json.log
