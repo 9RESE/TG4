@@ -14,6 +14,7 @@ starting_assets:
   BTC: 0.0                    # Will accumulate through XRP/BTC trading
 
 # Symbols to trade
+# Kraken WebSocket v2 uses slash format: BTC/USDT, XRP/USDT, XRP/BTC
 symbols:
   - XRP/USDT
   - BTC/USDT
@@ -48,11 +49,32 @@ logging:
 # Override default strategy config values
 strategy_overrides:
   market_making:
-    min_spread_pct: 0.1
+    min_spread_pct: 0.05        # Lowered from 0.1
     position_size_usd: 20
+
   order_flow:
     imbalance_threshold: 0.3
     position_size_usd: 25
+    vpin_high_threshold: 0.85   # Raised from 0.7 - less conservative
+    lookback_trades: 30         # Lowered from 50 - faster warmup
+
+  ratio_trading:
+    max_spread_pct: 0.25        # Raised from 0.10 - allow wider spreads
+    min_net_profit_pct: 0.05    # Lowered from 0.10 - more permissive
+    use_fee_profitability_check: false  # Disable fee check for XRP/BTC
+
+  wavetrend:
+    wt_overbought: 40           # Lowered from 53 - reach zones faster
+    wt_oversold: -40            # Raised from -53
+    min_candle_buffer: 30       # Lowered from 50 - faster warmup
+    cooldown_seconds: 30        # Lowered from 60
+
   mean_reversion:
     lookback_candles: 20
     deviation_threshold: 0.5
+
+  whale_sentiment:
+    min_candle_buffer: 150          # Reduced from 300 for faster warmup in testing
+    cooldown_seconds: 60            # Reduced from 120 for more signals
+    volume_spike_mult: 1.8          # Slightly lower threshold
+    contrarian_mode: true           # Buy fear, sell greed
