@@ -1,6 +1,7 @@
-# Research References: Momentum Scalping Strategy
+# Research References: Momentum Scalping Strategy v2.0
 
 **Review Date:** 2025-12-14
+**Review Version:** v2.0 (Updated with December 2025 market data)
 
 ---
 
@@ -190,6 +191,58 @@
 | AMBCrypto | Weakening in 2025 | PAUSE XRP/BTC |
 | Gate.com | -24.86% over 90 days | PAUSE XRP/BTC |
 | CME Group | 0.4-0.6 independent | PAUSE XRP/BTC |
+
+---
+
+## December 2025 Market Data Sources (v2.0 Update)
+
+### Bitcoin Market Status
+
+25. **CoinDesk** - "Bitcoin Volatility Is Still Compressing"
+    - URL: https://www.coindesk.com/markets/2025/12/10/bitcoin-volatility-is-still-compressing-dimming-year-end-rally-outlook
+    - Key Finding: BTC annualized 30-day implied volatility dropped to 49%
+    - Key Finding: Volatility compression suggests low odds of year-end rally
+    - Relevance: Current BTC regime assessment
+
+26. **CoinCodex** - "Bitcoin (BTC) Price Prediction 2025"
+    - URL: https://coincodex.com/crypto/bitcoin/price-prediction/
+    - Key Finding: RSI 44.94 (neutral), 3.27% 30-day volatility
+    - Relevance: BTC technical indicators status
+
+27. **CoinDCX** - "Bitcoin Price Prediction 2025"
+    - URL: https://coindcx.com/blog/price-predictions/bitcoin-price-weekly/
+    - Key Finding: BTC trading $90,000-$100,000 range
+    - Relevance: Price context for position sizing
+
+### XRP Market Status (December 2025)
+
+28. **CoinGape** - "Top 3 Price Predictions for Bitcoin, Ethereum, and XRP"
+    - URL: https://coingape.com/markets/top-3-price-predictions-for-bitcoin-ethereum-and-xrp-in-dec-2025/
+    - Key Finding: XRP at $2.02, market cap $125.1 billion (4.63%)
+    - Relevance: XRP current market position
+
+29. **The Crypto Basic** - "XRP Bull Case Projection"
+    - URL: https://thecryptobasic.com/2025/12/13/here-is-xrp-bull-case-projection-if-saylors-2045-bitcoin-prediction-materializes/
+    - Key Finding: XRP showing growing institutional momentum
+    - Relevance: XRP independence analysis
+
+### 2025 Scalping Strategy Research
+
+30. **Gate.io Web3** - "How Do MACD and RSI Indicators Signal Crypto Market Trends in 2025?"
+    - URL: https://web3.gate.com/en/crypto-wiki/article/how-do-macd-and-rsi-indicators-signal-crypto-market-trends-in-2025-20251207
+    - Key Finding: Crypto can sustain overbought conditions longer than traditional markets
+    - Key Finding: NEAR Protocol 42% surge Nov 7 with RSI briefly exceeding 80
+    - Relevance: RSI reliability in volatile conditions
+
+31. **MC2 Finance** - "Best RSI for Scalping (2025 Guide)"
+    - URL: https://www.mc2.fi/blog/best-rsi-for-scalping
+    - Key Finding: RSI 7 ideal for scalping on 1-minute to 15-minute charts
+    - Relevance: RSI period selection validation
+
+32. **Memebell** - "Crypto Scalping Strategies for 2025"
+    - URL: https://memebell.com/index.php/2025/02/08/crypto-scalping-strategies-for-2025/
+    - Key Finding: 2025 features clearer regulation, more institutional players
+    - Relevance: Market structure context
 
 ---
 

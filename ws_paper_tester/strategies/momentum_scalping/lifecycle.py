@@ -4,6 +4,7 @@ Momentum Scalping Strategy - Lifecycle Callbacks
 Contains on_start, on_fill, and on_stop callbacks for strategy lifecycle management.
 
 REC-010 (v2.1.0): Structured logging using Python logging module.
+REC-012/REC-013 (v2.1.0): Monitoring integration for correlation and sentiment tracking.
 """
 import logging
 from datetime import datetime
@@ -11,6 +12,8 @@ from typing import Dict, Any
 
 from .config import STRATEGY_NAME, STRATEGY_VERSION
 from .validation import validate_config
+# REC-012/REC-013 (v2.1.0): Monitoring imports
+from .monitoring import MonitoringManager, get_or_create_monitoring_manager
 
 # REC-010 (v2.1.0): Configure structured logger
 logger = logging.getLogger(STRATEGY_NAME)
@@ -105,6 +108,17 @@ def on_start(config: Dict[str, Any], state: Dict[str, Any]) -> None:
             'threshold': config.get('adx_strong_trend_threshold', 30),
             'btc_only': config.get('adx_filter_btc_only', True),
         })
+
+    # REC-012/REC-013 (v2.1.0): Initialize monitoring manager
+    monitoring_manager = get_or_create_monitoring_manager(state)
+    if monitoring_manager.needs_weekly_review():
+        logger.info("Weekly correlation review due - run manager.generate_weekly_report()")
+
+    logger.info("REC-012/REC-013 monitoring active", extra={
+        'correlation_records': len(monitoring_manager.state.correlation_history),
+        'sentiment_records': len(monitoring_manager.state.sentiment_history),
+        'sessions_tracked': monitoring_manager.state.total_session_count,
+    })
 
 
 def on_fill(fill: Dict[str, Any], state: Dict[str, Any]) -> None:
@@ -289,4 +303,29 @@ def on_stop(state: Dict[str, Any]) -> None:
         logger.info("Signal rejections summary", extra={
             'total_rejections': total_rejections,
             'top_rejections': dict(sorted(rejection_counts.items(), key=lambda x: -x[1])[:5]),
+        })
+
+    # REC-012/REC-013 (v2.1.0): Save monitoring state and generate report if due
+    if '_monitoring_manager' in state:
+        monitoring_manager = state['_monitoring_manager']
+
+        # Generate weekly correlation report if due
+        if monitoring_manager.needs_weekly_review():
+            report = monitoring_manager.correlation_monitor.generate_weekly_report()
+            logger.info("Weekly correlation report generated on shutdown", extra={
+                'correlation_mean': report.get('correlation_stats', {}).get('mean'),
+                'pause_rate': report.get('pause_stats', {}).get('pause_rate'),
+                'recommendation': report.get('recommendation'),
+            })
+
+        # Save monitoring state
+        monitoring_manager.save_state()
+
+        # Log monitoring summary
+        summary = monitoring_manager.get_monitoring_summary()
+        logger.info("Monitoring summary on shutdown", extra={
+            'correlation_records': summary['state_summary']['correlation_records'],
+            'sentiment_records': summary['state_summary']['sentiment_records'],
+            'total_sessions': summary['state_summary']['total_sessions_tracked'],
+            'consecutive_low_days': summary['correlation']['consecutive_low_days'],
         })

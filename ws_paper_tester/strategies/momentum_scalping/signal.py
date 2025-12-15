@@ -53,6 +53,8 @@ from .risk import (
 )
 from .exits import check_all_exits
 from .lifecycle import initialize_state
+# REC-012/REC-013 (v2.1.0): Monitoring integration
+from .monitoring import integrate_monitoring_on_tick
 
 
 def track_rejection(
@@ -159,9 +161,22 @@ def generate_signal(
 
     # ==========================================================================
     # REC-001 (v2.0.0): XRP/BTC Correlation Monitoring
+    # REC-012 (v2.1.0): XRP Independence Monitoring - track for trend analysis
     # ==========================================================================
+    correlation = None
+    xrp_btc_paused = False
     if config.get('use_correlation_monitoring', True):
-        get_xrp_btc_correlation(data, config, state)
+        correlation = get_xrp_btc_correlation(data, config, state)
+        xrp_btc_paused = state.get('correlation_below_pause_threshold', False)
+
+        # REC-012: Record correlation data for weekly review and trend analysis
+        if correlation is not None:
+            integrate_monitoring_on_tick(
+                state=state,
+                config=config,
+                correlation=correlation,
+                xrp_btc_paused=xrp_btc_paused
+            )
 
     # ==========================================================================
     # Evaluate Each Symbol

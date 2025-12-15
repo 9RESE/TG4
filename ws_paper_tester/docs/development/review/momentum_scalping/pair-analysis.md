@@ -1,6 +1,7 @@
-# Pair Analysis: Momentum Scalping Strategy
+# Pair Analysis: Momentum Scalping Strategy v2.0
 
 **Review Date:** 2025-12-14
+**Review Version:** v2.0 (December 2025 Market Data)
 
 ---
 
@@ -9,7 +10,7 @@
 This document analyzes the three trading pairs supported by the momentum scalping strategy:
 1. XRP/USDT (Primary)
 2. BTC/USDT (Secondary)
-3. XRP/BTC (Cross-pair)
+3. XRP/BTC (Cross-pair - Conditional)
 
 ---
 
@@ -19,44 +20,49 @@ This document analyzes the three trading pairs supported by the momentum scalpin
 
 | Metric | Value | Source |
 |--------|-------|--------|
-| Typical Intraday Volatility | ~5.1% | Strategy research |
-| Typical Spread | 0.15% | Strategy research |
-| Liquidity Rank | High | Tier-1 exchange pairs |
-| Correlation with BTC | 0.84 (90-day), declining | Market data |
-| YTD Performance | +20% (outperforming BTC) | Market analysis |
+| Current Price | ~$2.02 | Market data |
+| Market Cap | $125.1 billion | CoinGape |
+| Market Cap Share | 4.63% | Global crypto |
+| 90-day BTC Correlation | 0.84 (declining) | AMBCrypto |
+| YTD Performance | +20% | AMBCrypto |
+| Liquidity Rank | 4th globally | Market data |
 
-### 1.2 Current Configuration
+### 1.2 Current Configuration (v2.1.0)
 
-```python
-'XRP/USDT': {
-    'ema_fast_period': 8,
-    'ema_slow_period': 21,
-    'ema_filter_period': 50,
-    'rsi_period': 7,
-    'position_size_usd': 25.0,
-    'take_profit_pct': 0.8,     # 0.8%
-    'stop_loss_pct': 0.4,       # 0.4%
-    'volume_spike_threshold': 1.5,
-}
-```
+| Parameter | Value | Line Reference |
+|-----------|-------|----------------|
+| `ema_fast_period` | 8 | `config.py:265` |
+| `ema_slow_period` | 21 | `config.py:266` |
+| `ema_filter_period` | 50 | `config.py:267` |
+| `rsi_period` | 8 | `config.py:268` (REC-003) |
+| `position_size_usd` | 25.0 | `config.py:269` |
+| `take_profit_pct` | 0.8% | `config.py:270` |
+| `stop_loss_pct` | 0.4% | `config.py:271` |
+| `volume_spike_threshold` | 1.5x | `config.py:272` |
 
-### 1.3 Suitability Assessment
+### 1.3 Suitability Assessment (v2.1.0)
 
 | Criteria | Rating | Notes |
 |----------|--------|-------|
-| Liquidity | EXCELLENT | Minimal slippage expected |
-| Volatility Match | GOOD | 5.1% intraday supports 0.8% TP targets |
-| Spread vs TP | ACCEPTABLE | 0.15% spread vs 0.8% TP (~19% of profit) |
+| Liquidity | EXCELLENT | 4th largest, minimal slippage |
+| Volatility Match | GOOD | Supports 0.8% TP targets |
+| Spread vs TP | ACCEPTABLE | ~0.15% spread vs 0.8% TP |
 | R:R Ratio | GOOD | 2:1 (0.8%/0.4%) |
-| RSI Period | AGGRESSIVE | Period 7 may be too fast |
+| RSI Period | OPTIMIZED | Period 8 (was 7) |
+| Independence | INCREASING | Growing real-world use cases |
 
-**Overall Suitability: HIGH**
+**Overall Suitability: HIGH** (Primary trading pair)
 
-### 1.4 Pair-Specific Recommendations
+### 1.4 XRP Independence Factors (December 2025)
 
-1. **No changes required** - Configuration is well-optimized
-2. **Consider RSI period 8-9** - Reduce noise while maintaining responsiveness
-3. **Monitor correlation** - XRP showing independence from BTC in 2025
+Research indicates XRP is becoming more independent from Bitcoin:
+
+1. **$1 billion GTreasury deal** - Access to $120 trillion payments market
+2. **Ripple institutional acquisitions** - Three major acquisitions in 2025
+3. **Regulatory clarity** - Post-SEC settlement
+4. **TradFi integration expanding** - TVL up 54% in 2025
+
+**Implication:** Correlation monitoring remains critical as XRP may decouple further.
 
 ---
 
@@ -66,59 +72,50 @@ This document analyzes the three trading pairs supported by the momentum scalpin
 
 | Metric | Value | Source |
 |--------|-------|--------|
-| ATH (2025) | $126,198 (October 2025) | Market data |
-| Current Price Range | ~$90,000-$100,000 | Market data |
-| Liquidity Rank | Deepest in crypto | Institutional flow |
-| Typical Spread | 0.02-0.05% | Tight due to liquidity |
-| ADX (Current) | ~24.81 | Technical indicators |
-| Trending Behavior | Strong at extremes | Research finding |
+| Current Price | $90,000-$100,000 | CoinDesk |
+| 2025 ATH | $126,198 (October) | CoinCodex |
+| 30-day Volatility | 49% (annualized) | Volmex BVIV |
+| Price Volatility | 3.27% (30-day) | CoinCodex |
+| RSI (Daily) | 44.94 | CoinCodex |
+| Fear & Greed | 23 (Extreme Fear) | Market data |
+| Liquidity Rank | #1 globally | Market data |
 
-### 2.2 Current Configuration
+### 2.2 Current Configuration (v2.1.0)
 
-```python
-'BTC/USDT': {
-    'ema_fast_period': 8,
-    'ema_slow_period': 21,
-    'ema_filter_period': 50,
-    'rsi_period': 9,            # Slower than XRP (good)
-    'position_size_usd': 50.0,  # Higher due to lower volatility
-    'take_profit_pct': 0.6,     # Conservative
-    'stop_loss_pct': 0.3,       # Tight (viable with low spread)
-    'volume_spike_threshold': 1.8,  # Higher (high normal volume)
-}
-```
+| Parameter | Value | Line Reference |
+|-----------|-------|----------------|
+| `ema_fast_period` | 8 | `config.py:281` |
+| `ema_slow_period` | 21 | `config.py:282` |
+| `ema_filter_period` | 50 | `config.py:283` |
+| `rsi_period` | 9 | `config.py:284` |
+| `position_size_usd` | 50.0 | `config.py:285` |
+| `take_profit_pct` | 0.6% | `config.py:286` |
+| `stop_loss_pct` | 0.3% | `config.py:287` |
+| `volume_spike_threshold` | 1.8x | `config.py:288` |
 
-### 2.3 Suitability Assessment
+### 2.3 Suitability Assessment (v2.1.0)
 
 | Criteria | Rating | Notes |
 |----------|--------|-------|
-| Liquidity | EXCELLENT | Best in crypto, minimal slippage |
-| Volatility Match | MODERATE | Lower volatility, smaller moves |
-| Spread vs TP | EXCELLENT | 0.03% spread vs 0.6% TP (~5% of profit) |
+| Liquidity | EXCELLENT | Deepest in crypto, minimal slippage |
+| Volatility Match | GOOD | Compressing volatility favorable |
+| Spread vs TP | EXCELLENT | ~0.03% spread vs 0.6% TP |
 | R:R Ratio | GOOD | 2:1 (0.6%/0.3%) |
-| ADX Filter | CRITICAL | BTC trends strongly - filter essential |
+| ADX Filter | ACTIVE | Threshold at 30 (REC-002) |
+| RSI (Daily) | NEUTRAL | 44.94 supports scalping |
 
-**Overall Suitability: MEDIUM-HIGH**
+**Overall Suitability: HIGH** (Secondary trading pair)
 
-### 2.4 Pair-Specific Concerns
+### 2.4 BTC Market Context (December 2025)
 
-**Critical Finding: BTC Trending Behavior**
+| Factor | Status | Implication |
+|--------|--------|-------------|
+| Volatility | Compressing | MEDIUM regime favorable |
+| Trend Strength | Moderate | ADX filter provides protection |
+| Market Sentiment | Extreme Fear | Contrarian bullish signal |
+| Price Zone | High ($90K+) | Potential for trending moves |
 
-Research indicates:
-> "BTC tends to trend when it is at its maximum and bounce back when at the minimum."
-
-Current ADX is 24.81 - just below the 25 threshold. This means:
-- ADX filter may allow entries that subsequently fail
-- BTC at/near ATH ($126K in Oct 2025) exhibits strong trending
-
-**Recommendation:** Consider raising ADX threshold to 30 for BTC specifically.
-
-### 2.5 Pair-Specific Recommendations
-
-1. **Raise ADX threshold** - Consider 30 instead of 25
-2. **RSI period 9 is appropriate** - Good balance for BTC
-3. **Conservative TP (0.6%)** - Appropriate for lower volatility
-4. **Monitor for strong trends** - May need to pause during BTC rallies/crashes
+**Recommendation:** Continue trading with ADX filter at 30. Monitor for volatility expansion.
 
 ---
 
@@ -128,95 +125,95 @@ Current ADX is 24.81 - just below the 25 threshold. This means:
 
 | Metric | Value | Source |
 |--------|-------|--------|
+| 90-day Correlation | 0.84 | AMBCrypto |
+| Correlation Trend | -24.86% decline | AMBCrypto |
+| Recent Correlation Range | 0.40-0.67 | Market analysis |
 | Liquidity | 7-10x lower than USD pairs | Strategy research |
-| XRP-BTC Correlation | 0.40-0.67 (down from 0.85) | 2025 market data |
 | XRP vs BTC Volatility | XRP 1.55x more volatile | Research |
-| Institutional Interest | XRP gaining independence | Market analysis |
-| Spread | Higher than USD pairs | Cross-pair nature |
+| Pause Threshold | 0.60 | `config.py:205` |
 
-### 3.2 Current Configuration
+### 3.2 Current Configuration (v2.1.0)
 
-```python
-'XRP/BTC': {
-    'ema_fast_period': 8,
-    'ema_slow_period': 21,
-    'ema_filter_period': 50,
-    'rsi_period': 9,            # Slower (good for noise)
-    'position_size_usd': 15.0,  # Smaller (slippage risk)
-    'take_profit_pct': 1.2,     # Wider (higher volatility)
-    'stop_loss_pct': 0.6,       # Wider (maintains 2:1)
-    'volume_spike_threshold': 2.0,  # Higher (need strong confirmation)
-    'cooldown_trades': 15,      # Higher (fewer quality signals)
-}
-```
+| Parameter | Value | Line Reference |
+|-----------|-------|----------------|
+| `ema_fast_period` | 8 | `config.py:297` |
+| `ema_slow_period` | 21 | `config.py:298` |
+| `ema_filter_period` | 50 | `config.py:299` |
+| `rsi_period` | 9 | `config.py:300` |
+| `position_size_usd` | 15.0 | `config.py:301` |
+| `take_profit_pct` | 1.2% | `config.py:302` |
+| `stop_loss_pct` | 0.6% | `config.py:303` |
+| `volume_spike_threshold` | 2.0x | `config.py:304` |
+| `cooldown_trades` | 15 | `config.py:305` |
 
-### 3.3 Suitability Assessment
+### 3.3 Correlation Protection (v2.1.0)
+
+| Parameter | Value | Line Reference |
+|-----------|-------|----------------|
+| `use_correlation_monitoring` | True | `config.py:202` |
+| `correlation_lookback` | 100 | `config.py:203` (REC-008) |
+| `correlation_warn_threshold` | 0.60 | `config.py:204` |
+| `correlation_pause_threshold` | 0.60 | `config.py:205` (REC-001) |
+| `correlation_pause_enabled` | True | `config.py:206` |
+
+### 3.4 Suitability Assessment (v2.1.0)
 
 | Criteria | Rating | Notes |
 |----------|--------|-------|
 | Liquidity | POOR | 7-10x lower, slippage risk |
-| Correlation | CRITICAL ISSUE | Declined 24.86% over 90 days |
-| Volatility Match | GOOD | 1.2% TP appropriate for ratio volatility |
+| Correlation | CONDITIONAL | 0.60 pause threshold active |
+| Volatility Match | GOOD | 1.2% TP for ratio volatility |
 | R:R Ratio | GOOD | 2:1 (1.2%/0.6%) |
-| Signal Reliability | POOR | Low correlation = unreliable momentum |
+| Signal Reliability | CONDITIONAL | Depends on correlation |
 
-**Overall Suitability: LOW (Currently)**
+**Overall Suitability: CONDITIONAL**
 
-### 3.4 Critical Correlation Analysis
+Trading only permitted when:
+- XRP-BTC correlation > 0.60 (checked via `should_pause_for_low_correlation()`)
+- Implementation: `risk.py:369-395`
 
-**Current State (December 2025):**
+### 3.5 XRP Independence Analysis
 
-| Metric | Value | Implication |
-|--------|-------|-------------|
-| 90-day Correlation | ~0.84 | Still significant |
-| 90-day Decline | -24.86% | Rapidly decoupling |
-| Recent Range | 0.40-0.67 | Highly variable |
-| Pause Threshold | 0.50 | May trigger frequently |
+**December 2025 Research Findings:**
 
-**Research Finding:**
-> "XRP's correlation with Bitcoin is continuing to weaken... this 'weakening correlation with Bitcoin highlights its growing independence in 2025, fueled by Ripple's expanding real-world footprint.'"
+> "XRP's correlation with Bitcoin is continuing to weaken. This weakening correlation with Bitcoin highlights its growing independence in 2025, fueled by Ripple's expanding real-world footprint."
 
-**XRP Independence Factors:**
-1. $1 billion GTreasury deal (access to $120T payments market)
-2. Ripple institutional acquisitions
-3. Regulatory clarity (post-SEC settlement)
-4. TradFi integration expanding
+**Key Independence Drivers:**
+1. Ripple GTreasury ($120T payments market access)
+2. Three major TradFi acquisitions in 2025
+3. TVL surge 54% (outpacing BTC's 33%)
+4. XRP outperforming BTC by 1.13x in 2025
 
-### 3.5 Pair-Specific Recommendations
-
-1. **PAUSE TRADING** - Until correlation stabilizes > 0.60
-2. **If trading:** Reduce position size further (10 USD max)
-3. **Increase correlation lookback** - Consider 100 candles vs 50
-4. **Consider removing pair** - May not be suitable for momentum scalping in current market
+**Implication:** XRP/BTC pair may face increasing periods of trading pause as correlation continues to decline. The 0.60 threshold provides appropriate protection.
 
 ---
 
 ## 4. Cross-Pair Comparison
 
-### 4.1 Configuration Comparison
+### 4.1 Configuration Comparison (v2.1.0)
 
 | Parameter | XRP/USDT | BTC/USDT | XRP/BTC | Rationale |
 |-----------|----------|----------|---------|-----------|
-| RSI Period | 7 | 9 | 9 | BTC/XRP-BTC slower for noise |
-| Position Size | $25 | $50 | $15 | Risk-adjusted for volatility |
-| Take Profit | 0.8% | 0.6% | 1.2% | Scaled to pair volatility |
+| RSI Period | 8 | 9 | 9 | XRP faster, BTC/ratio slower |
+| Position Size | $25 | $50 | $15 | Risk-adjusted |
+| Take Profit | 0.8% | 0.6% | 1.2% | Volatility-scaled |
 | Stop Loss | 0.4% | 0.3% | 0.6% | Maintains 2:1 R:R |
-| Volume Threshold | 1.5x | 1.8x | 2.0x | Higher for less liquid pairs |
-| Cooldown | 5 | 5 | 15 | XRP/BTC fewer quality signals |
+| Volume Threshold | 1.5x | 1.8x | 2.0x | Liquidity-adjusted |
+| Cooldown | 5 | 5 | 15 | Quality over quantity |
 
-### 4.2 Risk Assessment by Pair
+### 4.2 Risk Assessment by Pair (v2.1.0)
 
-| Pair | Signal Quality | Execution Risk | Correlation Risk | Overall Risk |
-|------|----------------|----------------|------------------|--------------|
-| XRP/USDT | HIGH | LOW | MEDIUM | **LOW** |
-| BTC/USDT | MEDIUM | LOW | N/A | **MEDIUM** |
-| XRP/BTC | LOW | HIGH | HIGH | **HIGH** |
+| Pair | Signal Quality | Execution Risk | Special Risk | Overall Risk |
+|------|----------------|----------------|--------------|--------------|
+| XRP/USDT | HIGH | LOW | Independence | **LOW** |
+| BTC/USDT | HIGH | LOW | Trending | **LOW** |
+| XRP/BTC | CONDITIONAL | MEDIUM | Correlation | **MEDIUM** |
 
 ### 4.3 Recommended Trading Priority
 
-1. **XRP/USDT** - Primary focus, best risk-adjusted returns
-2. **BTC/USDT** - Secondary, with enhanced ADX filtering
-3. **XRP/BTC** - PAUSE or disable until correlation improves
+1. **XRP/USDT** - Primary focus, excellent risk-adjusted returns
+2. **BTC/USDT** - Secondary, with ADX filter active
+3. **XRP/BTC** - Conditional only when correlation > 0.60
 
 ---
 
@@ -226,51 +223,47 @@ Current ADX is 24.81 - just below the 25 threshold. This means:
 
 | Pair | Best Session | Worst Session | Notes |
 |------|--------------|---------------|-------|
-| XRP/USDT | US_EUROPE_OVERLAP | OFF_HOURS | High retail activity |
+| XRP/USDT | US_EUROPE_OVERLAP | OFF_HOURS | Retail activity peak |
 | BTC/USDT | US_EUROPE_OVERLAP | ASIA | Institutional flow |
-| XRP/BTC | EUROPE | OFF_HOURS | Cross-pair spreads tightest |
+| XRP/BTC | EUROPE | OFF_HOURS | Tightest spreads |
 
 ### 5.2 Session Multiplier Assessment
 
-Current configuration (from `config.py`):
-
-```python
-'session_size_multipliers': {
-    'ASIA': 0.8,              # Appropriate
-    'EUROPE': 1.0,            # Standard
-    'US': 1.0,                # Standard
-    'US_EUROPE_OVERLAP': 1.1, # Appropriate
-    'OFF_HOURS': 0.5,         # Appropriately conservative
-}
-```
+| Session | Threshold Mult | Size Mult | Line Reference |
+|---------|----------------|-----------|----------------|
+| ASIA | 1.2 | 0.8 | `config.py:147-148` |
+| EUROPE | 1.0 | 1.0 | `config.py:149` |
+| US | 1.0 | 1.0 | `config.py:150` |
+| US_EUROPE_OVERLAP | 0.9 | 1.1 | `config.py:151` |
+| OFF_HOURS | 1.4 | 0.5 | `config.py:152` |
 
 **Assessment:** Session multipliers are well-calibrated for all pairs.
 
 ---
 
-## 6. Summary Recommendations
+## 6. Summary Recommendations (v2.1.0 Verified)
 
-### 6.1 Immediate Actions
+### 6.1 Trading Status
 
-| Pair | Action | Reason |
-|------|--------|--------|
-| XRP/USDT | Continue trading | Well-optimized |
-| BTC/USDT | Raise ADX to 30 | Trending behavior risk |
-| XRP/BTC | **PAUSE** | Correlation breakdown |
+| Pair | Status | Condition |
+|------|--------|-----------|
+| XRP/USDT | ACTIVE | Primary pair |
+| BTC/USDT | ACTIVE | ADX filter protects |
+| XRP/BTC | CONDITIONAL | Correlation > 0.60 required |
 
 ### 6.2 Monitoring Requirements
 
-1. **Daily:** Check XRP-BTC correlation
-2. **Weekly:** Review ADX levels for BTC
-3. **Monthly:** Reassess pair suitability
+1. **Daily:** Check XRP-BTC correlation status
+2. **Weekly:** Review ADX levels for BTC trending behavior
+3. **Monthly:** Reassess pair suitability based on correlation trends
 
-### 6.3 Parameter Tuning Candidates
+### 6.3 Future Considerations
 
-| Pair | Parameter | Current | Suggested | Priority |
-|------|-----------|---------|-----------|----------|
-| XRP/USDT | rsi_period | 7 | 8 | LOW |
-| BTC/USDT | adx_threshold | 25 | 30 | HIGH |
-| XRP/BTC | correlation_pause | 0.50 | 0.55 | MEDIUM |
+| Pair | Concern | Monitoring |
+|------|---------|------------|
+| XRP/USDT | Growing independence | Track correlation trend |
+| BTC/USDT | Volatility expansion | Watch Fear & Greed Index |
+| XRP/BTC | Correlation decline | May require threshold adjustment |
 
 ---
 

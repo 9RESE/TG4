@@ -15,6 +15,21 @@ Based on research from master-plan-v1.0.md:
 - Maximum 3-minute hold time
 
 Version History:
+- 2.1.1: REC-012/REC-013 Monitoring Implementation
+         - REC-012 (P3/LOW): XRP Independence Monitoring
+           - New: monitoring.py module with CorrelationMonitor class
+           - Tracks XRP-BTC correlation for weekly review and trend analysis
+           - Escalation triggers for sustained low correlation (30 days <0.70)
+           - Escalation triggers for high pause rate (>50% sessions paused)
+           - State persisted to logs/monitoring/monitoring_state.json
+           - Weekly reports saved to logs/monitoring/correlation_report_*.json
+         - REC-013 (P3/LOW): Market Sentiment Monitoring
+           - New: SentimentMonitor class for Fear & Greed Index tracking
+           - Sentiment classification (Extreme Fear/Fear/Neutral/Greed/Extreme Greed)
+           - Prolonged extreme sentiment alerts (7+ consecutive days)
+           - Volatility expansion signals for regime awareness
+           - Config: enable_sentiment_monitoring, sentiment thresholds
+
 - 2.1.0: Deep Review v2.0 Implementation
          - REC-001 (P0/CRITICAL): Raised XRP/BTC pause threshold
            - Config: correlation_pause_threshold raised from 0.50 to 0.60
@@ -163,6 +178,20 @@ from .signal import (
 
 from .lifecycle import initialize_state
 
+# =============================================================================
+# REC-012/REC-013 (v2.1.0): Monitoring exports
+# =============================================================================
+from .monitoring import (
+    MonitoringManager,
+    CorrelationMonitor,
+    SentimentMonitor,
+    MonitoringState,
+    CorrelationRecord,
+    SentimentRecord,
+    integrate_monitoring_on_tick,
+    get_or_create_monitoring_manager,
+)
+
 
 __all__ = [
     # Required strategy interface
@@ -232,4 +261,13 @@ __all__ = [
     'initialize_state',
     'track_rejection',
     'build_base_indicators',
+    # REC-012/REC-013 (v2.1.0): Monitoring
+    'MonitoringManager',
+    'CorrelationMonitor',
+    'SentimentMonitor',
+    'MonitoringState',
+    'CorrelationRecord',
+    'SentimentRecord',
+    'integrate_monitoring_on_tick',
+    'get_or_create_monitoring_manager',
 ]

@@ -12,7 +12,7 @@ from typing import Dict, Any
 # Strategy Metadata
 # =============================================================================
 STRATEGY_NAME = "momentum_scalping"
-STRATEGY_VERSION = "2.1.0"
+STRATEGY_VERSION = "2.1.1"
 SYMBOLS = ["XRP/USDT", "BTC/USDT", "XRP/BTC"]
 
 
@@ -247,6 +247,24 @@ CONFIG: Dict[str, Any] = {
     # ==========================================================================
     'exit_breakeven_on_momentum_exhaustion': False,  # REC-009: Off by default
     'breakeven_tolerance_pct': 0.1,             # Within 0.1% of breakeven
+
+    # ==========================================================================
+    # REC-012 (v2.1.0): XRP Independence Monitoring
+    # Track XRP-BTC correlation over time for weekly review and trend analysis
+    # Escalation triggers: <0.70 for 30 days, or >50% pause rate
+    # ==========================================================================
+    'enable_correlation_trend_tracking': True,  # Enable REC-012 monitoring
+    'correlation_escalation_threshold': 0.70,   # Threshold for escalation tracking
+    'correlation_escalation_days': 30,          # Days of low correlation for escalation
+
+    # ==========================================================================
+    # REC-013 (v2.1.0): Market Sentiment Monitoring
+    # Track Fear & Greed Index for volatility expansion signals
+    # Extreme Fear (<24) historically precedes volatility expansion
+    # ==========================================================================
+    'enable_sentiment_monitoring': True,        # Enable REC-013 monitoring
+    'sentiment_extreme_fear_threshold': 24,     # Extreme Fear threshold
+    'sentiment_extreme_greed_threshold': 76,    # Extreme Greed threshold
 }
 
 

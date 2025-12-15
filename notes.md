@@ -158,7 +158,7 @@ Provide:
 - Pairs: XRP/USDT, BTC/USDT, XRP/BTC
 - Key concepts: Avellaneda-Stoikov, inventory skew, micro-price
 - Watch for: minimum spread > 0.2% (fees), stale inventory decay
-## Momentum Scalping (v2.1.0 - 2025-12-14)
+## Momentum Scalping (v2.1.1 - 2025-12-14)
 - Pairs: XRP/USDT, BTC/USDT, XRP/BTC
 - Key concepts: RSI 7-8, MACD (6,13,5), EMA 8/21/50 ribbon, volume spikes
 - v2.0 additions:
@@ -166,7 +166,7 @@ Provide:
   - REC-002: 5m trend filter (50 EMA alignment)
   - REC-003: ADX filter for BTC (threshold 25)
   - REC-004: Regime-based RSI bands (75/25 in HIGH vol)
-- v2.1 additions (Deep Review v2.0 implementation):
+- v2.1.0 additions (Deep Review v2.0 implementation):
   - REC-001: Raised correlation pause threshold to 0.60 (was 0.50)
   - REC-002: Raised ADX threshold for BTC to 30 (was 25)
   - REC-003: Changed RSI period for XRP to 8 (was 7)
@@ -176,4 +176,15 @@ Provide:
   - REC-008: Correlation lookback increased to 100 (was 50)
   - REC-009: Breakeven momentum exit option (disabled by default)
   - REC-010: Structured logging using Python logging module
+- v2.1.1 additions (REC-012/REC-013 Monitoring):
+  - REC-012: XRP Independence Monitoring (monitoring.py)
+    - CorrelationMonitor tracks XRP-BTC correlation for weekly review
+    - Escalation triggers: <0.70 for 30 days, or >50% pause rate
+    - State persisted to logs/monitoring/monitoring_state.json
+    - Weekly reports: logs/monitoring/correlation_report_*.json
+  - REC-013: Market Sentiment Monitoring
+    - SentimentMonitor tracks Fear & Greed Index
+    - Classifications: Extreme Fear/Fear/Neutral/Greed/Extreme Greed
+    - Prolonged extreme alerts (7+ consecutive days)
+    - Volatility expansion signals for regime awareness
 - Watch for: correlation breakdown on XRP/BTC, BTC trending markets (ADX>30)
