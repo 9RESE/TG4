@@ -31,16 +31,20 @@ from .config import (
     get_symbol_config
 )
 from .indicators import (
-    calculate_rsi, detect_volume_spike, classify_whale_signal,
+    detect_volume_spike, classify_whale_signal,
     calculate_fear_greed_proxy, classify_sentiment_zone,
     get_sentiment_string, is_fear_zone, is_greed_zone,
     detect_rsi_divergence, check_trade_flow_confirmation,
-    calculate_composite_confidence, validate_volume_spike
+    calculate_composite_confidence, validate_volume_spike,
+    calculate_atr  # REC-023: Volatility regime
 )
 from .regimes import (
     classify_trading_session, get_session_adjustments,
     get_sentiment_regime_adjustments, is_contrarian_opportunity,
-    should_reduce_size_for_sentiment
+    should_reduce_size_for_sentiment,
+    # REC-023, REC-025, REC-027: New regime functions
+    classify_volatility_regime, get_volatility_adjustments,
+    check_extended_fear_period, calculate_dynamic_confidence_threshold
 )
 from .risk import (
     check_fee_profitability, check_circuit_breaker,
@@ -249,13 +253,9 @@ def _evaluate_symbol(
 
     # ==========================================================================
     # Calculate Indicators
+    # REC-021: RSI completely removed from strategy (v1.3.0)
     # ==========================================================================
-    # RSI
-    rsi_period = config.get('rsi_period', 14)
-    rsi_result = calculate_rsi(candles, rsi_period)
-    rsi = rsi_result.get('rsi')
-
-    # Volume spike detection (whale proxy)
+    # Volume spike detection (whale proxy) - PRIMARY signal
     volume_window = get_symbol_config(symbol, config, 'volume_window') or config.get('volume_window', 288)
     spike_mult = get_symbol_config(symbol, config, 'volume_spike_mult') or config.get('volume_spike_mult', 2.0)
     volume_spike = detect_volume_spike(candles, volume_window, spike_mult)
@@ -264,19 +264,26 @@ def _evaluate_symbol(
     price_move_threshold = config.get('volume_spike_price_move_pct', 0.1)
     whale_signal = classify_whale_signal(volume_spike, candles, price_move_threshold)
 
-    # Fear/greed price deviation
+    # Fear/greed price deviation - PRIMARY sentiment signal (per REC-021)
     price_lookback = config.get('price_lookback', 48)
     fear_dev = get_symbol_config(symbol, config, 'fear_deviation_pct') or config.get('fear_deviation_pct', -5.0)
     greed_dev = get_symbol_config(symbol, config, 'greed_deviation_pct') or config.get('greed_deviation_pct', 5.0)
     fear_greed = calculate_fear_greed_proxy(candles, price_lookback, fear_dev, greed_dev)
 
-    # Sentiment zone classification
-    sentiment_zone = classify_sentiment_zone(rsi, fear_greed, config)
+    # Sentiment zone classification - REC-021: Now uses ONLY price deviation
+    sentiment_zone = classify_sentiment_zone(fear_greed, config)
 
-    # RSI divergence detection
-    closes = [c.close for c in candles]
-    rsi_series = rsi_result.get('rsi_series', [])
-    divergence = detect_rsi_divergence(closes, rsi_series, 14)
+    # REC-023: Calculate ATR for volatility regime
+    atr_result = calculate_atr(candles, 14)
+    atr_pct = atr_result.get('atr_pct')
+    volatility_regime = classify_volatility_regime(atr_pct, config)
+    volatility_adjustments = get_volatility_adjustments(volatility_regime, config)
+
+    # REC-025: Check extended fear period
+    extended_fear = check_extended_fear_period(state, sentiment_zone, current_time, config)
+
+    # REC-021: RSI divergence deprecated - always returns 'none'
+    divergence = detect_rsi_divergence([], [], 14)
 
     # ==========================================================================
     # Get Current Price
@@ -327,29 +334,33 @@ def _evaluate_symbol(
 
     # ==========================================================================
     # Build Comprehensive Indicators
+    # REC-021: RSI removed; REC-023: ATR added for volatility regime
     # ==========================================================================
     state['indicators'] = {
         'symbol': symbol,
         'status': 'active',
         'candle_count': len(candles),
         'price': round(current_price, 6),
-        # RSI
-        'rsi': round(rsi, 2) if rsi else None,
-        'prev_rsi': round(rsi_result.get('prev_rsi', 0), 2) if rsi_result.get('prev_rsi') else None,
-        # Volume Spike
+        # Volume Spike (PRIMARY signal)
         'volume_ratio': round(volume_spike.get('volume_ratio', 0), 2),
         'has_volume_spike': volume_spike.get('has_spike', False),
         'volume_spike_valid': is_valid_spike,
         'whale_signal': whale_signal.name.lower(),
-        # Fear/Greed
+        # Fear/Greed Price Deviation (PRIMARY sentiment per REC-021)
         'from_high_pct': round(fear_greed.get('from_high_pct', 0), 2),
         'from_low_pct': round(fear_greed.get('from_low_pct', 0), 2),
         # Sentiment
         'sentiment_zone': get_sentiment_string(sentiment_zone),
         'is_fear': is_fear_zone(sentiment_zone),
         'is_greed': is_greed_zone(sentiment_zone),
-        # Divergence
-        'divergence': divergence.get('divergence_type', 'none'),
+        # REC-023: Volatility Regime
+        'atr_pct': round(atr_pct, 3) if atr_pct else None,
+        'volatility_regime': volatility_regime,
+        'volatility_size_mult': round(volatility_adjustments['size_mult'], 2),
+        # REC-025: Extended Fear Period
+        'extended_fear_active': extended_fear['is_extended'],
+        'hours_in_extreme': round(extended_fear['hours_in_extreme'], 1),
+        'extended_fear_paused': extended_fear['should_pause'],
         # Session
         'trading_session': session.name,
         'session_size_mult': round(session_adjustments['size_mult'], 2),
@@ -399,6 +410,15 @@ def _evaluate_symbol(
         state['indicators']['status'] = 'neutral_sentiment'
         if track_rejections:
             track_rejection(state, RejectionReason.NEUTRAL_SENTIMENT, symbol)
+        return None
+
+    # ==========================================================================
+    # REC-025: Extended Fear Period Check
+    # ==========================================================================
+    if extended_fear['should_pause']:
+        state['indicators']['status'] = 'extended_fear_paused'
+        state['indicators']['extended_fear_hours'] = round(extended_fear['hours_in_extreme'], 1)
+        # Don't track as rejection - this is protective behavior
         return None
 
     # ==========================================================================
@@ -523,7 +543,14 @@ def _evaluate_symbol(
     state['indicators']['confidence'] = round(confidence, 3)
     state['indicators']['confidence_reasons'] = reasons[:3]
 
-    min_confidence = config.get('min_confidence', 0.55)
+    # REC-027: Dynamic confidence threshold
+    base_min_confidence = config.get('min_confidence', 0.50)
+    min_confidence = calculate_dynamic_confidence_threshold(
+        base_min_confidence, sentiment_zone, volatility_regime, config
+    )
+    state['indicators']['min_confidence'] = round(min_confidence, 3)
+    state['indicators']['confidence_margin'] = round(confidence - min_confidence, 3)
+
     if confidence < min_confidence:
         state['indicators']['status'] = 'insufficient_confidence'
         if track_rejections:
@@ -536,8 +563,15 @@ def _evaluate_symbol(
     # Sentiment-based size adjustment
     sentiment_size_mult = should_reduce_size_for_sentiment(sentiment_zone, direction, config)
 
-    # Correlation adjustment
-    adjusted_size = available_size * corr_adj * sentiment_size_mult
+    # REC-023: Volatility regime adjustment
+    volatility_size_mult = volatility_adjustments['size_mult']
+
+    # REC-025: Extended fear period adjustment
+    extended_fear_size_mult = extended_fear['size_mult']
+
+    # Correlation adjustment plus all regime adjustments
+    adjusted_size = (available_size * corr_adj * sentiment_size_mult *
+                     volatility_size_mult * extended_fear_size_mult)
 
     # Short size multiplier
     if direction == 'short':
@@ -565,19 +599,19 @@ def _evaluate_symbol(
             symbol=symbol,
             size=final_size,
             price=current_price,
-            reason=f"WS: Long ({reason_str}, RSI={rsi:.0f if rsi else 0})",
+            reason=f"WS: Long ({reason_str})",
             stop_loss=current_price * (1 - sl_pct / 100),
             take_profit=current_price * (1 + tp_pct / 100),
             metadata={
                 'entry_type': 'whale_sentiment_long',
                 'sentiment_zone': get_sentiment_string(sentiment_zone),
                 'whale_signal': whale_signal.name.lower(),
-                'rsi': rsi,
                 'volume_ratio': volume_spike.get('volume_ratio'),
                 'confidence': confidence,
                 'trade_flow_imbalance': flow_data.get('imbalance'),
                 'correlation_adjustment': corr_adj,
-                'divergence': divergence.get('divergence_type'),
+                'atr_pct': atr_pct,  # REC-023
+                'volatility_regime': _classify_volatility_regime(atr_pct),  # REC-023
             }
         )
     else:  # short
@@ -586,19 +620,19 @@ def _evaluate_symbol(
             symbol=symbol,
             size=final_size,
             price=current_price,
-            reason=f"WS: Short ({reason_str}, RSI={rsi:.0f if rsi else 0})",
+            reason=f"WS: Short ({reason_str})",
             stop_loss=current_price * (1 + sl_pct / 100),
             take_profit=current_price * (1 - tp_pct / 100),
             metadata={
                 'entry_type': 'whale_sentiment_short',
                 'sentiment_zone': get_sentiment_string(sentiment_zone),
                 'whale_signal': whale_signal.name.lower(),
-                'rsi': rsi,
                 'volume_ratio': volume_spike.get('volume_ratio'),
                 'confidence': confidence,
                 'trade_flow_imbalance': flow_data.get('imbalance'),
                 'correlation_adjustment': corr_adj,
-                'divergence': divergence.get('divergence_type'),
+                'atr_pct': atr_pct,  # REC-023
+                'volatility_regime': _classify_volatility_regime(atr_pct),  # REC-023
             }
         )
 

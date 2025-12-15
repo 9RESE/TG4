@@ -1,13 +1,204 @@
 """
 Whale Sentiment Strategy - Regime Classification
 
-Contains functions for session awareness and sentiment regime classification.
-The Whale Sentiment strategy uses sentiment-based regimes rather than volatility regimes.
+Contains functions for session awareness, sentiment regime classification,
+and volatility regime adjustments.
+
+v1.3.0 Additions:
+- REC-023: Volatility regime classification and adjustments
+- REC-025: Extended fear period detection
+- REC-027: Dynamic confidence threshold support
 """
 from datetime import datetime
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 from .config import TradingSession, SentimentZone
+
+
+# =============================================================================
+# REC-023: Volatility Regime Classification
+# =============================================================================
+class VolatilityRegime:
+    """Volatility regime classifications."""
+    LOW = 'low'
+    MEDIUM = 'medium'
+    HIGH = 'high'
+    UNKNOWN = 'unknown'
+
+
+def classify_volatility_regime(
+    atr_pct: Optional[float],
+    config: Dict[str, Any]
+) -> str:
+    """
+    REC-023: Classify volatility regime based on ATR percentage.
+
+    Args:
+        atr_pct: ATR as percentage of price
+        config: Strategy configuration
+
+    Returns:
+        Volatility regime string ('low', 'medium', 'high', 'unknown')
+    """
+    if atr_pct is None:
+        return VolatilityRegime.UNKNOWN
+
+    low_threshold = config.get('volatility_low_threshold', 1.5)
+    high_threshold = config.get('volatility_high_threshold', 3.5)
+
+    if atr_pct < low_threshold:
+        return VolatilityRegime.LOW
+    elif atr_pct >= high_threshold:
+        return VolatilityRegime.HIGH
+    else:
+        return VolatilityRegime.MEDIUM
+
+
+def get_volatility_adjustments(
+    volatility_regime: str,
+    config: Dict[str, Any]
+) -> Dict[str, float]:
+    """
+    REC-023: Get parameter adjustments based on volatility regime.
+
+    Args:
+        volatility_regime: Current volatility regime
+        config: Strategy configuration
+
+    Returns:
+        Dict with size_mult, stop_mult, cooldown_mult adjustments
+    """
+    adjustments = {
+        'size_mult': 1.0,
+        'stop_mult': 1.0,
+        'cooldown_mult': 1.0,
+    }
+
+    if volatility_regime == VolatilityRegime.HIGH:
+        adjustments['size_mult'] = config.get('volatility_high_size_mult', 0.75)
+        adjustments['stop_mult'] = config.get('volatility_high_stop_mult', 1.5)
+        adjustments['cooldown_mult'] = config.get('volatility_high_cooldown_mult', 1.5)
+    elif volatility_regime == VolatilityRegime.LOW:
+        # Tighter stops, can be slightly larger positions in low volatility
+        adjustments['size_mult'] = 1.1
+        adjustments['stop_mult'] = 0.8
+        adjustments['cooldown_mult'] = 0.8
+
+    return adjustments
+
+
+# =============================================================================
+# REC-025: Extended Fear Period Detection
+# =============================================================================
+def check_extended_fear_period(
+    state: Dict[str, Any],
+    sentiment_zone: SentimentZone,
+    current_time: datetime,
+    config: Dict[str, Any]
+) -> Dict[str, Any]:
+    """
+    REC-025: Check for extended periods of extreme sentiment.
+
+    Tracks consecutive hours in extreme sentiment zones and recommends
+    size reduction or entry pause to prevent capital exhaustion.
+
+    Args:
+        state: Strategy state dict
+        sentiment_zone: Current sentiment zone
+        current_time: Current timestamp
+        config: Strategy configuration
+
+    Returns:
+        Dict with is_extended, hours_in_extreme, size_mult, should_pause
+    """
+    result = {
+        'is_extended': False,
+        'hours_in_extreme': 0,
+        'size_mult': 1.0,
+        'should_pause': False,
+        'zone_entered': None,
+    }
+
+    if not config.get('use_extended_fear_detection', True):
+        return result
+
+    # Initialize tracking in state if needed
+    if 'extreme_zone_start' not in state:
+        state['extreme_zone_start'] = None
+        state['extreme_zone_type'] = None
+
+    is_extreme = sentiment_zone in (SentimentZone.EXTREME_FEAR, SentimentZone.EXTREME_GREED)
+
+    if is_extreme:
+        # If not already tracking, start tracking
+        if state['extreme_zone_start'] is None:
+            state['extreme_zone_start'] = current_time
+            state['extreme_zone_type'] = sentiment_zone.name
+
+        # Calculate hours in extreme zone
+        hours_in_extreme = (current_time - state['extreme_zone_start']).total_seconds() / 3600
+        result['hours_in_extreme'] = hours_in_extreme
+        result['zone_entered'] = state['extreme_zone_start'].isoformat()
+
+        # Check thresholds
+        threshold_hours = config.get('extended_fear_threshold_hours', 168)  # 7 days
+        pause_hours = config.get('extended_fear_pause_hours', 336)  # 14 days
+
+        if hours_in_extreme >= pause_hours:
+            result['is_extended'] = True
+            result['should_pause'] = True
+            result['size_mult'] = 0.0  # No new entries
+        elif hours_in_extreme >= threshold_hours:
+            result['is_extended'] = True
+            result['size_mult'] = config.get('extended_fear_size_reduction', 0.70)
+    else:
+        # Reset tracking if no longer in extreme zone
+        state['extreme_zone_start'] = None
+        state['extreme_zone_type'] = None
+
+    return result
+
+
+# =============================================================================
+# REC-027: Dynamic Confidence Threshold
+# =============================================================================
+def calculate_dynamic_confidence_threshold(
+    base_threshold: float,
+    sentiment_zone: SentimentZone,
+    volatility_regime: str,
+    config: Dict[str, Any]
+) -> float:
+    """
+    REC-027: Calculate dynamic confidence threshold based on conditions.
+
+    Args:
+        base_threshold: Base minimum confidence threshold
+        sentiment_zone: Current sentiment zone
+        volatility_regime: Current volatility regime
+        config: Strategy configuration
+
+    Returns:
+        Adjusted confidence threshold
+    """
+    if not config.get('use_dynamic_confidence', True):
+        return base_threshold
+
+    threshold = base_threshold
+
+    # Extreme sentiment bonus (easier entry in extreme zones)
+    if sentiment_zone in (SentimentZone.EXTREME_FEAR, SentimentZone.EXTREME_GREED):
+        bonus = config.get('confidence_extreme_bonus', -0.05)
+        threshold += bonus
+
+    # High volatility penalty (harder entry in volatile markets)
+    if volatility_regime == VolatilityRegime.HIGH:
+        penalty = config.get('confidence_high_volatility_penalty', 0.05)
+        threshold += penalty
+
+    # Clamp to valid range (0.40 - 0.60)
+    threshold = max(0.40, min(0.60, threshold))
+
+    return threshold
 
 
 def classify_trading_session(

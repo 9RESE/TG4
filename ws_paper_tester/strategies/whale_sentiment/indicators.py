@@ -2,12 +2,17 @@
 Whale Sentiment Strategy - Indicator Calculations
 
 Contains functions for calculating:
-- RSI (Relative Strength Index)
+- ATR (Average True Range) for volatility regime - REC-023
 - Volume spike detection (whale proxy)
-- Fear/Greed price deviation
+- Fear/Greed price deviation (PRIMARY sentiment signal per REC-021)
 - Trade flow analysis
 - Composite confidence calculation
 - Rolling correlation
+
+REC-021: RSI COMPLETELY REMOVED from strategy (v1.3.0)
+RSI functions retained but marked deprecated - not called anywhere.
+Academic research (PMC/NIH 2023, QuantifiedStrategies 2024) shows RSI
+ineffectiveness in crypto markets.
 
 ===============================================================================
 REC-012: Candle Aggregation Edge Cases Documentation
@@ -80,8 +85,72 @@ def calculate_sma(values: List[float], period: int) -> Optional[float]:
     return sum(values[-period:]) / period
 
 
+def calculate_atr(candles, period: int = 14) -> Dict[str, Any]:
+    """
+    Calculate Average True Range (ATR) for volatility regime classification.
+
+    REC-023: Added for volatility regime detection.
+
+    ATR = Average of True Range over period
+    True Range = max(high-low, abs(high-prev_close), abs(low-prev_close))
+
+    Args:
+        candles: Tuple/list of candle objects
+        period: ATR period (default 14)
+
+    Returns:
+        Dict with atr, atr_pct (as % of price), tr_series
+    """
+    result = {
+        'atr': None,
+        'atr_pct': None,
+        'tr_series': [],
+    }
+
+    if len(candles) < period + 1:
+        return result
+
+    # Calculate True Range series
+    tr_series = []
+    for i in range(1, len(candles)):
+        high = candles[i].high
+        low = candles[i].low
+        prev_close = candles[i - 1].close
+
+        tr = max(
+            high - low,
+            abs(high - prev_close),
+            abs(low - prev_close)
+        )
+        tr_series.append(tr)
+
+    if len(tr_series) < period:
+        return result
+
+    # Calculate ATR using Wilder's smoothing
+    atr = sum(tr_series[:period]) / period
+
+    for i in range(period, len(tr_series)):
+        atr = (atr * (period - 1) + tr_series[i]) / period
+
+    result['atr'] = atr
+    result['tr_series'] = tr_series
+
+    # Calculate ATR as percentage of current price
+    current_price = candles[-1].close
+    if current_price > 0:
+        result['atr_pct'] = (atr / current_price) * 100
+
+    return result
+
+
 def calculate_rsi(candles, period: int = 14) -> Dict[str, Any]:
     """
+    DEPRECATED: RSI removed per REC-021 (v1.3.0).
+
+    Academic research shows RSI ineffectiveness in crypto markets.
+    Function retained for backwards compatibility but not called.
+
     Calculate Relative Strength Index (RSI).
 
     RSI = 100 - (100 / (1 + RS))
@@ -351,47 +420,52 @@ def calculate_fear_greed_proxy(
 
 
 def classify_sentiment_zone(
-    rsi: Optional[float],
     fear_greed: Dict[str, Any],
-    config: Dict[str, Any]
+    config: Dict[str, Any],
+    rsi: Optional[float] = None  # DEPRECATED: Retained for backwards compatibility
 ) -> SentimentZone:
     """
-    Classify market sentiment zone based on RSI and price deviation.
+    Classify market sentiment zone based on price deviation.
 
-    Priority:
-    1. Extreme zones from RSI (most reliable)
-    2. Regular zones from RSI
-    3. Fear/greed from price deviation (supplementary)
+    REC-021: RSI COMPLETELY REMOVED (v1.3.0).
+    Now uses ONLY price deviation for sentiment classification.
+    Academic research shows RSI ineffectiveness in crypto markets.
+
+    Classification based on deviation from recent high/low:
+    - EXTREME_FEAR: from_high_pct <= extreme_fear_deviation (default -8%)
+    - FEAR: from_high_pct <= fear_deviation (default -5%)
+    - EXTREME_GREED: from_low_pct >= extreme_greed_deviation (default +8%)
+    - GREED: from_low_pct >= greed_deviation (default +5%)
+    - NEUTRAL: Neither fear nor greed conditions met
 
     Args:
-        rsi: Current RSI value
-        fear_greed: Fear/greed proxy result
+        fear_greed: Fear/greed proxy result with from_high_pct, from_low_pct
         config: Configuration with thresholds
+        rsi: DEPRECATED - ignored, retained for backwards compatibility
 
     Returns:
         SentimentZone enum value
     """
-    if rsi is None:
-        # Fall back to price deviation only
-        if fear_greed.get('is_fear', False):
-            return SentimentZone.FEAR
-        elif fear_greed.get('is_greed', False):
-            return SentimentZone.GREED
-        return SentimentZone.NEUTRAL
+    # Get thresholds from config
+    fear_deviation = config.get('fear_deviation_pct', -5.0)
+    greed_deviation = config.get('greed_deviation_pct', 5.0)
+    # REC-021: New extreme deviation thresholds for finer classification
+    extreme_fear_deviation = config.get('extreme_fear_deviation_pct', fear_deviation * 1.6)  # -8%
+    extreme_greed_deviation = config.get('extreme_greed_deviation_pct', greed_deviation * 1.6)  # +8%
 
-    # RSI-based classification
-    rsi_extreme_fear = config.get('rsi_extreme_fear', 25)
-    rsi_fear = config.get('rsi_fear', 40)
-    rsi_greed = config.get('rsi_greed', 60)
-    rsi_extreme_greed = config.get('rsi_extreme_greed', 75)
+    from_high_pct = fear_greed.get('from_high_pct', 0)
+    from_low_pct = fear_greed.get('from_low_pct', 0)
 
-    if rsi <= rsi_extreme_fear:
+    # Fear classification (price below recent high)
+    if from_high_pct <= extreme_fear_deviation:
         return SentimentZone.EXTREME_FEAR
-    elif rsi <= rsi_fear:
+    elif from_high_pct <= fear_deviation:
         return SentimentZone.FEAR
-    elif rsi >= rsi_extreme_greed:
+
+    # Greed classification (price above recent low)
+    if from_low_pct >= extreme_greed_deviation:
         return SentimentZone.EXTREME_GREED
-    elif rsi >= rsi_greed:
+    elif from_low_pct >= greed_deviation:
         return SentimentZone.GREED
 
     return SentimentZone.NEUTRAL
@@ -430,6 +504,11 @@ def detect_rsi_divergence(
     lookback: int = 14
 ) -> Dict[str, Any]:
     """
+    DEPRECATED: RSI divergence removed per REC-021 (v1.3.0).
+
+    RSI-based indicators removed from strategy. This function is retained
+    for backwards compatibility but always returns no divergence.
+
     Detect price/RSI divergence for additional confirmation.
 
     Bullish divergence: Price lower low + RSI higher low
@@ -441,8 +520,16 @@ def detect_rsi_divergence(
         lookback: Number of candles for comparison
 
     Returns:
-        Dict with divergence type and details
+        Dict with divergence type and details (always 'none' per REC-021)
     """
+    # REC-021: RSI divergence removed - always return no divergence
+    return {
+        'bullish_divergence': False,
+        'bearish_divergence': False,
+        'divergence_type': 'none',
+    }
+
+    # Original implementation below (not executed)
     result = {
         'bullish_divergence': False,
         'bearish_divergence': False,

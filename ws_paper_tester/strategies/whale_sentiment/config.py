@@ -10,17 +10,20 @@ feature documentation. Key research sources include:
 - Philadelphia Federal Reserve (2024): Whale vs retail behavior
 - PMC/NIH (2023): RSI ineffectiveness in crypto markets
 - QuantifiedStrategies.com (2024): RSI as momentum vs mean reversion
-See deep-review-v2.0.md Section 7 for full research references.
+See deep-review-v3.0.md Section 7 for full research references.
 
 The Whale Sentiment Strategy combines institutional activity detection (via volume
 spike analysis) with price deviation sentiment indicators to identify contrarian
 trading opportunities.
 
-Key Features (v1.2.0):
+Key Features (v1.3.0):
 - Volume spike detection as whale activity proxy (PRIMARY signal - 55% weight)
-- Price deviation for sentiment classification (35% weight)
+- Price deviation for sentiment classification (45% weight) - REC-021: Now PRIMARY
 - Trade flow confirmation (10% weight)
-- RSI REMOVED from confidence calculation per REC-013 (academic evidence)
+- RSI COMPLETELY REMOVED per REC-021 (academic evidence - v1.3.0)
+- ATR-based volatility regime classification (REC-023)
+- Dynamic confidence threshold (REC-027)
+- Extended fear period detection (REC-025)
 - Contrarian mode: buy fear, sell greed
 - Candle data persistence for fast restart recovery
 - Cross-pair correlation management
@@ -42,19 +45,21 @@ On restart, data is reloaded if:
 ===============================================================================
 DEFERRED RECOMMENDATIONS (Future Implementation)
 ===============================================================================
-REC-014 (HIGH, High Effort): Volatility Regime Classification
-- Current: Uses sentiment regimes only
-- Proposed: Add ATR-based volatility regime detection
-- Benefits: Adjust parameters for different market conditions
-- Reference: Strategy Development Guide Section 15 (when available)
-
-REC-015 (HIGH, High Effort): Backtest Confidence Weights
-- Current: Weights based on theoretical analysis + REC-013 removal
-- Proposed: Validate weights with historical backtesting
+REC-024 (HIGH, High Effort): Backtest Confidence Weights
+- Current: Weights based on theoretical analysis + REC-021 removal
+- Proposed: Validate weights with historical backtesting (6-12 months 2025 data)
 - Benefits: Empirically optimized confidence calculation
 ===============================================================================
 
 Version History:
+- 1.3.0: Deep Review v3.0 Implementation
+         - REC-021: COMPLETELY REMOVED RSI from strategy (zones now use price deviation)
+         - REC-022: Widened BTC/USDT stop loss from 1.5% to 2.0% (4.0% TP)
+         - REC-023: Added ATR-based volatility regime classification
+         - REC-025: Added extended fear period detection
+         - REC-026: Increased short size multiplier from 0.50 to 0.60
+         - REC-027: Added dynamic confidence threshold
+         - REC-024: Documented for future implementation (backtest weights)
 - 1.2.0: Deep Review v2.0 Implementation
          - REC-011: Implemented candle data persistence for fast restarts
          - REC-012: Added warmup progress indicator (pct, ETA)
@@ -90,7 +95,7 @@ from typing import Dict, Any
 # Strategy Metadata
 # =============================================================================
 STRATEGY_NAME = "whale_sentiment"
-STRATEGY_VERSION = "1.2.0"  # Deep Review v2.0 Implementation
+STRATEGY_VERSION = "1.3.0"  # Deep Review v3.0 Implementation
 # REC-007: XRP/BTC disabled by default due to 7-10x lower liquidity than USD pairs.
 # REC-016: To re-enable, add to SYMBOLS AND set enable_xrpbtc: true in config.
 SYMBOLS = ["XRP/USDT", "BTC/USDT"]
@@ -101,12 +106,12 @@ SYMBOLS = ["XRP/USDT", "BTC/USDT"]
 # Enums for Type Safety
 # =============================================================================
 class SentimentZone(Enum):
-    """Market sentiment classification based on RSI and price deviation."""
-    EXTREME_FEAR = auto()      # RSI < rsi_extreme_fear, large drop from high
-    FEAR = auto()              # RSI < rsi_fear, moderate drop
-    NEUTRAL = auto()           # RSI between fear and greed thresholds
-    GREED = auto()             # RSI > rsi_greed, moderate rise
-    EXTREME_GREED = auto()     # RSI > rsi_extreme_greed, large rise from low
+    """Market sentiment classification based on price deviation (REC-021: RSI removed)."""
+    EXTREME_FEAR = auto()      # Price >= 8% below recent high
+    FEAR = auto()              # Price >= 5% below recent high
+    NEUTRAL = auto()           # Neither fear nor greed conditions
+    GREED = auto()             # Price >= 5% above recent low
+    EXTREME_GREED = auto()     # Price >= 8% above recent low
 
 
 class WhaleSignal(Enum):
@@ -169,21 +174,25 @@ CONFIG: Dict[str, Any] = {
     'volume_spike_price_move_pct': 0.1, # Min price move with spike (wash trading filter)
 
     # ==========================================================================
-    # RSI Sentiment Settings
-    # Crypto-specific RSI thresholds (adjusted from 30/70 standard)
+    # RSI Settings - DEPRECATED per REC-021 (v1.3.0)
+    # RSI completely removed from strategy. These settings are retained for
+    # backwards compatibility but are NOT used in signal generation.
     # ==========================================================================
-    'rsi_period': 14,
-    'rsi_extreme_fear': 25,             # Extreme fear (panic selling)
-    'rsi_fear': 40,                     # Fear zone
-    'rsi_greed': 60,                    # Greed zone
-    'rsi_extreme_greed': 75,            # Extreme greed (FOMO buying)
+    'rsi_period': 14,                   # DEPRECATED - not used
+    'rsi_extreme_fear': 25,             # DEPRECATED - not used
+    'rsi_fear': 40,                     # DEPRECATED - not used
+    'rsi_greed': 60,                    # DEPRECATED - not used
+    'rsi_extreme_greed': 75,            # DEPRECATED - not used
 
     # ==========================================================================
-    # Fear/Greed Price Deviation
+    # Fear/Greed Price Deviation - PRIMARY SENTIMENT SIGNAL (REC-021)
     # Price deviation from recent high/low as sentiment proxy
+    # Now the ONLY source for sentiment classification (RSI removed)
     # ==========================================================================
     'fear_deviation_pct': -5.0,         # -5% from recent high = fear
     'greed_deviation_pct': 5.0,         # +5% from recent low = greed
+    'extreme_fear_deviation_pct': -8.0, # REC-021: -8% from high = extreme fear
+    'extreme_greed_deviation_pct': 8.0, # REC-021: +8% from low = extreme greed
     'price_lookback': 48,               # 4h window in 5m candles for high/low
 
     # ==========================================================================
@@ -195,20 +204,23 @@ CONFIG: Dict[str, Any] = {
 
     # ==========================================================================
     # Composite Confidence Weights
-    # REC-013: RSI REMOVED from confidence calculation based on academic evidence
-    # showing RSI ineffectiveness in crypto markets (PMC/NIH 2023, QuantifiedStrategies 2024).
+    # REC-021: RSI COMPLETELY REMOVED based on academic evidence (v1.3.0)
     # Weight redistributed to volume spike (primary signal) and price deviation.
     # ==========================================================================
-    'weight_volume_spike': 0.55,        # Volume spike contribution (REC-013: increased from 0.40)
-    'weight_rsi_sentiment': 0.00,       # REC-013: RSI REMOVED - academically ineffective in crypto
-    'weight_price_deviation': 0.35,     # Price deviation contribution (REC-013: increased from 0.20)
-    'weight_trade_flow': 0.10,          # Trade flow confirmation (REC-013: reduced from 0.15)
-    'weight_divergence': 0.00,          # REC-013: RSI divergence removed with RSI
-    'min_confidence': 0.50,             # Minimum confidence (lowered due to fewer components)
+    'weight_volume_spike': 0.55,        # Volume spike contribution (PRIMARY)
+    'weight_rsi_sentiment': 0.00,       # DEPRECATED: RSI removed per REC-021
+    'weight_price_deviation': 0.35,     # Price deviation contribution (PRIMARY sentiment)
+    'weight_trade_flow': 0.10,          # Trade flow confirmation
+    'weight_divergence': 0.00,          # DEPRECATED: RSI divergence removed per REC-021
+    'min_confidence': 0.50,             # Base minimum confidence
     'max_confidence': 0.90,             # Maximum confidence cap
     # REC-020: Extracted magic numbers for volume confidence calculation
     'volume_confidence_base': 0.50,     # Base contribution when volume spike detected
     'volume_confidence_bonus_per_ratio': 0.05,  # Additional per volume ratio above threshold
+    # REC-027: Dynamic Confidence Threshold
+    'use_dynamic_confidence': True,     # Enable dynamic threshold adjustment
+    'confidence_extreme_bonus': -0.05,  # Easier entry in extreme zones (subtract from min)
+    'confidence_high_volatility_penalty': 0.05,  # Harder entry in high volatility (add to min)
 
     # ==========================================================================
     # Position Sizing
@@ -217,7 +229,7 @@ CONFIG: Dict[str, Any] = {
     'max_position_usd': 150.0,          # Maximum TOTAL position exposure
     'max_position_per_symbol_usd': 75.0,  # Maximum per symbol
     'min_trade_size_usd': 5.0,          # Minimum USD per trade
-    'short_size_multiplier': 0.50,      # REC-008: Reduced from 0.75 for crypto squeeze risk
+    'short_size_multiplier': 0.60,      # REC-026: Increased from 0.50 (extreme fear market)
     'high_correlation_size_mult': 0.60, # Reduce when correlated
 
     # ==========================================================================
@@ -339,6 +351,25 @@ CONFIG: Dict[str, Any] = {
     # ==========================================================================
     'require_utc_timezone': True,   # Warn if server not in UTC
     'timezone_warning_only': True,  # False = block trading if not UTC
+
+    # ==========================================================================
+    # REC-025: Extended Fear Period Detection
+    # Prevent capital exhaustion during prolonged extreme sentiment
+    # ==========================================================================
+    'use_extended_fear_detection': True,
+    'extended_fear_threshold_hours': 168,     # 7 days (7*24) in extreme zone = reduce size
+    'extended_fear_pause_hours': 336,         # 14 days (14*24) = pause entries
+    'extended_fear_size_reduction': 0.70,     # 30% size reduction when extended fear detected
+
+    # ==========================================================================
+    # REC-023: Volatility Regime Parameters
+    # ATR-based adjustments for different market conditions
+    # ==========================================================================
+    'volatility_low_threshold': 1.5,          # ATR% below this = low volatility
+    'volatility_high_threshold': 3.5,         # ATR% above this = high volatility
+    'volatility_high_size_mult': 0.75,        # Reduce size in high volatility
+    'volatility_high_stop_mult': 1.5,         # Widen stops in high volatility
+    'volatility_high_cooldown_mult': 1.5,     # Extend cooldown in high volatility
 }
 
 
@@ -356,10 +387,10 @@ SYMBOL_CONFIGS: Dict[str, Dict[str, Any]] = {
     'XRP/USDT': {
         'volume_spike_mult': 2.0,       # Standard threshold
         'volume_window': 288,           # REC-019: 24h in 5m candles (per-symbol configurable)
-        'rsi_extreme_fear': 25,
-        'rsi_extreme_greed': 75,
         'fear_deviation_pct': -5.0,
         'greed_deviation_pct': 5.0,
+        'extreme_fear_deviation_pct': -8.0,   # REC-021: Default extreme threshold
+        'extreme_greed_deviation_pct': 8.0,
         'position_size_usd': 25.0,
         'max_position_per_symbol_usd': 75.0,
         'stop_loss_pct': 2.5,           # Wider for contrarian
@@ -372,18 +403,19 @@ SYMBOL_CONFIGS: Dict[str, Dict[str, Any]] = {
     # Research: Lower % volatility (1.64%), institutional dampening
     # Whale Threshold: 100+ BTC (~$8M+ at current prices)
     # Suitability: MEDIUM-HIGH
+    # REC-022: Widened stop loss from 1.5% to 2.0% for Dec 2025 volatility
     # ==========================================================================
     'BTC/USDT': {
         'volume_spike_mult': 2.5,       # Higher threshold (more noise)
         'volume_window': 288,           # REC-019: 24h in 5m candles (per-symbol configurable)
-        'rsi_extreme_fear': 22,         # More extreme fear required
-        'rsi_extreme_greed': 78,        # More extreme greed required
         'fear_deviation_pct': -7.0,     # Larger deviation required
         'greed_deviation_pct': 7.0,
+        'extreme_fear_deviation_pct': -10.0,   # REC-021: BTC needs larger extreme threshold
+        'extreme_greed_deviation_pct': 10.0,
         'position_size_usd': 50.0,      # Larger due to lower volatility
         'max_position_per_symbol_usd': 100.0,
-        'stop_loss_pct': 1.5,           # Tighter - more predictable moves
-        'take_profit_pct': 3.0,         # 2:1 R:R ratio
+        'stop_loss_pct': 2.0,           # REC-022: Widened from 1.5% for Dec 2025 volatility
+        'take_profit_pct': 4.0,         # REC-022: Widened to maintain 2:1 R:R ratio
         'cooldown_seconds': 180,        # 3 minutes (less frequent)
     },
 
@@ -397,10 +429,10 @@ SYMBOL_CONFIGS: Dict[str, Dict[str, Any]] = {
     'XRP/BTC': {
         'volume_spike_mult': 3.0,       # Higher threshold (low liquidity)
         'volume_window': 288,           # REC-019: 24h in 5m candles (per-symbol configurable)
-        'rsi_extreme_fear': 28,
-        'rsi_extreme_greed': 72,
         'fear_deviation_pct': -8.0,     # Larger moves in ratio pair
         'greed_deviation_pct': 8.0,
+        'extreme_fear_deviation_pct': -12.0,  # REC-021: Ratio pair needs larger threshold
+        'extreme_greed_deviation_pct': 12.0,
         'position_size_usd': 15.0,      # Smaller due to liquidity
         'max_position_per_symbol_usd': 40.0,
         'stop_loss_pct': 3.0,           # Wider due to volatility
