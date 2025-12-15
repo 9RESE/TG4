@@ -13,3 +13,6 @@ tensorboard/
 logs/
 *.log
 *.json.log
+
+# Archived/old source (deprecated)
+src/
