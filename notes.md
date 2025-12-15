@@ -1,27 +1,25 @@
-update the docs with the recent work and ALL the changes in git. Ensure documentation complies with the documentation standards and expectations outlined in the claude.md file. Then commit.
+# Project Notes
 
+## Questions to Investigate
 
+- Do we have any strategies that use margin/leverage?
 
+## AI Integration Ideas
 
-- what historic data is available via the kraken api? should we make a database of historic data for backtesting? we have a local psql or we can make a docker psql we can use.
-- do we have any algos the use margin/leverage?
+### Timeframes
+- 5 min, 1 hour, 4 hour, 1 day, 1 week, 1 month
+- Each timeframe has a focus and its own data package
 
-
-# ai integration
-## timeframes
-- 5 min, 1 hour, 4 hour?, 1 day, 1 week, 1 month
-- each time frame has a focus and its own data package.
-
-## topics
-- news
-- charts/data
-- social sent.
-  - x.com
-  - youtube
-  - blogs
-- Bear, Bull, sideways
-- volatility
-- recommendations
-  - long term positions
-  - margin calls
-  - trading strategy input
+### Topics to Analyze
+- News sentiment
+- Charts/data analysis
+- Social sentiment
+  - X.com
+  - YouTube
+  - Blogs
+- Bear, Bull, Sideways regime detection
+- Volatility analysis
+- Recommendations
+  - Long term positions
+  - Margin calls
+  - Trading strategy input

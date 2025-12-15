@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   # =============================================
   # TimescaleDB (PostgreSQL with time-series)
@@ -9,7 +7,7 @@ services:
     container_name: kraken_timescaledb
     restart: unless-stopped
     ports:
-      - "5432:5432"
+      - "5433:5432"  # Use 5433 to avoid conflict with local PostgreSQL
     environment:
       POSTGRES_USER: trading
       # REC-004: Require explicit password - no default
