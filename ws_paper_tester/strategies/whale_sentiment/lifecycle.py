@@ -38,7 +38,7 @@ def initialize_state(state: Dict[str, Any]) -> None:
     state['circuit_breaker_time'] = None
 
     # Whale sentiment specific state
-    state['prev_rsi'] = {}
+    # REC-039: prev_rsi removed (RSI removed in v1.3.0)
     state['prev_volume_ratio'] = {}
     state['prev_sentiment'] = {}
     state['volume_baseline'] = {}

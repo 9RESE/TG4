@@ -39,7 +39,7 @@ from .whale_sentiment import (
     # Indicators
     calculate_ema,
     calculate_sma,
-    calculate_rsi,
+    # REC-038: calculate_rsi removed in v1.4.0 (REC-032)
     detect_volume_spike,
     classify_whale_signal,
     calculate_fear_greed_proxy,

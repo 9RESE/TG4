@@ -9,10 +9,11 @@ Signal Generation Flow:
 2. Check circuit breaker / cooldowns
 3. Calculate indicators:
    - Volume spike detection (whale proxy)
-   - RSI calculation
-   - Fear/greed price deviation
+   - Fear/greed price deviation (PRIMARY sentiment per REC-021)
+   - ATR for volatility regime classification (REC-023)
    - Trade flow analysis
-4. Classify sentiment zone
+   NOTE: RSI removed in v1.3.0 per REC-021 (academic evidence)
+4. Classify sentiment zone (using price deviation only)
 5. Check existing position exits first
 6. Check entry conditions:
    - Volume spike present (or moderate sentiment)

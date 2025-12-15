@@ -52,6 +52,11 @@ REC-024 (HIGH, High Effort): Backtest Confidence Weights
 ===============================================================================
 
 Version History:
+- 1.6.0: Deep Review v6.0 Implementation
+         - REC-038: CRITICAL - Fixed shim import of removed calculate_rsi
+         - REC-039: Removed unused prev_rsi state initialization
+         - REC-040: Updated signal.py docstring (removed RSI references)
+         - Guide v2.0 compliance: 100% maintained
 - 1.5.0: Deep Review v5.0 Implementation
          - REC-034: Removed legacy RSI validation code from validation.py
          - REC-035: Reduced extended fear thresholds (72h/168h from 168h/336h)
@@ -107,7 +112,7 @@ from typing import Dict, Any
 # Strategy Metadata
 # =============================================================================
 STRATEGY_NAME = "whale_sentiment"
-STRATEGY_VERSION = "1.5.0"  # Deep Review v5.0 Implementation
+STRATEGY_VERSION = "1.6.0"  # Deep Review v6.0 Implementation
 # REC-007: XRP/BTC disabled by default due to 7-10x lower liquidity than USD pairs.
 # REC-016: To re-enable, add to SYMBOLS AND set enable_xrpbtc: true in config.
 SYMBOLS = ["XRP/USDT", "BTC/USDT"]

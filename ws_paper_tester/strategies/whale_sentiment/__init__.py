@@ -1,22 +1,23 @@
 """
-Whale Sentiment Strategy v1.4.0
+Whale Sentiment Strategy v1.6.0
 
 Trades based on whale activity proxy (volume spikes) and price deviation
 sentiment indicators using a contrarian approach.
 
-REC-009: Research Foundation (Updated for v1.4.0)
+REC-009: Research Foundation (Updated for v1.6.0)
 Based on academic literature analysis:
 - "The Moby Dick Effect" (Magner & Sanhueza, 2025): Whale contagion effects
 - Philadelphia Federal Reserve (2024): Whale vs retail behavior
 - PMC/NIH (2023): RSI ineffectiveness in crypto markets
 See deep-review-v4.0.md Section 7 for full research references.
 
-Key Features (v1.4.0):
+Key Features (v1.6.0):
 - Volume spike detection as PRIMARY signal (55% weight)
 - Price deviation for sentiment classification (35% weight)
 - RSI code REMOVED per REC-032 (deprecated code cleanup)
 - EXTREME volatility regime with trading pause (REC-031)
 - Candle data persistence for fast restart recovery
+- Extreme zone state persistence (REC-037)
 - Contrarian mode: buy fear, sell greed
 - Trade flow confirmation (10% weight)
 - Cross-pair correlation management
@@ -33,6 +34,13 @@ Exit Logic:
 - Trailing stop (optional)
 
 Version History:
+- 1.6.0: Deep Review v6.0 Implementation
+         - REC-038: CRITICAL - Fixed shim import of removed calculate_rsi
+         - REC-039: Removed unused prev_rsi state initialization
+         - REC-040: Updated signal.py docstring (removed RSI references)
+         - Guide v2.0 compliance: 100%
+- 1.5.0: Deep Review v5.0 Implementation
+         - REC-034 to REC-037: Cleanup, extended fear thresholds, state persistence
 - 1.4.0: Deep Review v4.0 Implementation
          - REC-030: CRITICAL - Fixed undefined function reference
          - REC-031: Added EXTREME volatility regime with trading pause
