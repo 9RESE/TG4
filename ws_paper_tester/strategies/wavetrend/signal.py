@@ -34,14 +34,16 @@ from .config import (
 )
 from .indicators import (
     calculate_wavetrend, classify_zone, detect_crossover, detect_divergence,
-    calculate_confidence, get_zone_string, is_in_oversold_zone, is_in_overbought_zone
+    calculate_confidence, get_zone_string, is_in_oversold_zone, is_in_overbought_zone,
+    check_trade_flow_confirmation
 )
 from .regimes import (
     classify_trading_session, get_session_adjustments
 )
 from .risk import (
     check_fee_profitability, check_circuit_breaker,
-    check_correlation_exposure, check_position_limits
+    check_correlation_exposure, check_position_limits,
+    check_real_correlation
 )
 from .exits import check_all_exits
 from .lifecycle import initialize_state
@@ -118,6 +120,16 @@ def generate_signal(
 
     current_time = data.timestamp
     track_rejections = config.get('track_rejections', True)
+
+    # ==========================================================================
+    # REC-006: Block trading if configuration is invalid
+    # ==========================================================================
+    if not state.get('config_valid', True):
+        state['indicators'] = build_base_indicators(
+            symbol='N/A', candle_count=0, status='config_invalid', state=state
+        )
+        state['indicators']['config_errors'] = state.get('config_errors', [])
+        return None
 
     # ==========================================================================
     # Circuit Breaker Check
@@ -427,39 +439,79 @@ def _evaluate_symbol(
             if track_rejections:
                 track_rejection(state, RejectionReason.ZONE_NOT_CONFIRMED, symbol)
         else:
-            # Calculate confidence
-            confidence, reasons = calculate_confidence(
-                crossover, current_zone, prev_zone, divergence, config
-            )
+            # REC-001: Check trade flow confirmation
+            use_trade_flow = config.get('use_trade_flow_confirmation', True)
+            flow_confirmed = True
+            flow_data = {}
 
-            # Check correlation limits
-            can_enter, final_size = check_correlation_exposure(
-                state, symbol, 'buy', available_size, config
-            )
-
-            if not can_enter:
-                state['indicators']['status'] = 'correlation_limit'
-                if track_rejections:
-                    track_rejection(state, RejectionReason.CORRELATION_LIMIT, symbol)
-            else:
-                reason_str = ', '.join(reasons[:3])
-                signal = Signal(
-                    action='buy',
-                    symbol=symbol,
-                    size=final_size,
-                    price=current_price,
-                    reason=f"WT: Long ({reason_str}, WT1={wt1:.0f})",
-                    stop_loss=current_price * (1 - sl_pct / 100),
-                    take_profit=current_price * (1 + tp_pct / 100),
-                    metadata={
-                        'entry_type': 'wavetrend_long',
-                        'wt1': wt1,
-                        'wt2': wt2,
-                        'zone': get_zone_string(current_zone),
-                        'confidence': confidence,
-                        'divergence': divergence.name.lower() if divergence != DivergenceType.NONE else None,
-                    }
+            if use_trade_flow:
+                trades = data.trades.get(symbol, ())
+                flow_threshold = config.get('trade_flow_threshold', 0.10)
+                flow_lookback = config.get('trade_flow_lookback', 50)
+                flow_confirmed, flow_data = check_trade_flow_confirmation(
+                    trades, 'buy', flow_threshold, flow_lookback
                 )
+                # Add flow data to indicators
+                state['indicators']['trade_flow_imbalance'] = round(flow_data.get('imbalance', 0), 3)
+                state['indicators']['trade_flow_confirms'] = flow_confirmed
+
+            if not flow_confirmed:
+                state['indicators']['status'] = 'trade_flow_against'
+                if track_rejections:
+                    track_rejection(state, RejectionReason.TRADE_FLOW_AGAINST, symbol)
+            else:
+                # REC-002: Check real-time correlation with existing positions
+                candles_by_symbol = {
+                    sym: data.candles_5m.get(sym, data.candles_1m.get(sym, ()))
+                    for sym in SYMBOLS
+                }
+                corr_allowed, corr_adj, corr_info = check_real_correlation(
+                    state, symbol, 'buy', candles_by_symbol, config
+                )
+                state['indicators']['real_correlation'] = corr_info.get('correlations', {})
+                state['indicators']['correlation_blocked'] = corr_info.get('blocked', False)
+
+                if not corr_allowed:
+                    state['indicators']['status'] = 'real_correlation_blocked'
+                    if track_rejections:
+                        track_rejection(state, RejectionReason.CORRELATION_LIMIT, symbol)
+                else:
+                    # Calculate confidence
+                    confidence, reasons = calculate_confidence(
+                        crossover, current_zone, prev_zone, divergence, config
+                    )
+
+                    # Check correlation limits and apply REC-002 adjustment
+                    adjusted_size = available_size * corr_adj
+                    can_enter, final_size = check_correlation_exposure(
+                        state, symbol, 'buy', adjusted_size, config
+                    )
+
+                    if not can_enter:
+                        state['indicators']['status'] = 'correlation_limit'
+                        if track_rejections:
+                            track_rejection(state, RejectionReason.CORRELATION_LIMIT, symbol)
+                    else:
+                        reason_str = ', '.join(reasons[:3])
+                        signal = Signal(
+                            action='buy',
+                            symbol=symbol,
+                            size=final_size,
+                            price=current_price,
+                            reason=f"WT: Long ({reason_str}, WT1={wt1:.0f})",
+                            stop_loss=current_price * (1 - sl_pct / 100),
+                            take_profit=current_price * (1 + tp_pct / 100),
+                            metadata={
+                                'entry_type': 'wavetrend_long',
+                                'wt1': wt1,
+                                'wt2': wt2,
+                                'zone': get_zone_string(current_zone),
+                                'confidence': confidence,
+                                'divergence': divergence.name.lower() if divergence != DivergenceType.NONE else None,
+                                'trade_flow_imbalance': flow_data.get('imbalance'),
+                                'correlation_adjustment': corr_adj,
+                            }
+                        )
 
     # ---------------------------------------------------------------------
     # Short Entry Conditions (Bearish Crossover)
@@ -476,42 +528,81 @@ def _evaluate_symbol(
             if track_rejections:
                 track_rejection(state, RejectionReason.ZONE_NOT_CONFIRMED, symbol)
         else:
-            # Calculate confidence
-            confidence, reasons = calculate_confidence(
-                crossover, current_zone, prev_zone, divergence, config
-            )
+            # REC-001: Check trade flow confirmation
+            use_trade_flow = config.get('use_trade_flow_confirmation', True)
+            flow_confirmed = True
+            flow_data = {}
 
-            # Apply short size multiplier
-            short_size = available_size * short_mult
-
-            # Check correlation limits
-            can_enter, final_size = check_correlation_exposure(
-                state, symbol, 'short', short_size, config
-            )
-
-            if not can_enter:
-                state['indicators']['status'] = 'correlation_limit'
-                if track_rejections:
-                    track_rejection(state, RejectionReason.CORRELATION_LIMIT, symbol)
-            else:
-                reason_str = ', '.join(reasons[:3])
-                signal = Signal(
-                    action='short',
-                    symbol=symbol,
-                    size=final_size,
-                    price=current_price,
-                    reason=f"WT: Short ({reason_str}, WT1={wt1:.0f})",
-                    stop_loss=current_price * (1 + sl_pct / 100),
-                    take_profit=current_price * (1 - tp_pct / 100),
-                    metadata={
-                        'entry_type': 'wavetrend_short',
-                        'wt1': wt1,
-                        'wt2': wt2,
-                        'zone': get_zone_string(current_zone),
-                        'confidence': confidence,
-                        'divergence': divergence.name.lower() if divergence != DivergenceType.NONE else None,
-                    }
+            if use_trade_flow:
+                trades = data.trades.get(symbol, ())
+                flow_threshold = config.get('trade_flow_threshold', 0.10)
+                flow_lookback = config.get('trade_flow_lookback', 50)
+                flow_confirmed, flow_data = check_trade_flow_confirmation(
+                    trades, 'short', flow_threshold, flow_lookback
                 )
+                # Add flow data to indicators
+                state['indicators']['trade_flow_imbalance'] = round(flow_data.get('imbalance', 0), 3)
+                state['indicators']['trade_flow_confirms'] = flow_confirmed
+
+            if not flow_confirmed:
+                state['indicators']['status'] = 'trade_flow_against'
+                if track_rejections:
+                    track_rejection(state, RejectionReason.TRADE_FLOW_AGAINST, symbol)
+            else:
+                # REC-002: Check real-time correlation with existing positions
+                candles_by_symbol = {
+                    sym: data.candles_5m.get(sym, data.candles_1m.get(sym, ()))
+                    for sym in SYMBOLS
+                }
+                corr_allowed, corr_adj, corr_info = check_real_correlation(
+                    state, symbol, 'short', candles_by_symbol, config
+                )
+                state['indicators']['real_correlation'] = corr_info.get('correlations', {})
+                state['indicators']['correlation_blocked'] = corr_info.get('blocked', False)
+
+                if not corr_allowed:
+                    state['indicators']['status'] = 'real_correlation_blocked'
+                    if track_rejections:
+                        track_rejection(state, RejectionReason.CORRELATION_LIMIT, symbol)
+                else:
+                    # Calculate confidence
+                    confidence, reasons = calculate_confidence(
+                        crossover, current_zone, prev_zone, divergence, config
+                    )
+
+                    # Apply short size multiplier and REC-002 correlation adjustment
+                    short_size = available_size * short_mult * corr_adj
+
+                    # Check correlation limits
+                    can_enter, final_size = check_correlation_exposure(
+                        state, symbol, 'short', short_size, config
+                    )
+
+                    if not can_enter:
+                        state['indicators']['status'] = 'correlation_limit'
+                        if track_rejections:
+                            track_rejection(state, RejectionReason.CORRELATION_LIMIT, symbol)
+                    else:
+                        reason_str = ', '.join(reasons[:3])
+                        signal = Signal(
+                            action='short',
+                            symbol=symbol,
+                            size=final_size,
+                            price=current_price,
+                            reason=f"WT: Short ({reason_str}, WT1={wt1:.0f})",
+                            stop_loss=current_price * (1 + sl_pct / 100),
+                            take_profit=current_price * (1 - tp_pct / 100),
+                            metadata={
+                                'entry_type': 'wavetrend_short',
+                                'wt1': wt1,
+                                'wt2': wt2,
+                                'zone': get_zone_string(current_zone),
+                                'confidence': confidence,
+                                'divergence': divergence.name.lower() if divergence != DivergenceType.NONE else None,
+                                'trade_flow_imbalance': flow_data.get('imbalance'),
+                                'correlation_adjustment': corr_adj,
+                            }
+                        )
 
     # ==========================================================================
     # Return Signal or None

@@ -7,8 +7,8 @@ import logging
 from datetime import datetime
 from typing import Dict, Any
 
-from .config import STRATEGY_NAME, STRATEGY_VERSION
-from .validation import validate_config
+from .config import STRATEGY_NAME, STRATEGY_VERSION, SYMBOL_CONFIGS, CONFIG
+from .validation import validate_config, validate_symbol_configs
 
 # Configure structured logger
 logger = logging.getLogger(STRATEGY_NAME)
@@ -49,12 +49,32 @@ def on_start(config: Dict[str, Any], state: Dict[str, Any]) -> None:
         config: Strategy configuration
         state: Strategy state dict to initialize
     """
-    # Validate configuration
+    # Validate configuration - REC-006: Include SYMBOL_CONFIGS validation
     errors = validate_config(config)
-    if errors:
-        for error in errors:
-            logger.warning("Config warning: %s", error)
-        state['config_warnings'] = errors
+    symbol_errors = validate_symbol_configs(SYMBOL_CONFIGS, CONFIG)
+    all_errors = errors + symbol_errors
+
+    if all_errors:
+        blocking_errors = [e for e in all_errors if e.startswith('BLOCKING:')]
+        warnings = [e for e in all_errors if not e.startswith('BLOCKING:')]
+
+        for warning in warnings:
+            logger.warning("Config warning: %s", warning)
+        for error in blocking_errors:
+            logger.error("Config error: %s", error)
+
+        state['config_warnings'] = warnings
+        state['config_errors'] = blocking_errors
+
+        # If blocking errors exist, strategy should not trade
+        if blocking_errors:
+            state['config_valid'] = False
+            logger.error("Strategy has blocking config errors - trading disabled")
+        else:
+            state['config_valid'] = True
+    else:
+        state['config_valid'] = True
+
     state['config_validated'] = True
 
     # Initialize state

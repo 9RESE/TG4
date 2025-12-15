@@ -3,9 +3,11 @@ WaveTrend Oscillator Strategy - Risk Management
 
 Contains fee profitability checks, position limit checks, correlation management,
 and circuit breaker logic.
+
+REC-002: Added real-time correlation monitoring for cross-pair exposure management.
 """
 from datetime import datetime
-from typing import Dict, Any, Tuple
+from typing import Dict, Any, Tuple, Optional, List
 
 
 def check_fee_profitability(
@@ -81,6 +83,119 @@ def check_circuit_breaker(
 
     # Still in cooldown
     return True
+
+
+def calculate_pair_correlation(
+    candles_a,
+    candles_b,
+    window: int = 20
+) -> Optional[float]:
+    """
+    Calculate rolling correlation between two price series.
+
+    REC-002: Real-time correlation monitoring.
+
+    Args:
+        candles_a: Candles for symbol A
+        candles_b: Candles for symbol B
+        window: Number of candles for correlation calculation
+
+    Returns:
+        Correlation coefficient (-1 to +1) or None if insufficient data
+    """
+    if not candles_a or not candles_b:
+        return None
+
+    if len(candles_a) < window + 1 or len(candles_b) < window + 1:
+        return None
+
+    # Extract closing prices
+    prices_a = [c.close for c in candles_a]
+    prices_b = [c.close for c in candles_b]
+
+    # Import here to avoid circular import
+    from .indicators import calculate_rolling_correlation
+    return calculate_rolling_correlation(prices_a, prices_b, window)
+
+
+def check_real_correlation(
+    state: Dict[str, Any],
+    symbol: str,
+    direction: str,
+    candles_by_symbol: Dict[str, tuple],
+    config: Dict[str, Any]
+) -> Tuple[bool, float, Dict[str, Any]]:
+    """
+    Check if real-time correlation blocks trade entry.
+
+    REC-002: Real correlation monitoring.
+
+    Args:
+        state: Strategy state dict
+        symbol: Symbol being traded
+        direction: Trade direction ('buy' or 'short')
+        candles_by_symbol: Dict of candles by symbol
+        config: Strategy configuration
+
+    Returns:
+        Tuple of (can_trade, correlation_adjustment, correlation_info)
+    """
+    correlation_info = {
+        'correlations': {},
+        'high_correlation_pairs': [],
+        'adjustment_factor': 1.0,
+        'blocked': False,
+    }
+
+    if not config.get('use_real_correlation', True):
+        return True, 1.0, correlation_info
+
+    window = config.get('correlation_window', 20)
+    block_threshold = config.get('correlation_block_threshold', 0.85)
+
+    # Get existing positions
+    position_entries = state.get('position_entries', {})
+
+    # Check correlation with each existing position
+    for existing_symbol, pos_data in position_entries.items():
+        if existing_symbol == symbol:
+            continue
+
+        existing_side = pos_data.get('side', '')
+
+        # Get candles for both symbols
+        candles_a = candles_by_symbol.get(symbol, ())
+        candles_b = candles_by_symbol.get(existing_symbol, ())
+
+        correlation = calculate_pair_correlation(candles_a, candles_b, window)
+
+        if correlation is not None:
+            correlation_info['correlations'][f"{symbol}/{existing_symbol}"] = round(correlation, 3)
+
+            # Check if highly correlated in same direction
+            same_direction = (
+                (direction == 'buy' and existing_side == 'long') or
+                (direction == 'short' and existing_side == 'short')
+            )
+
+            if abs(correlation) >= block_threshold and same_direction:
+                correlation_info['high_correlation_pairs'].append({
+                    'pair': f"{symbol}/{existing_symbol}",
+                    'correlation': round(correlation, 3),
+                    'same_direction': True,
+                })
+                correlation_info['blocked'] = True
+
+            # Reduce size based on correlation strength
+            if same_direction and correlation > 0.5:
+                # Linear reduction: 50% correlation = 100% size, 100% correlation = 50% size
+                reduction = 1.0 - (correlation - 0.5) * (0.5 / 0.5)
+                correlation_info['adjustment_factor'] = min(
+                    correlation_info['adjustment_factor'],
+                    max(0.5, reduction)
+                )
+
+    return not correlation_info['blocked'], correlation_info['adjustment_factor'], correlation_info
 
 
 def check_correlation_exposure(

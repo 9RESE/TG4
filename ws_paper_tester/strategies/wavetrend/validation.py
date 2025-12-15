@@ -56,16 +56,23 @@ def validate_config(config: Dict[str, Any]) -> List[str]:
     if max_per_symbol > max_position:
         errors.append(f"max_position_per_symbol_usd ({max_per_symbol}) should not exceed max_position_usd ({max_position})")
 
-    # Risk management validation
+    # Risk management validation - REC-006: Make R:R validation blocking
     stop_loss = config.get('stop_loss_pct', 1.5)
     take_profit = config.get('take_profit_pct', 3.0)
 
     if stop_loss <= 0:
-        errors.append(f"stop_loss_pct ({stop_loss}) must be positive")
+        errors.append(f"BLOCKING: stop_loss_pct ({stop_loss}) must be positive")
     if take_profit <= 0:
-        errors.append(f"take_profit_pct ({take_profit}) must be positive")
-    if take_profit < stop_loss:
-        errors.append(f"take_profit_pct ({take_profit}) should be >= stop_loss_pct ({stop_loss}) for positive R:R")
+        errors.append(f"BLOCKING: take_profit_pct ({take_profit}) must be positive")
+
+    # R:R ratio validation - minimum 1:1 required per Strategy Development Guide
+    if stop_loss > 0 and take_profit > 0:
+        rr_ratio = take_profit / stop_loss
+        if rr_ratio < 1.0:
+            errors.append(
+                f"BLOCKING: R:R ratio {rr_ratio:.2f}:1 below minimum 1:1. "
+                f"take_profit_pct ({take_profit}) must be >= stop_loss_pct ({stop_loss})"
+            )
 
     # Fee validation
     fee_rate = config.get('fee_rate', 0.001)
@@ -89,6 +96,40 @@ def validate_config(config: Dict[str, Any]) -> List[str]:
 
     if min_candles < required:
         errors.append(f"min_candle_buffer ({min_candles}) should be >= {required} based on indicator settings")
+
+    return errors
+
+
+def validate_symbol_configs(symbol_configs: Dict[str, Dict[str, Any]], global_config: Dict[str, Any]) -> List[str]:
+    """
+    Validate per-symbol configurations including R:R ratios.
+
+    REC-006: Ensure all symbol-specific R:R ratios meet minimum 1:1 requirement.
+
+    Args:
+        symbol_configs: Per-symbol configuration overrides
+        global_config: Global configuration for fallback values
+
+    Returns:
+        List of warning/error messages (empty if valid)
+    """
+    errors = []
+
+    for symbol, sym_config in symbol_configs.items():
+        # Get R:R parameters with fallback to global
+        sl = sym_config.get('stop_loss_pct', global_config.get('stop_loss_pct', 1.5))
+        tp = sym_config.get('take_profit_pct', global_config.get('take_profit_pct', 3.0))
+
+        if sl > 0 and tp > 0:
+            rr_ratio = tp / sl
+            if rr_ratio < 1.0:
+                errors.append(
+                    f"BLOCKING: {symbol} R:R ratio {rr_ratio:.2f}:1 below minimum 1:1. "
+                    f"TP={tp}% / SL={sl}%"
+                )
+            else:
+                # Informational - log achieved R:R
+                pass  # All good
 
     return errors
 
@@ -121,6 +162,10 @@ def validate_config_overrides(overrides: Dict[str, Any]) -> List[str]:
         'same_direction_size_mult',
         'fee_rate', 'min_profit_after_fees_pct', 'use_fee_check',
         'track_rejections',
+        # REC-001: Trade flow confirmation
+        'use_trade_flow_confirmation', 'trade_flow_threshold', 'trade_flow_lookback',
+        # REC-002: Real correlation monitoring
+        'use_real_correlation', 'correlation_window', 'correlation_block_threshold',
     }
 
     for key in overrides:

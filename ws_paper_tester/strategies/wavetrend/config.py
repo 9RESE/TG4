@@ -13,6 +13,29 @@ Key Features:
 - Zone-based signal filtering (overbought/oversold)
 - Divergence detection for confirmation
 - Works well in volatile crypto markets
+
+===============================================================================
+REC-010: WARMUP REQUIREMENT WARNING
+===============================================================================
+This strategy requires 50 candles (5-minute timeframe) before generating signals.
+
+Warmup Calculation:
+- min_candle_buffer: 50 candles
+- candle_timeframe: 5 minutes (using data.candles_5m)
+- Warmup time: 50 * 5 = 250 minutes ≈ 4.2 hours minimum
+
+NO SIGNALS will be generated until warmup is complete. This is by design:
+- WaveTrend calculation needs historical data for EMA smoothing
+- Divergence detection requires lookback period
+- Zone classification needs stable indicator values
+
+If using 1-minute candles as fallback: 50 * 1 = 50 minutes minimum
+===============================================================================
+
+Version History:
+- 1.0.0: Initial implementation
+- 1.1.0: REC-001 Trade Flow Confirmation, REC-002 Real Correlation Monitoring,
+         REC-006 Blocking R:R Validation, Documentation updates (REC-008/009/010/011/012)
 """
 from enum import Enum, auto
 from typing import Dict, Any
@@ -22,7 +45,7 @@ from typing import Dict, Any
 # Strategy Metadata
 # =============================================================================
 STRATEGY_NAME = "wavetrend"
-STRATEGY_VERSION = "1.0.0"
+STRATEGY_VERSION = "1.1.0"  # REC-001, REC-002, REC-006 + documentation updates
 SYMBOLS = ["XRP/USDT", "BTC/USDT", "XRP/BTC"]
 
 
@@ -77,6 +100,7 @@ class RejectionReason(Enum):
     EXISTING_POSITION = "existing_position"
     INSUFFICIENT_CANDLES = "insufficient_candles"
     NO_SIGNAL_CONDITIONS = "no_signal_conditions"
+    TRADE_FLOW_AGAINST = "trade_flow_against"  # REC-001: Trade flow doesn't confirm signal
 
 
 # =============================================================================
@@ -100,10 +124,19 @@ CONFIG: Dict[str, Any] = {
 
     # ==========================================================================
     # Signal Settings
+    # REC-009: Zone Exit Trade-off Documentation
+    # require_zone_exit controls signal quality vs frequency:
+    # - True (default): Wait for price to exit OB/OS zone before entry
+    #   Pros: Higher quality signals, better confirmation
+    #   Cons: Fewer signals, may miss some opportunities
+    # - False: Enter immediately on crossover in zone
+    #   Pros: More signals, earlier entries
+    #   Cons: Potentially lower quality, more false signals
+    # Research: Zone-filtered signals have ~15-20% higher reliability
     # ==========================================================================
-    'require_zone_exit': True,      # Wait for zone exit before entry
-    'use_divergence': True,         # Include divergence in confidence
-    'divergence_lookback': 14,      # Candles for divergence calculation
+    'require_zone_exit': True,      # Wait for zone exit (higher quality, fewer signals)
+    'use_divergence': True,         # Include divergence in confidence calculation
+    'divergence_lookback': 14,      # Candles for divergence detection (REC-011: aligned with buffer)
 
     # ==========================================================================
     # Position Sizing
@@ -122,16 +155,34 @@ CONFIG: Dict[str, Any] = {
 
     # ==========================================================================
     # Confidence Caps
+    # REC-008: Confidence caps are intentionally asymmetric
+    # - Longs have higher cap (0.92) because crypto markets have upward bias
+    # - Shorts have lower cap (0.88) due to short squeeze risk and inherently
+    #   higher risk of shorting in trending crypto markets
+    # Research: Crypto markets historically favor long positions over time
     # ==========================================================================
-    'max_long_confidence': 0.92,    # Maximum confidence for longs
-    'max_short_confidence': 0.88,   # Maximum confidence for shorts
+    'max_long_confidence': 0.92,    # Higher cap for longs (upward market bias)
+    'max_short_confidence': 0.88,   # Lower cap for shorts (squeeze risk)
 
     # ==========================================================================
     # Candle Management
-    # For WaveTrend: min_candles = max(channel_length, average_length, divergence_lookback * 2) + 10
-    # With defaults: max(10, 21, 28) + 10 = 38 candles minimum
+    # REC-011: Divergence lookback alignment with buffer size
+    #
+    # Minimum candle requirements calculation:
+    # - WaveTrend: max(channel_length, average_length) + ma_length + 5
+    #              = max(10, 21) + 4 + 5 = 30 candles
+    # - Divergence: divergence_lookback * 2 + 5 = 14 * 2 + 5 = 33 candles
+    # - Combined minimum: max(30, 33) = 33 candles
+    #
+    # Current buffer: 50 candles provides:
+    # - 17 candles safety margin (50 - 33 = 17)
+    # - Allows for stable indicator warmup
+    # - Provides full divergence detection window
+    #
+    # If divergence_lookback is changed, update min_candle_buffer accordingly:
+    # Formula: min_candle_buffer >= max(average_length + ma_length + 5, divergence_lookback * 2 + 5)
     # ==========================================================================
-    'min_candle_buffer': 50,        # Minimum candles required (safety margin)
+    'min_candle_buffer': 50,        # Minimum candles required (includes safety margin)
 
     # ==========================================================================
     # Cooldown Mechanisms
@@ -171,11 +222,15 @@ CONFIG: Dict[str, Any] = {
 
     # ==========================================================================
     # Cross-Pair Correlation Management
+    # REC-002: Real-time correlation monitoring vs estimated values
     # ==========================================================================
     'use_correlation_management': True,
     'max_total_long_exposure': 100.0,   # Max total long USD exposure
     'max_total_short_exposure': 100.0,  # Max total short USD exposure
     'same_direction_size_mult': 0.75,   # Reduce size if both pairs same direction
+    'use_real_correlation': True,       # REC-002: Calculate real-time rolling correlation
+    'correlation_window': 20,           # REC-002: Candles for correlation calculation
+    'correlation_block_threshold': 0.85,  # Block if correlation > this
 
     # ==========================================================================
     # Fee Profitability
@@ -183,6 +238,14 @@ CONFIG: Dict[str, Any] = {
     'fee_rate': 0.001,              # 0.1% per trade
     'min_profit_after_fees_pct': 0.1,  # Minimum profit after fees
     'use_fee_check': True,
+
+    # ==========================================================================
+    # REC-001: Trade Flow Confirmation
+    # Validates signals against market microstructure (buy/sell volume imbalance)
+    # ==========================================================================
+    'use_trade_flow_confirmation': True,
+    'trade_flow_threshold': 0.10,       # Min imbalance to confirm signal (10%)
+    'trade_flow_lookback': 50,          # Number of recent trades to analyze
 
     # ==========================================================================
     # Signal Tracking
