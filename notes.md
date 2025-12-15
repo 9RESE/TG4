@@ -6,9 +6,82 @@ update the docs with the recent work and ALL the changes in git. Ensure document
 
 - wavetrend /home/rese/Documents/rese/trading-bots/grok-4_1/src/strategies/wavetrend
 - whale_sentiment /home/rese/Documents/rese/trading-bots/grok-4_1/src/strategies/whale_sentiment
-- grid_rsi_reversion /home/rese/Documents/rese/trading-bots/grok-4_1/src/strategies/grid_base.py /home/rese/Documents/rese/trading-bots/grok-4_1/src/strategies/grid_wrappers.py /home/rese/Documents/rese/trading-bots/grok-4_1/src/grid_ensemble_orchestrator.py
 
-i want to add the grid_rsi_reversion from /home/rese/Documents/rese/trading-bots/grok-4_1/src/strategies/grid_base.py /home/rese/Documents/rese/trading-bots/grok-4_1/src/strategies/grid_wrappers.py /home/rese/Documents/rese/trading-bots/grok-4_1/src/grid_ensemble_orchestrator.py to the ws_paper_tester/. as we are rewriting it for the platform I want to do deep research on the strategy and its use with XRP/usdt, btc/usdt, and xrp/btc. I then want you to make a document on your findings, recommendations, and implementation plan. We need to ensure the new strategy complies with ws_paper_tester/docs/development/strategy-development-guide.md and integrates with existing ws_paper_tester/ infrastructure
+i want to add the whale_sentiment from /home/rese/Documents/rese/trading-bots/grok-4_1/src/strategies/whale_sentiment/ to the ws_paper_tester/. as we are rewriting it for the platform I want to do deep research on the strategy and its use with XRP/usdt, btc/usdt, and xrp/btc. I then want you to make a document on your findings, recommendations, and implementation plan. We need to ensure the new strategy complies with ws_paper_tester/docs/development/strategy-development-guide.md and integrates with existing ws_paper_tester/ infrastructure
+
+
+
+---
+Task: Research and Plan Whale Sentiment Strategy for ws_paper_tester
+
+Context
+
+- Source Strategy: Legacy implementation requiring platform adaptation
+  - src/strategies/whale_sentiment/strategy.py
+- Target Location: ws_paper_tester/strategies/whale_sentiment/
+- Must comply with: ws_paper_tester/docs/development/strategy-development-guide.md
+- Must integrate with: Existing ws_paper_tester infrastructure (modular structure: config, indicators, regimes, signals, lifecycle, risk, exits)
+
+Strategy Specifications
+
+- Name: Whale Sentiment
+- Timeframes: 1h primary (with 1m/5m tick-level execution)
+- Style: Contrarian sentiment + volume spike detection (whale proxy)
+- Pairs: XRP/USDT, BTC/USDT, XRP/BTC
+- Core Logic: Volume spikes as whale activity proxy, RSI/price deviation as fear-greed proxy, contrarian entry on extreme sentiment
+
+Required Research Areas
+
+1. Whale tracking and sentiment analysis fundamentals
+  - Academic foundations (behavioral finance, contrarian investing, smart money theory)
+  - Volume spike analysis as institutional activity proxy
+  - Fear & Greed Index methodology and effectiveness
+  - RSI as sentiment indicator vs momentum indicator
+2. Pair-specific characteristics:
+  - XRP/USDT: Volume patterns, whale threshold calibration, retail vs institutional behavior
+  - BTC/USDT: Institutional activity signatures, volume spike accuracy for whale detection
+  - XRP/BTC: Cross-pair sentiment divergence, correlation with BTC dominance cycles
+3. Source code analysis:
+  - Extract core logic from strategy.py (WhaleSentiment class)
+  - Map to ws_paper_tester module structure (config, indicators, signals, regimes, lifecycle)
+  - Identify components requiring WebSocket adaptation (hourly → tick-based execution)
+  - External data integration patterns (Whale Alert, Glassnode, social sentiment)
+4. Entry/exit signal criteria for sentiment + whale proxy
+  - Composite signal aggregation methodology
+  - Confidence thresholds (current: 0.55)
+  - Contrarian vs momentum mode switching
+5. Risk management:
+  - Position sizing based on sentiment confidence
+  - Stop-loss placement for contrarian entries (inherently counter-trend)
+  - Regime-based exposure (extreme fear vs neutral markets)
+  - False signal protection (volume spikes without follow-through)
+6. Known pitfalls and failure modes:
+  - Volume spike false positives (exchange manipulation, wash trading)
+  - Sentiment divergence (external data vs proxy indicators)
+  - Contrarian trap (knife-catching in trending markets)
+  - Cross-pair correlation breakdown
+
+Deliverable
+
+Create a research document at:
+ws_paper_tester/docs/development/review/whale_sentiment/master-plan-v1.0.md
+
+Structure:
+- Executive Summary
+- Research Findings (per area above)
+- Source Code Analysis (legacy → new mapping)
+- Pair-Specific Analysis (XRP/USDT, BTC/USDT, XRP/BTC)
+- Recommended Approach
+- Development Plan (phases, no code)
+- Compliance Checklist (vs strategy-development-guide.md v1.0)
+
+Constraints
+
+- Documentation only - no implementation code
+- Focus on adaptation to WebSocket tick environment, not blind copy
+- Address external data dependency: strategy must function with proxy indicators only
+- Consider circuit breaker and volatility regime requirements from existing strategies
+
 
 
 # REUSABLE STRATEGY PROMPTS
@@ -154,10 +227,10 @@ Include:
 
 ## Implementation Prompt (Copy & Fill Placeholders)
 ```
-## Task: Implement Review Findings for momentum_scalping Strategy
+## Task: Implement Review Findings for grid_rsi_reversion Strategy
 ### Files
-- **Strategy:** `ws_paper_tester/strategies/momentum_scalping/`
-- **Review:** `ws_paper_tester/docs/development/review/momentum_scalping/README.md`
+- **Strategy:** `ws_paper_tester/strategies/grid_rsi_reversion/`
+- **Review:** `ws_paper_tester/docs/development/review/grid_rsi_reversion/deep-review-v2.0.md`
 - **Guide:** `ws_paper_tester/docs/development/strategy-development-guide.md`
 ### Instructions
 1. Read the review document - identify all recommendations (REC-XXX)
@@ -237,3 +310,26 @@ Provide:
     - Prolonged extreme alerts (7+ consecutive days)
     - Volatility expansion signals for regime awareness
 - Watch for: correlation breakdown on XRP/BTC, BTC trending markets (ADX>30)
+
+## WaveTrend Oscillator (v1.0.0 - 2025-12-14)
+- Pairs: XRP/USDT, BTC/USDT, XRP/BTC
+- Key concepts: WaveTrend (LazyBear) dual-line crossover, zone-based filtering (OB/OS), divergence confirmation
+- Core logic:
+  - WT1/WT2 crossover signals in overbought/oversold zones
+  - Configurable zone thresholds per symbol
+  - Bullish divergence bonus in oversold zones
+  - Bearish divergence bonus in overbought zones
+- Entry:
+  - Long: Bullish crossover (WT1 > WT2) from/in oversold zone
+  - Short: Bearish crossover (WT1 < WT2) from/in overbought zone
+- Exit:
+  - Crossover reversal (primary)
+  - Extreme zone profit taking
+  - Stop loss / Take profit
+- Config highlights:
+  - wt_channel_length: 10 (ESA calculation)
+  - wt_average_length: 21 (WT1 smoothing)
+  - wt_ma_length: 4 (WT2 signal line)
+  - Zones: ±60 (OB/OS), ±80 (extreme)
+  - R:R ratio: 2:1 (1.5% SL, 3.0% TP for XRP/USDT)
+- Watch for: neutral zone entries (less reliable), zone exit timing
