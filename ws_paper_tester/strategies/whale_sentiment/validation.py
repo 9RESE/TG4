@@ -19,23 +19,9 @@ def validate_config(config: Dict[str, Any]) -> List[str]:
     """
     errors = []
 
-    # RSI validation
-    rsi_period = config.get('rsi_period', 14)
-    rsi_extreme_fear = config.get('rsi_extreme_fear', 25)
-    rsi_fear = config.get('rsi_fear', 40)
-    rsi_greed = config.get('rsi_greed', 60)
-    rsi_extreme_greed = config.get('rsi_extreme_greed', 75)
-
-    if rsi_period < 5:
-        errors.append(f"rsi_period ({rsi_period}) is too low, recommend >= 5")
-    if rsi_extreme_fear >= rsi_fear:
-        errors.append(f"rsi_extreme_fear ({rsi_extreme_fear}) must be < rsi_fear ({rsi_fear})")
-    if rsi_fear >= rsi_greed:
-        errors.append(f"rsi_fear ({rsi_fear}) must be < rsi_greed ({rsi_greed})")
-    if rsi_greed >= rsi_extreme_greed:
-        errors.append(f"rsi_greed ({rsi_greed}) must be < rsi_extreme_greed ({rsi_extreme_greed})")
-    if rsi_extreme_fear < 0 or rsi_extreme_greed > 100:
-        errors.append("RSI thresholds must be between 0 and 100")
+    # REC-034: RSI validation REMOVED (v1.5.0)
+    # RSI completely removed from strategy per REC-021 (v1.3.0).
+    # Validation code removed per REC-034 clean code principles.
 
     # Volume spike validation
     volume_spike_mult = config.get('volume_spike_mult', 2.0)
@@ -102,9 +88,9 @@ def validate_config(config: Dict[str, Any]) -> List[str]:
     if fee_rate > 0.01:
         errors.append(f"fee_rate ({fee_rate}) seems high, should typically be < 0.01")
 
-    # Candle buffer validation - needs enough for volume window + RSI
+    # Candle buffer validation - needs enough for volume window + price lookback
     min_candles = config.get('min_candle_buffer', 300)
-    required = max(volume_window, rsi_period * 2, config.get('price_lookback', 48)) + 20
+    required = max(volume_window, config.get('price_lookback', 48)) + 20
 
     if min_candles < required:
         errors.append(f"min_candle_buffer ({min_candles}) should be >= {required} based on indicator settings")
@@ -166,11 +152,8 @@ def validate_symbol_configs(symbol_configs: Dict[str, Dict[str, Any]], global_co
         if vol_mult < 1.0:
             errors.append(f"{symbol}: volume_spike_mult ({vol_mult}) must be >= 1.0")
 
-        # RSI threshold validation
-        fear = sym_config.get('rsi_extreme_fear', global_config.get('rsi_extreme_fear', 25))
-        greed = sym_config.get('rsi_extreme_greed', global_config.get('rsi_extreme_greed', 75))
-        if fear >= greed:
-            errors.append(f"{symbol}: rsi_extreme_fear ({fear}) must be < rsi_extreme_greed ({greed})")
+        # REC-034: RSI threshold validation REMOVED (v1.5.0)
+        # RSI completely removed from strategy per REC-021 (v1.3.0).
 
     return errors
 
@@ -192,8 +175,7 @@ def validate_config_overrides(overrides: Dict[str, Any]) -> List[str]:
         # Whale Detection
         'volume_spike_mult', 'volume_window', 'min_spike_trades',
         'max_spread_pct', 'volume_spike_price_move_pct',
-        # RSI Settings (kept for legacy compatibility, weight should be 0)
-        'rsi_period', 'rsi_extreme_fear', 'rsi_fear', 'rsi_greed', 'rsi_extreme_greed',
+        # REC-034: RSI settings REMOVED (v1.5.0) - no longer accepted
         # Fear/Greed
         'fear_deviation_pct', 'greed_deviation_pct', 'price_lookback',
         # Mode

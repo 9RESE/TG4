@@ -52,6 +52,12 @@ REC-024 (HIGH, High Effort): Backtest Confidence Weights
 ===============================================================================
 
 Version History:
+- 1.5.0: Deep Review v5.0 Implementation
+         - REC-034: Removed legacy RSI validation code from validation.py
+         - REC-035: Reduced extended fear thresholds (72h/168h from 168h/336h)
+         - REC-036: Added deprecation timeline to detect_rsi_divergence stub
+         - REC-037: Added extreme zone state persistence across restarts
+         - Guide v2.0 compliance: 100% maintained
 - 1.4.0: Deep Review v4.0 Implementation
          - REC-030: CRITICAL - Fixed undefined _classify_volatility_regime function reference
          - REC-031: Added EXTREME volatility regime (ATR > 6%) with trading pause
@@ -101,7 +107,7 @@ from typing import Dict, Any
 # Strategy Metadata
 # =============================================================================
 STRATEGY_NAME = "whale_sentiment"
-STRATEGY_VERSION = "1.4.0"  # Deep Review v4.0 Implementation
+STRATEGY_VERSION = "1.5.0"  # Deep Review v5.0 Implementation
 # REC-007: XRP/BTC disabled by default due to 7-10x lower liquidity than USD pairs.
 # REC-016: To re-enable, add to SYMBOLS AND set enable_xrpbtc: true in config.
 SYMBOLS = ["XRP/USDT", "BTC/USDT"]
@@ -357,10 +363,13 @@ CONFIG: Dict[str, Any] = {
     # ==========================================================================
     # REC-025: Extended Fear Period Detection
     # Prevent capital exhaustion during prolonged extreme sentiment
+    # REC-035: Reduced thresholds for practical utility (v1.5.0)
+    # Original: 168h/336h - rarely triggered in practice
+    # Updated: 72h/168h - more practical protection periods
     # ==========================================================================
     'use_extended_fear_detection': True,
-    'extended_fear_threshold_hours': 168,     # 7 days (7*24) in extreme zone = reduce size
-    'extended_fear_pause_hours': 336,         # 14 days (14*24) = pause entries
+    'extended_fear_threshold_hours': 72,      # REC-035: 3 days (72h) in extreme zone = reduce size
+    'extended_fear_pause_hours': 168,         # REC-035: 7 days (168h) = pause entries
     'extended_fear_size_reduction': 0.70,     # 30% size reduction when extended fear detected
 
     # ==========================================================================

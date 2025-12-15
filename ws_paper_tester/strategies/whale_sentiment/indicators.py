@@ -35,6 +35,7 @@ Edge Cases Handled:
 - Overflow: Uses standard Python float, sufficient for typical price ranges
 ===============================================================================
 """
+import warnings
 from typing import List, Dict, Any, Optional, Tuple
 
 from .config import SentimentZone, WhaleSignal
@@ -428,6 +429,12 @@ def detect_rsi_divergence(
 ) -> Dict[str, Any]:
     """
     REC-032: RSI divergence REMOVED (v1.4.0).
+    REC-036: Scheduled for removal in v2.0.0 (v1.5.0).
+
+    .. deprecated:: 1.4.0
+        RSI-based indicators removed from strategy per REC-021.
+        This function is a stub retained for backwards compatibility.
+        **Will be removed in v2.0.0** - Update any code that calls this function.
 
     RSI-based indicators removed from strategy per REC-021. Function retained
     as stub for backwards compatibility with signal.py call at line 286.
@@ -441,6 +448,13 @@ def detect_rsi_divergence(
     Returns:
         Dict with divergence_type: 'none' (always)
     """
+    # REC-036: Issue deprecation warning
+    warnings.warn(
+        "detect_rsi_divergence is deprecated and will be removed in v2.0.0. "
+        "RSI-based indicators are no longer used in this strategy (REC-021).",
+        DeprecationWarning,
+        stacklevel=2
+    )
     return {
         'bullish_divergence': False,
         'bearish_divergence': False,

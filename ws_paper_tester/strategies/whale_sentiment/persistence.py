@@ -1,19 +1,20 @@
 """
-Whale Sentiment Strategy - Candle Data Persistence
+Whale Sentiment Strategy - Data Persistence
 
 REC-011: Implements candle data persistence for fast restart recovery.
+REC-037: Implements extreme zone state persistence for accurate tracking (v1.5.0).
 
-This module saves candle data to disk periodically and reloads it on startup,
-eliminating the 25+ hour warmup requirement after restarts.
+This module saves strategy data to disk periodically and reloads it on startup:
+- Candle data: eliminates 25+ hour warmup requirement after restarts
+- Extreme zone state: maintains accurate extended fear tracking across restarts
 
-File Format:
-- JSON array of candle objects
-- Each candle: {timestamp, open, high, low, close, volume}
-- Timestamp in ISO format for human readability
+File Formats:
+- Candles: JSON array of candle objects ({timestamp, open, high, low, close, volume})
+- State: JSON object with extreme zone tracking data
 
 Validation:
 - Checks file exists and is valid JSON
-- Validates last candle timestamp within max_candle_age_hours
+- Validates timestamps within max age limits
 - Gracefully handles corruption (logs warning, starts fresh)
 """
 import json
@@ -360,3 +361,188 @@ def get_persistence_status(
         status[symbol] = symbol_status
 
     return status
+
+
+# =============================================================================
+# REC-037: Extreme Zone State Persistence
+# =============================================================================
+
+
+def get_state_file_path(
+    config: Dict[str, Any],
+    base_dir: str = None
+) -> Path:
+    """
+    REC-037: Get the file path for extreme zone state persistence.
+
+    Args:
+        config: Strategy configuration
+        base_dir: Optional base directory override
+
+    Returns:
+        Path object for the state file
+    """
+    persistence_dir = base_dir or config.get('candle_persistence_dir', 'data/candles')
+    return Path(persistence_dir) / 'whale_sentiment_state.json'
+
+
+def save_extreme_zone_state(
+    state: Dict[str, Any],
+    config: Dict[str, Any],
+    base_dir: str = None
+) -> bool:
+    """
+    REC-037: Save extreme zone state to disk for restart recovery.
+
+    Persists:
+    - extreme_zone_start: When the strategy entered an extreme sentiment zone
+    - extreme_zone_type: The type of extreme zone (EXTREME_FEAR or EXTREME_GREED)
+
+    Args:
+        state: Strategy state dict containing extreme zone tracking
+        config: Strategy configuration
+        base_dir: Optional base directory override
+
+    Returns:
+        True if save successful, False otherwise
+    """
+    if not config.get('use_candle_persistence', True):
+        return False
+
+    try:
+        file_path = get_state_file_path(config, base_dir)
+
+        # Ensure directory exists
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Extract extreme zone state
+        extreme_zone_start = state.get('extreme_zone_start')
+        extreme_zone_type = state.get('extreme_zone_type')
+
+        state_data = {
+            'saved_at': datetime.now(timezone.utc).isoformat(),
+            'extreme_zone_start': extreme_zone_start.isoformat() if extreme_zone_start else None,
+            'extreme_zone_type': extreme_zone_type,
+        }
+
+        # Write to file
+        with open(file_path, 'w') as f:
+            json.dump(state_data, f, indent=2)
+
+        logger.debug(
+            "Saved extreme zone state: zone_type=%s, start=%s",
+            extreme_zone_type, extreme_zone_start
+        )
+        return True
+
+    except Exception as e:
+        logger.warning("Failed to save extreme zone state: %s", e)
+        return False
+
+
+def load_extreme_zone_state(
+    config: Dict[str, Any],
+    base_dir: str = None
+) -> Dict[str, Any]:
+    """
+    REC-037: Load extreme zone state from disk.
+
+    Validates that the saved state is still relevant (not too old).
+
+    Args:
+        config: Strategy configuration
+        base_dir: Optional base directory override
+
+    Returns:
+        Dict with extreme_zone_start, extreme_zone_type, or empty values if not found/invalid
+    """
+    result = {
+        'extreme_zone_start': None,
+        'extreme_zone_type': None,
+        'loaded': False,
+        'rejection_reason': None,
+    }
+
+    if not config.get('use_candle_persistence', True):
+        result['rejection_reason'] = 'persistence_disabled'
+        return result
+
+    try:
+        file_path = get_state_file_path(config, base_dir)
+
+        if not file_path.exists():
+            result['rejection_reason'] = 'file_not_found'
+            return result
+
+        # Read file
+        with open(file_path, 'r') as f:
+            data = json.load(f)
+
+        # Parse extreme zone start
+        extreme_zone_start_str = data.get('extreme_zone_start')
+        if extreme_zone_start_str:
+            extreme_zone_start = datetime.fromisoformat(
+                extreme_zone_start_str.replace('Z', '+00:00')
+            )
+            if extreme_zone_start.tzinfo is None:
+                extreme_zone_start = extreme_zone_start.replace(tzinfo=timezone.utc)
+
+            # Validate age - state is valid if zone start is within reasonable time
+            # Use extended_fear_pause_hours as max age (if zone was this old, it would pause anyway)
+            max_age_hours = config.get('extended_fear_pause_hours', 168) * 1.5  # 150% of pause threshold
+            age_hours = (datetime.now(timezone.utc) - extreme_zone_start).total_seconds() / 3600
+
+            if age_hours > max_age_hours:
+                result['rejection_reason'] = f'too_old ({age_hours:.1f}h > {max_age_hours:.1f}h)'
+                logger.info(
+                    "Extreme zone state too old (%.1fh > %.1fh), starting fresh",
+                    age_hours, max_age_hours
+                )
+                return result
+
+            result['extreme_zone_start'] = extreme_zone_start
+            result['extreme_zone_type'] = data.get('extreme_zone_type')
+            result['loaded'] = True
+
+            logger.info(
+                "Loaded extreme zone state: type=%s, duration=%.1fh",
+                result['extreme_zone_type'], age_hours
+            )
+
+    except json.JSONDecodeError as e:
+        result['rejection_reason'] = f'json_error: {e}'
+        logger.warning("Corrupted state file: %s", e)
+
+    except Exception as e:
+        result['rejection_reason'] = f'error: {e}'
+        logger.warning("Failed to load extreme zone state: %s", e)
+
+    return result
+
+
+def delete_extreme_zone_state(
+    config: Dict[str, Any],
+    base_dir: str = None
+) -> bool:
+    """
+    REC-037: Delete persisted extreme zone state file.
+
+    Should be called when exiting an extreme zone to clean up stale state.
+
+    Args:
+        config: Strategy configuration
+        base_dir: Optional base directory override
+
+    Returns:
+        True if deleted successfully, False otherwise
+    """
+    try:
+        file_path = get_state_file_path(config, base_dir)
+        if file_path.exists():
+            file_path.unlink()
+            logger.debug("Deleted extreme zone state file")
+            return True
+        return False
+    except Exception as e:
+        logger.warning("Failed to delete state file: %s", e)
+        return False

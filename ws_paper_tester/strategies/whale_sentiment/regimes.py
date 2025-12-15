@@ -8,11 +8,19 @@ v1.3.0 Additions:
 - REC-023: Volatility regime classification and adjustments
 - REC-025: Extended fear period detection
 - REC-027: Dynamic confidence threshold support
+
+v1.5.0 Additions:
+- REC-037: Extreme zone state persistence across restarts
 """
 from datetime import datetime
 from typing import Dict, Any, Optional
 
 from .config import TradingSession, SentimentZone
+from .persistence import (
+    save_extreme_zone_state,
+    load_extreme_zone_state,
+    delete_extreme_zone_state,
+)
 
 
 # =============================================================================
@@ -103,6 +111,7 @@ def get_volatility_adjustments(
 
 # =============================================================================
 # REC-025: Extended Fear Period Detection
+# REC-037: State persistence for accurate tracking across restarts (v1.5.0)
 # =============================================================================
 def check_extended_fear_period(
     state: Dict[str, Any],
@@ -112,9 +121,13 @@ def check_extended_fear_period(
 ) -> Dict[str, Any]:
     """
     REC-025: Check for extended periods of extreme sentiment.
+    REC-037: Now persists extreme zone state across restarts (v1.5.0).
 
     Tracks consecutive hours in extreme sentiment zones and recommends
     size reduction or entry pause to prevent capital exhaustion.
+
+    State persistence ensures accurate duration tracking even if the strategy
+    is restarted while in an extreme zone.
 
     Args:
         state: Strategy state dict
@@ -136,10 +149,18 @@ def check_extended_fear_period(
     if not config.get('use_extended_fear_detection', True):
         return result
 
-    # Initialize tracking in state if needed
+    # REC-037: Initialize tracking in state, loading from disk if available
     if 'extreme_zone_start' not in state:
-        state['extreme_zone_start'] = None
-        state['extreme_zone_type'] = None
+        # Try to load persisted state on first call
+        persisted = load_extreme_zone_state(config)
+        if persisted.get('loaded'):
+            state['extreme_zone_start'] = persisted['extreme_zone_start']
+            state['extreme_zone_type'] = persisted['extreme_zone_type']
+            state['_extreme_zone_loaded'] = True
+        else:
+            state['extreme_zone_start'] = None
+            state['extreme_zone_type'] = None
+            state['_extreme_zone_loaded'] = False
 
     is_extreme = sentiment_zone in (SentimentZone.EXTREME_FEAR, SentimentZone.EXTREME_GREED)
 
@@ -148,15 +169,17 @@ def check_extended_fear_period(
         if state['extreme_zone_start'] is None:
             state['extreme_zone_start'] = current_time
             state['extreme_zone_type'] = sentiment_zone.name
+            # REC-037: Persist new extreme zone state
+            save_extreme_zone_state(state, config)
 
         # Calculate hours in extreme zone
         hours_in_extreme = (current_time - state['extreme_zone_start']).total_seconds() / 3600
         result['hours_in_extreme'] = hours_in_extreme
         result['zone_entered'] = state['extreme_zone_start'].isoformat()
 
-        # Check thresholds
-        threshold_hours = config.get('extended_fear_threshold_hours', 168)  # 7 days
-        pause_hours = config.get('extended_fear_pause_hours', 336)  # 14 days
+        # Check thresholds (REC-035: reduced from 168h/336h for practical utility)
+        threshold_hours = config.get('extended_fear_threshold_hours', 72)  # 3 days
+        pause_hours = config.get('extended_fear_pause_hours', 168)  # 7 days
 
         if hours_in_extreme >= pause_hours:
             result['is_extended'] = True
@@ -165,8 +188,16 @@ def check_extended_fear_period(
         elif hours_in_extreme >= threshold_hours:
             result['is_extended'] = True
             result['size_mult'] = config.get('extended_fear_size_reduction', 0.70)
+
+        # REC-037: Periodically save state (every hour based on modulo check)
+        if int(hours_in_extreme) != state.get('_last_saved_hour', -1):
+            save_extreme_zone_state(state, config)
+            state['_last_saved_hour'] = int(hours_in_extreme)
     else:
         # Reset tracking if no longer in extreme zone
+        if state.get('extreme_zone_start') is not None:
+            # REC-037: Clean up persisted state when exiting extreme zone
+            delete_extreme_zone_state(config)
         state['extreme_zone_start'] = None
         state['extreme_zone_type'] = None
 
