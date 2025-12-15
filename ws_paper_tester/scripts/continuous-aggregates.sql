@@ -271,15 +271,20 @@ SELECT add_continuous_aggregate_policy('candles_1w',
 -- CALL refresh_continuous_aggregate('candles_1w', NULL, NULL);
 
 -- ============================================
--- RETENTION POLICIES (Optional)
+-- RETENTION POLICIES (REC-009: Enabled by default)
 -- ============================================
--- Uncomment to enable automatic data retention
+-- These policies automatically delete old data to prevent unbounded storage growth.
+-- Adjust intervals based on your storage requirements.
 
 -- Keep raw trades for 90 days (can rebuild candles from them)
--- SELECT add_retention_policy('trades', INTERVAL '90 days', if_not_exists => TRUE);
+SELECT add_retention_policy('trades', INTERVAL '90 days', if_not_exists => TRUE);
 
 -- Keep 1-minute candles for 1 year
--- SELECT add_retention_policy('candles', INTERVAL '365 days', if_not_exists => TRUE);
+SELECT add_retention_policy('candles', INTERVAL '365 days', if_not_exists => TRUE);
+
+-- Note: Continuous aggregates (5m, 15m, 1h, etc.) inherit retention from their
+-- source tables. If you need different retention for aggregates, add policies:
+-- SELECT add_retention_policy('candles_5m', INTERVAL '2 years', if_not_exists => TRUE);
 
 -- ============================================
 -- VERIFICATION QUERIES

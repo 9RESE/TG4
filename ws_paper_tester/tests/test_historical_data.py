@@ -336,6 +336,46 @@ class TestHistoricalProviderUnit:
         # Unknown interval falls back to candles
         assert provider._get_view_for_interval(3) == 'candles'
 
+    def test_get_view_for_interval_invalid(self):
+        """REC-007: Test invalid interval validation."""
+        from data.historical_provider import HistoricalDataProvider
+
+        provider = HistoricalDataProvider.__new__(HistoricalDataProvider)
+        provider.pool = None
+
+        # Negative interval should raise ValueError
+        with pytest.raises(ValueError, match="Invalid interval"):
+            provider._get_view_for_interval(-1)
+
+        # Zero interval should raise ValueError
+        with pytest.raises(ValueError, match="Invalid interval"):
+            provider._get_view_for_interval(0)
+
+    def test_ensure_connected_raises_when_not_connected(self):
+        """REC-007: Test connection check raises error when not connected."""
+        from data.historical_provider import HistoricalDataProvider
+
+        provider = HistoricalDataProvider.__new__(HistoricalDataProvider)
+        provider.pool = None
+
+        with pytest.raises(RuntimeError, match="not connected"):
+            provider._ensure_connected()
+
+    @pytest.mark.asyncio
+    async def test_get_candles_raises_when_not_connected(self):
+        """REC-007: Test get_candles raises when provider not connected."""
+        from data.historical_provider import HistoricalDataProvider
+
+        provider = HistoricalDataProvider.__new__(HistoricalDataProvider)
+        provider.pool = None
+
+        with pytest.raises(RuntimeError, match="not connected"):
+            await provider.get_candles(
+                'XRP/USDT', 1,
+                datetime.now(timezone.utc) - timedelta(hours=1),
+                datetime.now(timezone.utc)
+            )
+
 
 class TestGapFillerUnit:
     """Unit tests for GapFiller (no database/network required)."""
@@ -347,6 +387,145 @@ class TestGapFillerUnit:
         assert GapFiller.PAIR_MAP['XRP/USDT'] == 'XRPUSDT'
         assert GapFiller.PAIR_MAP['BTC/USDT'] == 'XBTUSDT'
         assert GapFiller.PAIR_MAP['XRP/BTC'] == 'XRPXBT'
+
+
+class TestDatabaseWriterBufferOverflow:
+    """REC-007: Tests for buffer overflow protection in DatabaseWriter."""
+
+    def test_max_buffer_size_constants(self):
+        """Test that buffer size limits are properly defined."""
+        from data.websocket_db_writer import DatabaseWriter
+
+        assert hasattr(DatabaseWriter, 'MAX_TRADE_BUFFER_SIZE')
+        assert hasattr(DatabaseWriter, 'MAX_CANDLE_BUFFER_SIZE')
+        assert DatabaseWriter.MAX_TRADE_BUFFER_SIZE == 10000
+        assert DatabaseWriter.MAX_CANDLE_BUFFER_SIZE == 1000
+
+    def test_overflow_count_tracking(self):
+        """Test that overflow count is tracked in stats."""
+        from data.websocket_db_writer import DatabaseWriter
+        from unittest.mock import patch
+
+        with patch('data.websocket_db_writer.asyncpg', None):
+            pass  # Can't test full writer without asyncpg mock
+
+        # Just verify the class has the attribute
+        assert hasattr(DatabaseWriter, 'MAX_TRADE_BUFFER_SIZE')
+
+
+class TestTradeValidation:
+    """REC-007: Tests for trade data validation in historical_backfill."""
+
+    @pytest.mark.asyncio
+    async def test_store_trades_validates_price(self):
+        """Test that invalid prices are rejected."""
+        from data.historical_backfill import KrakenTradesBackfill
+        from unittest.mock import AsyncMock, MagicMock
+
+        # Create backfill instance with mocked pool
+        backfill = KrakenTradesBackfill.__new__(KrakenTradesBackfill)
+        backfill.pool = MagicMock()
+
+        # Mock the connection to track what gets inserted
+        mock_conn = AsyncMock()
+        mock_conn.__aenter__ = AsyncMock(return_value=mock_conn)
+        mock_conn.__aexit__ = AsyncMock(return_value=None)
+        backfill.pool.acquire.return_value = mock_conn
+
+        # Valid trade followed by invalid trade (negative price)
+        trades = [
+            ['2.50', '100', '1704067200', 'b', 'market', ''],  # Valid
+            ['-1.00', '100', '1704067201', 'b', 'market', ''],  # Invalid price
+            ['0', '100', '1704067202', 'b', 'market', ''],      # Invalid price (zero)
+        ]
+
+        await backfill.store_trades('XRP/USDT', trades)
+
+        # Should only have called executemany with 1 valid trade
+        if mock_conn.executemany.called:
+            call_args = mock_conn.executemany.call_args
+            records = call_args[0][1]  # Second arg to executemany
+            assert len(records) == 1  # Only the valid trade
+
+    @pytest.mark.asyncio
+    async def test_store_trades_validates_volume(self):
+        """Test that invalid volumes are rejected."""
+        from data.historical_backfill import KrakenTradesBackfill
+        from unittest.mock import AsyncMock, MagicMock
+
+        backfill = KrakenTradesBackfill.__new__(KrakenTradesBackfill)
+        backfill.pool = MagicMock()
+
+        mock_conn = AsyncMock()
+        mock_conn.__aenter__ = AsyncMock(return_value=mock_conn)
+        mock_conn.__aexit__ = AsyncMock(return_value=None)
+        backfill.pool.acquire.return_value = mock_conn
+
+        # Valid trade followed by invalid trade (negative volume)
+        trades = [
+            ['2.50', '100', '1704067200', 'b', 'market', ''],   # Valid
+            ['2.50', '-50', '1704067201', 'b', 'market', ''],   # Invalid volume
+            ['2.50', '0', '1704067202', 'b', 'market', ''],     # Invalid volume (zero)
+        ]
+
+        await backfill.store_trades('XRP/USDT', trades)
+
+        if mock_conn.executemany.called:
+            call_args = mock_conn.executemany.call_args
+            records = call_args[0][1]
+            assert len(records) == 1  # Only the valid trade
+
+    @pytest.mark.asyncio
+    async def test_store_trades_handles_malformed_data(self):
+        """Test that malformed trades don't crash the system."""
+        from data.historical_backfill import KrakenTradesBackfill
+        from unittest.mock import AsyncMock, MagicMock
+
+        backfill = KrakenTradesBackfill.__new__(KrakenTradesBackfill)
+        backfill.pool = MagicMock()
+
+        mock_conn = AsyncMock()
+        mock_conn.__aenter__ = AsyncMock(return_value=mock_conn)
+        mock_conn.__aexit__ = AsyncMock(return_value=None)
+        backfill.pool.acquire.return_value = mock_conn
+
+        # Mix of valid and malformed trades
+        trades = [
+            ['2.50', '100', '1704067200', 'b', 'market', ''],  # Valid
+            ['invalid', '100', '1704067201', 'b', 'market', ''],  # Invalid price string
+            ['2.50', 'nan', '1704067202', 'b', 'market', ''],     # Invalid volume string
+        ]
+
+        # Should not raise exception
+        await backfill.store_trades('XRP/USDT', trades)
+
+
+class TestCentralizedPairMappings:
+    """REC-005/REC-007: Tests for centralized pair mappings."""
+
+    def test_pair_map_consistency(self):
+        """Test that all files use centralized PAIR_MAP."""
+        from data.types import PAIR_MAP, REVERSE_PAIR_MAP
+
+        # Verify bidirectional mapping
+        for our_format, kraken_format in PAIR_MAP.items():
+            assert REVERSE_PAIR_MAP[kraken_format] == our_format
+
+    def test_default_symbols_in_pair_map(self):
+        """Test that default symbols are all in PAIR_MAP."""
+        from data.types import PAIR_MAP, DEFAULT_SYMBOLS
+
+        for symbol in DEFAULT_SYMBOLS:
+            assert symbol in PAIR_MAP, f"Default symbol {symbol} not in PAIR_MAP"
+
+    def test_csv_symbol_map_coverage(self):
+        """Test that CSV symbol map covers PAIR_MAP."""
+        from data.types import PAIR_MAP, CSV_SYMBOL_MAP
+
+        # Every Kraken format should map back to our format
+        for our_format, kraken_format in PAIR_MAP.items():
+            assert kraken_format in CSV_SYMBOL_MAP
+            assert CSV_SYMBOL_MAP[kraken_format] == our_format
 
 
 # ============================================

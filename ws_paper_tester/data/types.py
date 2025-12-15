@@ -10,6 +10,47 @@ from decimal import Decimal
 from typing import Literal, Optional
 
 
+# =============================================================================
+# Symbol/Pair Mappings (REC-005: Centralized location)
+# =============================================================================
+
+# Mapping from our internal symbol format to Kraken API pair names
+PAIR_MAP = {
+    'XRP/USDT': 'XRPUSDT',
+    'BTC/USDT': 'XBTUSDT',
+    'XRP/BTC': 'XRPXBT',
+    'ETH/USDT': 'ETHUSDT',
+    'SOL/USDT': 'SOLUSDT',
+    'ETH/BTC': 'ETHXBT',
+    'LTC/USDT': 'LTCUSDT',
+    'DOT/USDT': 'DOTUSDT',
+    'ADA/USDT': 'ADAUSDT',
+    'LINK/USDT': 'LINKUSDT',
+}
+
+# Reverse mapping from Kraken API pair names to our internal format
+REVERSE_PAIR_MAP = {v: k for k, v in PAIR_MAP.items()}
+
+# Additional mappings for CSV import (Kraken CSV naming variations)
+CSV_SYMBOL_MAP = {
+    'XRPUSDT': 'XRP/USDT',
+    'XBTUSDT': 'BTC/USDT',
+    'BTCUSDT': 'BTC/USDT',  # Alternative naming
+    'XRPXBT': 'XRP/BTC',
+    'XRPBTC': 'XRP/BTC',    # Alternative naming
+    'ETHUSDT': 'ETH/USDT',
+    'SOLUSDT': 'SOL/USDT',
+    'ETHXBT': 'ETH/BTC',
+    'LTCUSDT': 'LTC/USDT',
+    'DOTUSDT': 'DOT/USDT',
+    'ADAUSDT': 'ADA/USDT',
+    'LINKUSDT': 'LINK/USDT',
+}
+
+# Default symbols for gap filling and monitoring
+DEFAULT_SYMBOLS = ['XRP/USDT', 'BTC/USDT', 'XRP/BTC']
+
+
 @dataclass(frozen=True)
 class HistoricalTrade:
     """
@@ -36,9 +77,21 @@ class HistoricalTrade:
 @dataclass(frozen=True)
 class HistoricalCandle:
     """
-    OHLCV candle with additional metrics.
+    Full domain candle type with additional metrics.
 
-    Stores candle data at various intervals (1m, 5m, 15m, etc.).
+    REC-006: Design rationale - There are two Candle types in the system:
+
+    1. `Candle` (in historical_provider.py) - Lightweight database-optimized type:
+       - Used by HistoricalDataProvider for query results
+       - Includes `from_row()` for efficient asyncpg Record conversion
+       - For most use cases (strategy warmup, backtesting)
+
+    2. `HistoricalCandle` (this class) - Full domain type:
+       - Includes additional fields (quote_volume)
+       - Additional computed properties (upper_wick, lower_wick)
+       - Used for internal data representation and storage
+       - Stores candle data at various intervals (1m, 5m, 15m, etc.)
+
     Higher timeframes are computed via continuous aggregates in TimescaleDB.
     """
     symbol: str                # 'XRP/USDT'

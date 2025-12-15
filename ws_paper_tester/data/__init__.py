@@ -29,6 +29,11 @@ from .types import (
     DataGap,
     TradeRecord,
     CandleRecord,
+    # REC-005: Centralized pair mappings
+    PAIR_MAP,
+    REVERSE_PAIR_MAP,
+    CSV_SYMBOL_MAP,
+    DEFAULT_SYMBOLS,
 )
 from .historical_provider import HistoricalDataProvider, Candle
 from .websocket_db_writer import DatabaseWriter, WebSocketDBIntegration, integrate_db_writer
@@ -43,6 +48,11 @@ __all__ = [
     'TradeRecord',
     'CandleRecord',
     'Candle',
+    # REC-005: Centralized pair mappings
+    'PAIR_MAP',
+    'REVERSE_PAIR_MAP',
+    'CSV_SYMBOL_MAP',
+    'DEFAULT_SYMBOLS',
     # Core classes
     'HistoricalDataProvider',
     'DatabaseWriter',

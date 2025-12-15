@@ -25,6 +25,8 @@ try:
 except ImportError:
     pd = None
 
+from .types import CSV_SYMBOL_MAP  # REC-005: Use centralized symbol mapping
+
 logger = logging.getLogger(__name__)
 
 
@@ -45,17 +47,8 @@ class BulkCSVImporter:
     # Kraken CSV column mapping
     CSV_COLUMNS = ['timestamp', 'open', 'high', 'low', 'close', 'volume', 'trades']
 
-    # Symbol mapping (Kraken CSV naming to our format)
-    SYMBOL_MAP = {
-        'XRPUSDT': 'XRP/USDT',
-        'XBTUSDT': 'BTC/USDT',
-        'BTCUSDT': 'BTC/USDT',
-        'XRPXBT': 'XRP/BTC',
-        'XRPBTC': 'XRP/BTC',
-        'ETHUSDT': 'ETH/USDT',
-        'SOLUSDT': 'SOL/USDT',
-        # Add more mappings as needed
-    }
+    # REC-005: Use centralized symbol mapping from types.py
+    SYMBOL_MAP = CSV_SYMBOL_MAP
 
     # Interval mapping (filename suffix to minutes)
     INTERVAL_MAP = {
@@ -142,22 +135,23 @@ class BulkCSVImporter:
         df['symbol'] = symbol
         df['interval_minutes'] = interval_minutes
 
-        # Prepare records for bulk insert
+        # REC-010: Use itertuples() instead of iterrows() for ~100x speedup
+        # itertuples returns named tuples which are much faster to iterate
         records = [
             (
-                row['symbol'],
-                row['timestamp'].to_pydatetime(),
-                row['interval_minutes'],
-                float(row['open']),
-                float(row['high']),
-                float(row['low']),
-                float(row['close']),
-                float(row['volume']),
+                symbol,  # Use constant instead of row access
+                row.timestamp.to_pydatetime(),
+                interval_minutes,  # Use constant instead of row access
+                float(row.open),
+                float(row.high),
+                float(row.low),
+                float(row.close),
+                float(row.volume),
                 None,  # quote_volume (not in CSV)
-                int(row['trades']) if pd.notna(row['trades']) else None,
-                float(row['vwap'])
+                int(row.trades) if pd.notna(row.trades) else None,
+                float(row.vwap)
             )
-            for _, row in df.iterrows()
+            for row in df.itertuples(index=False)
         ]
 
         # Bulk insert with conflict handling in batches
@@ -277,15 +271,23 @@ async def main():
     parser = argparse.ArgumentParser(description='Import Kraken historical CSV files')
     parser.add_argument('--dir', type=str, default='./data/kraken_csv',
                         help='Directory containing CSV files')
+    # REC-004: No default password - require explicit configuration
     parser.add_argument('--db-url', type=str,
-                        default=os.getenv('DATABASE_URL', 'postgresql://trading:password@localhost:5432/kraken_data'),
-                        help='PostgreSQL connection URL')
+                        default=os.getenv('DATABASE_URL'),
+                        help='PostgreSQL connection URL (required, or set DATABASE_URL env var)')
     parser.add_argument('--all', action='store_true',
                         help='Import all intervals (not just 1m)')
     parser.add_argument('--batch-size', type=int, default=10000,
                         help='Batch size for inserts')
 
     args = parser.parse_args()
+
+    # REC-004: Require database URL - no default credentials
+    if not args.db_url:
+        parser.error(
+            "--db-url or DATABASE_URL environment variable is required.\n"
+            "Example: DATABASE_URL=postgresql://trading:YOUR_PASSWORD@localhost:5432/kraken_data"
+        )
 
     logging.basicConfig(
         level=logging.INFO,

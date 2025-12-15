@@ -33,6 +33,7 @@ class DatabaseWriter:
     - Automatic flush on buffer size or time interval
     - Connection pooling for concurrent writes
     - Graceful error handling with retry logic
+    - Buffer overflow protection to prevent memory exhaustion
 
     Usage:
         db_writer = DatabaseWriter(db_url)
@@ -43,6 +44,10 @@ class DatabaseWriter:
 
         await db_writer.stop()
     """
+
+    # Maximum buffer sizes to prevent memory exhaustion (REC-001)
+    MAX_TRADE_BUFFER_SIZE = 10000
+    MAX_CANDLE_BUFFER_SIZE = 1000
 
     def __init__(
         self,
@@ -87,6 +92,7 @@ class DatabaseWriter:
         self._candles_written = 0
         self._flush_count = 0
         self._error_count = 0
+        self._overflow_count = 0  # Records dropped due to buffer overflow (REC-001)
 
     async def start(self):
         """Initialize database connection and start flush task."""
@@ -170,6 +176,14 @@ class DatabaseWriter:
         if not self.trade_buffer:
             return
 
+        # REC-001: Buffer overflow protection
+        if len(self.trade_buffer) > self.MAX_TRADE_BUFFER_SIZE:
+            dropped = len(self.trade_buffer) - self.MAX_TRADE_BUFFER_SIZE
+            logger.warning(f"Trade buffer overflow, dropping {dropped} oldest records")
+            while len(self.trade_buffer) > self.MAX_TRADE_BUFFER_SIZE:
+                self.trade_buffer.popleft()
+            self._overflow_count += dropped
+
         trades = list(self.trade_buffer)
         self.trade_buffer.clear()
 
@@ -193,12 +207,28 @@ class DatabaseWriter:
             logger.error(f"Failed to flush trades: {e}")
             self._error_count += 1
             # Re-add to buffer for retry (prepend to maintain order)
-            self.trade_buffer.extendleft(reversed(trades))
+            # Note: Only re-add up to max size to prevent infinite growth
+            remaining_capacity = self.MAX_TRADE_BUFFER_SIZE - len(self.trade_buffer)
+            if remaining_capacity > 0:
+                trades_to_readd = trades[:remaining_capacity]
+                self.trade_buffer.extendleft(reversed(trades_to_readd))
+                if len(trades) > remaining_capacity:
+                    dropped = len(trades) - remaining_capacity
+                    logger.warning(f"Dropped {dropped} trades due to retry buffer limit")
+                    self._overflow_count += dropped
 
     async def _flush_candles(self):
         """Flush candle buffer to database."""
         if not self.candle_buffer:
             return
+
+        # REC-001: Buffer overflow protection for candles
+        if len(self.candle_buffer) > self.MAX_CANDLE_BUFFER_SIZE:
+            dropped = len(self.candle_buffer) - self.MAX_CANDLE_BUFFER_SIZE
+            logger.warning(f"Candle buffer overflow, dropping {dropped} oldest records")
+            while len(self.candle_buffer) > self.MAX_CANDLE_BUFFER_SIZE:
+                self.candle_buffer.popleft()
+            self._overflow_count += dropped
 
         candles = list(self.candle_buffer)
         self.candle_buffer.clear()
@@ -230,7 +260,15 @@ class DatabaseWriter:
         except Exception as e:
             logger.error(f"Failed to flush candles: {e}")
             self._error_count += 1
-            self.candle_buffer.extendleft(reversed(candles))
+            # Only re-add up to max size to prevent infinite growth
+            remaining_capacity = self.MAX_CANDLE_BUFFER_SIZE - len(self.candle_buffer)
+            if remaining_capacity > 0:
+                candles_to_readd = candles[:remaining_capacity]
+                self.candle_buffer.extendleft(reversed(candles_to_readd))
+                if len(candles) > remaining_capacity:
+                    dropped = len(candles) - remaining_capacity
+                    logger.warning(f"Dropped {dropped} candles due to retry buffer limit")
+                    self._overflow_count += dropped
 
     async def update_sync_status(self, symbol: str, data_type: str, timestamp: datetime):
         """Update the sync status for gap detection."""
@@ -257,6 +295,7 @@ class DatabaseWriter:
             'candles_written': self._candles_written,
             'flush_count': self._flush_count,
             'error_count': self._error_count,
+            'overflow_count': self._overflow_count,  # REC-001: Track dropped records
             'trade_buffer_size': len(self.trade_buffer),
             'candle_buffer_size': len(self.candle_buffer),
         }

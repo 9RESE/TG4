@@ -25,6 +25,8 @@ try:
 except ImportError:
     asyncpg = None
 
+from .types import PAIR_MAP  # REC-005: Use centralized pair mapping
+
 logger = logging.getLogger(__name__)
 
 
@@ -43,14 +45,8 @@ class KrakenTradesBackfill:
     # Rate limiting: 1 request per second for public endpoints
     RATE_LIMIT_DELAY = 1.1
 
-    # Kraken pair names (our format -> Kraken format)
-    PAIR_MAP = {
-        'XRP/USDT': 'XRPUSDT',
-        'BTC/USDT': 'XBTUSDT',
-        'XRP/BTC': 'XRPXBT',
-        'ETH/USDT': 'ETHUSDT',
-        'SOL/USDT': 'SOLUSDT',
-    }
+    # REC-005: Use centralized PAIR_MAP from types.py
+    PAIR_MAP = PAIR_MAP
 
     def __init__(
         self,
@@ -212,25 +208,78 @@ class KrakenTradesBackfill:
 
     async def store_trades(self, symbol: str, trades: List[list]):
         """
-        Store trades in database.
+        Store trades in database with validation.
 
         Kraken trade format: [price, volume, time, side, type, misc]
+
+        REC-003: Validates trade data before storage:
+        - Rejects invalid prices (<=0, NaN)
+        - Rejects invalid volumes (<=0, NaN)
+        - Handles malformed timestamps gracefully
+        - Continues processing after invalid records
         """
         if not trades:
             return
 
         records = []
+        skipped = 0
+
         for trade in trades:
-            price, volume, timestamp, side, order_type, misc = trade[:6]
-            records.append((
-                symbol,
-                datetime.fromtimestamp(float(timestamp), tz=timezone.utc),
-                Decimal(str(price)),
-                Decimal(str(volume)),
-                'buy' if side == 'b' else 'sell',
-                order_type,
-                misc
-            ))
+            try:
+                price, volume, timestamp, side, order_type, misc = trade[:6]
+
+                # Validate and convert price
+                try:
+                    price_decimal = Decimal(str(price))
+                    if price_decimal <= 0:
+                        logger.debug(f"Skipping trade with invalid price: {price}")
+                        skipped += 1
+                        continue
+                except Exception:
+                    logger.debug(f"Skipping trade with malformed price: {price}")
+                    skipped += 1
+                    continue
+
+                # Validate and convert volume
+                try:
+                    volume_decimal = Decimal(str(volume))
+                    if volume_decimal <= 0:
+                        logger.debug(f"Skipping trade with invalid volume: {volume}")
+                        skipped += 1
+                        continue
+                except Exception:
+                    logger.debug(f"Skipping trade with malformed volume: {volume}")
+                    skipped += 1
+                    continue
+
+                # Validate and convert timestamp
+                try:
+                    trade_time = datetime.fromtimestamp(float(timestamp), tz=timezone.utc)
+                except (ValueError, OSError, OverflowError):
+                    logger.debug(f"Skipping trade with invalid timestamp: {timestamp}")
+                    skipped += 1
+                    continue
+
+                records.append((
+                    symbol,
+                    trade_time,
+                    price_decimal,
+                    volume_decimal,
+                    'buy' if side == 'b' else 'sell',
+                    order_type,
+                    misc
+                ))
+
+            except (ValueError, TypeError, IndexError) as e:
+                logger.warning(f"Skipping malformed trade record: {e}")
+                skipped += 1
+                continue
+
+        if skipped > 0:
+            logger.info(f"Skipped {skipped} invalid trades for {symbol}")
+
+        if not records:
+            return
 
         async with self.pool.acquire() as conn:
             await conn.executemany(
@@ -403,15 +452,23 @@ async def main():
     parser = argparse.ArgumentParser(description='Fetch complete trade history from Kraken')
     parser.add_argument('--symbols', nargs='+', default=['XRP/USDT', 'BTC/USDT', 'XRP/BTC'],
                         help='Trading pairs to backfill')
+    # REC-004: No default password - require explicit configuration
     parser.add_argument('--db-url', type=str,
-                        default=os.getenv('DATABASE_URL', 'postgresql://trading:password@localhost:5432/kraken_data'),
-                        help='PostgreSQL connection URL')
+                        default=os.getenv('DATABASE_URL'),
+                        help='PostgreSQL connection URL (required, or set DATABASE_URL env var)')
     parser.add_argument('--resume', action='store_true',
                         help='Resume from last sync point')
     parser.add_argument('--no-candles', action='store_true',
                         help='Skip candle building (just import trades)')
 
     args = parser.parse_args()
+
+    # REC-004: Require database URL - no default credentials
+    if not args.db_url:
+        parser.error(
+            "--db-url or DATABASE_URL environment variable is required.\n"
+            "Example: DATABASE_URL=postgresql://trading:YOUR_PASSWORD@localhost:5432/kraken_data"
+        )
 
     logging.basicConfig(
         level=logging.INFO,

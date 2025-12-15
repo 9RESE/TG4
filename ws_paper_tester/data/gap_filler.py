@@ -34,7 +34,7 @@ try:
 except ImportError:
     asyncpg = None
 
-from .types import DataGap
+from .types import DataGap, PAIR_MAP, DEFAULT_SYMBOLS  # REC-005: Use centralized mappings
 
 logger = logging.getLogger(__name__)
 
@@ -56,17 +56,9 @@ class GapFiller:
 
     KRAKEN_BASE_URL = 'https://api.kraken.com'
 
-    # Default symbols to check
-    DEFAULT_SYMBOLS = ['XRP/USDT', 'BTC/USDT', 'XRP/BTC']
-
-    # Kraken pair mapping
-    PAIR_MAP = {
-        'XRP/USDT': 'XRPUSDT',
-        'BTC/USDT': 'XBTUSDT',
-        'XRP/BTC': 'XRPXBT',
-        'ETH/USDT': 'ETHUSDT',
-        'SOL/USDT': 'SOLUSDT',
-    }
+    # REC-005: Use centralized mappings from types.py
+    DEFAULT_SYMBOLS = DEFAULT_SYMBOLS
+    PAIR_MAP = PAIR_MAP
 
     def __init__(
         self,
@@ -533,11 +525,19 @@ async def main():
     parser = argparse.ArgumentParser(description='Detect and fill data gaps')
     parser.add_argument('--symbols', nargs='+', default=None,
                         help='Trading pairs to check')
+    # REC-004: No default password - require explicit configuration
     parser.add_argument('--db-url', type=str,
-                        default=os.getenv('DATABASE_URL', 'postgresql://trading:password@localhost:5432/kraken_data'),
-                        help='PostgreSQL connection URL')
+                        default=os.getenv('DATABASE_URL'),
+                        help='PostgreSQL connection URL (required, or set DATABASE_URL env var)')
 
     args = parser.parse_args()
+
+    # REC-004: Require database URL - no default credentials
+    if not args.db_url:
+        parser.error(
+            "--db-url or DATABASE_URL environment variable is required.\n"
+            "Example: DATABASE_URL=postgresql://trading:YOUR_PASSWORD@localhost:5432/kraken_data"
+        )
 
     logging.basicConfig(
         level=logging.INFO,

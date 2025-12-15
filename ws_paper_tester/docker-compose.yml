@@ -12,7 +12,8 @@ services:
       - "5432:5432"
     environment:
       POSTGRES_USER: trading
-      POSTGRES_PASSWORD: ${DB_PASSWORD:-changeme}
+      # REC-004: Require explicit password - no default
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD environment variable is required}
       POSTGRES_DB: kraken_data
       TIMESCALEDB_TELEMETRY: "off"
     volumes:

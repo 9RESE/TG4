@@ -39,10 +39,24 @@ logger = logging.getLogger(__name__)
 @dataclass(frozen=True)
 class Candle:
     """
-    Candle data structure compatible with ws_paper_tester.
+    Candle data structure optimized for database operations.
 
-    This is the primary data type returned by HistoricalDataProvider,
-    designed to be compatible with the existing strategy framework.
+    REC-006: Design rationale - There are two Candle types in the system:
+
+    1. `Candle` (this class) - Lightweight database-optimized type:
+       - Used by HistoricalDataProvider for query results
+       - Includes `from_row()` for efficient asyncpg Record conversion
+       - Compatible with the existing ws_paper_tester strategy framework
+       - Contains essential OHLCV fields and common computed properties
+
+    2. `HistoricalCandle` (in types.py) - Full domain type:
+       - Includes additional fields (quote_volume)
+       - Additional computed properties (upper_wick, lower_wick)
+       - Used for internal data representation and storage
+
+    Both types are frozen dataclasses for thread safety.
+    For most use cases (strategy warmup, backtesting), use this `Candle` type
+    via HistoricalDataProvider methods.
     """
     symbol: str
     timestamp: datetime
@@ -169,11 +183,28 @@ class HistoricalDataProvider:
 
     def _get_view_for_interval(self, interval_minutes: int) -> str:
         """Get the appropriate view/table for the interval."""
+        # REC-001: Validate interval to prevent any potential SQL issues
+        if not isinstance(interval_minutes, int) or interval_minutes < 1:
+            raise ValueError(f"Invalid interval: {interval_minutes}")
+
         if interval_minutes in self.INTERVAL_VIEWS:
             return self.INTERVAL_VIEWS[interval_minutes]
 
         # For non-standard intervals, use base candles table
         return 'candles'
+
+    def _ensure_connected(self):
+        """
+        Ensure database connection is established.
+
+        Raises:
+            RuntimeError: If not connected to database.
+        """
+        if not self.pool:
+            raise RuntimeError(
+                "HistoricalDataProvider not connected. "
+                "Call await provider.connect() first."
+            )
 
     async def get_candles(
         self,
@@ -195,7 +226,11 @@ class HistoricalDataProvider:
 
         Returns:
             List of Candle objects, sorted by timestamp ascending
+
+        Raises:
+            RuntimeError: If not connected to database.
         """
+        self._ensure_connected()  # REC-002
         view = self._get_view_for_interval(interval_minutes)
 
         query = f"""
@@ -247,7 +282,11 @@ class HistoricalDataProvider:
 
         Returns:
             List of Candle objects, sorted by timestamp ascending
+
+        Raises:
+            RuntimeError: If not connected to database.
         """
+        self._ensure_connected()  # REC-002
         view = self._get_view_for_interval(interval_minutes)
 
         if view == 'candles':
@@ -337,7 +376,11 @@ class HistoricalDataProvider:
 
         Returns:
             Dict with 'oldest', 'newest' timestamps and 'total_candles' count
+
+        Raises:
+            RuntimeError: If not connected to database.
         """
+        self._ensure_connected()  # REC-002
         async with self.pool.acquire() as conn:
             row = await conn.fetchrow(
                 """
@@ -377,7 +420,11 @@ class HistoricalDataProvider:
 
         Returns:
             Dict mapping interval -> list of candles
+
+        Raises:
+            RuntimeError: If not connected to database.
         """
+        self._ensure_connected()  # REC-002
         if intervals is None:
             intervals = [1, 5, 15, 60, 240]
 
@@ -403,7 +450,11 @@ class HistoricalDataProvider:
 
         Returns:
             List of symbol strings
+
+        Raises:
+            RuntimeError: If not connected to database.
         """
+        self._ensure_connected()  # REC-002
         async with self.pool.acquire() as conn:
             rows = await conn.fetch(
                 """
@@ -421,7 +472,11 @@ class HistoricalDataProvider:
 
         Returns:
             Dict with sync status or None if no data
+
+        Raises:
+            RuntimeError: If not connected to database.
         """
+        self._ensure_connected()  # REC-002
         async with self.pool.acquire() as conn:
             row = await conn.fetchrow(
                 """
@@ -499,7 +554,12 @@ async def main():
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     )
 
-    db_url = os.getenv('DATABASE_URL', 'postgresql://trading:password@localhost:5432/kraken_data')
+    # REC-004: No default password - require explicit configuration
+    db_url = os.getenv('DATABASE_URL')
+    if not db_url:
+        print("ERROR: DATABASE_URL environment variable is required.")
+        print("Example: DATABASE_URL=postgresql://trading:YOUR_PASSWORD@localhost:5432/kraken_data")
+        return
 
     provider = HistoricalDataProvider(db_url)
 

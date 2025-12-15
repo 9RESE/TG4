@@ -246,9 +246,10 @@ async def main():
     )
     parser.add_argument('--config', type=str, default=None,
                         help='Path to config.yaml')
+    # REC-004: No default password - require explicit configuration
     parser.add_argument('--db-url', type=str,
-                        default=os.getenv('DATABASE_URL', 'postgresql://trading:changeme@localhost:5432/kraken_data'),
-                        help='PostgreSQL connection URL')
+                        default=os.getenv('DATABASE_URL'),
+                        help='PostgreSQL connection URL (required, or set DATABASE_URL env var)')
     parser.add_argument('--skip-gap-fill', action='store_true',
                         help='Skip gap filling on startup')
     parser.add_argument('--symbols', nargs='+', default=None,
@@ -264,6 +265,13 @@ async def main():
                         help='Logging level')
 
     args = parser.parse_args()
+
+    # REC-004: Require database URL - no default credentials
+    if not args.db_url:
+        parser.error(
+            "--db-url or DATABASE_URL environment variable is required.\n"
+            "Example: DATABASE_URL=postgresql://trading:YOUR_PASSWORD@localhost:5432/kraken_data"
+        )
 
     # Configure logging
     logging.basicConfig(
