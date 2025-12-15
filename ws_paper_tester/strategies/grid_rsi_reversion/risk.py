@@ -97,10 +97,13 @@ def check_correlation_exposure(
     symbol: str,
     side: str,
     size: float,
-    config: Dict[str, Any]
-) -> Tuple[bool, float]:
+    config: Dict[str, Any],
+    correlations: Dict[str, float] = None
+) -> Tuple[bool, float, str]:
     """
     Check and adjust for correlation exposure across pairs.
+
+    REC-005: Enhanced with real correlation monitoring.
 
     When multiple correlated pairs are in the same direction,
     reduce position size to limit correlation risk.
@@ -111,16 +114,34 @@ def check_correlation_exposure(
         side: 'buy' or 'sell'
         size: Proposed trade size
         config: Strategy configuration
+        correlations: Dict of symbol pairs to correlation values (REC-005)
 
     Returns:
-        Tuple of (can_enter, adjusted_size)
+        Tuple of (can_enter, adjusted_size, reason)
     """
     if not config.get('use_correlation_management', True):
-        return True, size
+        return True, size, 'correlation_disabled'
 
     position_by_symbol = state.get('position_by_symbol', {})
+    correlation_block_threshold = config.get('correlation_block_threshold', 0.85)
+    use_real_correlation = config.get('use_real_correlation', True)
 
-    # Check for same-direction exposure
+    # REC-005: Check real correlation if available
+    if use_real_correlation and correlations:
+        for other_symbol, other_pos in position_by_symbol.items():
+            if other_symbol == symbol or other_pos <= 0:
+                continue
+
+            # Get correlation between this symbol and other
+            pair_key = f"{symbol}_{other_symbol}"
+            reverse_key = f"{other_symbol}_{symbol}"
+            correlation = correlations.get(pair_key) or correlations.get(reverse_key)
+
+            if correlation is not None and correlation > correlation_block_threshold:
+                # Block entry due to high correlation with existing position
+                return False, 0, f'high_correlation_{other_symbol}_{correlation:.2f}'
+
+    # Original position-based correlation check
     same_direction_count = 0
     for sym, pos in position_by_symbol.items():
         if sym != symbol and pos > 0:
@@ -132,10 +153,10 @@ def check_correlation_exposure(
         adjusted_size = size * (mult ** same_direction_count)
         min_size = config.get('min_trade_size_usd', 5.0)
         if adjusted_size < min_size:
-            return False, 0
-        return True, adjusted_size
+            return False, 0, 'correlation_size_too_small'
+        return True, adjusted_size, f'size_reduced_{same_direction_count}_positions'
 
-    return True, size
+    return True, size, 'ok'
 
 
 def check_circuit_breaker(
@@ -316,10 +337,13 @@ def check_all_risk_limits(
     requested_size: float,
     config: Dict[str, Any],
     adx: Optional[float] = None,
-    current_time: Optional[datetime] = None
+    current_time: Optional[datetime] = None,
+    correlations: Dict[str, float] = None
 ) -> Tuple[bool, float, str]:
     """
     Check all risk limits for entry.
+
+    REC-005: Enhanced with real correlation data.
 
     Args:
         state: Strategy state dict
@@ -328,6 +352,7 @@ def check_all_risk_limits(
         config: Strategy configuration
         adx: Current ADX value
         current_time: Current timestamp
+        correlations: Dict of symbol pair correlations (REC-005)
 
     Returns:
         Tuple of (can_trade, available_size, block_reason)
@@ -361,11 +386,11 @@ def check_all_risk_limits(
     if not can_trade:
         return False, 0, limit_reason
 
-    # Correlation exposure check
-    can_enter, adjusted_size = check_correlation_exposure(
-        state, symbol, 'buy', available, config
+    # Correlation exposure check (REC-005: now with real correlations)
+    can_enter, adjusted_size, corr_reason = check_correlation_exposure(
+        state, symbol, 'buy', available, config, correlations
     )
     if not can_enter:
-        return False, 0, 'correlation_limit'
+        return False, 0, f'correlation_limit_{corr_reason}'
 
     return True, adjusted_size, 'ok'

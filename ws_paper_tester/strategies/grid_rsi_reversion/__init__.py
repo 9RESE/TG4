@@ -1,5 +1,5 @@
 """
-Grid RSI Reversion Strategy v1.0.0
+Grid RSI Reversion Strategy v1.1.0
 
 Combines grid trading mechanics with RSI-based mean reversion signals.
 Grid levels provide primary entry signals, while RSI acts as a confidence
@@ -16,6 +16,19 @@ Based on research from master-plan-v1.0.md:
 Target Pairs: XRP/USDT, BTC/USDT, XRP/BTC
 
 Version History:
+- 1.1.0: Deep Review v2.0 Implementation (REC-001 through REC-008)
+         - REC-001: Signal rejection tracking verified on all paths
+         - REC-002: Complete indicator logging on all early exits
+         - REC-003: Trade flow confirmation (volume analysis)
+         - REC-004: Widened stop-loss (5-10% per symbol)
+         - REC-005: Real correlation monitoring between symbols
+         - REC-006: Liquidity validation for XRP/BTC
+         - REC-007: Explicit R:R ratio calculation and validation
+         - REC-008: Trend check before grid recentering
+         - Enhanced per-symbol configuration for XRP/BTC
+         - Added new rejection reasons for flow/liquidity
+         - Improved indicator metadata on all code paths
+
 - 1.0.0: Initial implementation based on master-plan-v1.0.md research
          - Grid level setup with geometric/arithmetic spacing
          - RSI confidence calculation for entries
@@ -66,6 +79,16 @@ from .indicators import (
     classify_rsi_zone,
     calculate_rsi_confidence,
     calculate_position_size_multiplier,
+    # REC-003: Trade flow confirmation
+    calculate_trade_flow,
+    calculate_volume_ratio,
+    check_trade_flow_confirmation,
+    # REC-005: Correlation monitoring
+    calculate_rolling_correlation,
+    # REC-006: Liquidity validation
+    check_liquidity_threshold,
+    # REC-007: R:R ratio calculation
+    calculate_grid_rr_ratio,
 )
 
 from .grid import (
@@ -151,6 +174,16 @@ __all__ = [
     'classify_rsi_zone',
     'calculate_rsi_confidence',
     'calculate_position_size_multiplier',
+    # REC-003: Trade flow
+    'calculate_trade_flow',
+    'calculate_volume_ratio',
+    'check_trade_flow_confirmation',
+    # REC-005: Correlation
+    'calculate_rolling_correlation',
+    # REC-006: Liquidity
+    'check_liquidity_threshold',
+    # REC-007: R:R ratio
+    'calculate_grid_rr_ratio',
     # Grid
     'calculate_grid_prices',
     'setup_grid_levels',

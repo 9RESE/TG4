@@ -355,6 +355,273 @@ def calculate_position_size_multiplier(
         return 1.0
 
 
+def calculate_trade_flow(
+    trades: tuple,
+    lookback: int = 50
+) -> Tuple[float, float, float]:
+    """
+    Calculate trade flow metrics from recent trades.
+
+    REC-003: Trade flow confirmation to avoid entering against market momentum.
+
+    Args:
+        trades: Tuple of Trade objects with side, value attributes
+        lookback: Number of trades to analyze
+
+    Returns:
+        Tuple of (buy_volume, sell_volume, flow_imbalance)
+        flow_imbalance: -1 to +1 where positive = more buy volume
+    """
+    if not trades or len(trades) == 0:
+        return 0.0, 0.0, 0.0
+
+    recent_trades = trades[-lookback:] if len(trades) > lookback else trades
+
+    buy_volume = 0.0
+    sell_volume = 0.0
+
+    for trade in recent_trades:
+        # Handle both object and dict access
+        if hasattr(trade, 'side'):
+            side = trade.side
+            value = getattr(trade, 'value', getattr(trade, 'size', 0) * getattr(trade, 'price', 0))
+        else:
+            side = trade.get('side', '')
+            value = trade.get('value', trade.get('size', 0) * trade.get('price', 0))
+
+        if side == 'buy':
+            buy_volume += value
+        elif side == 'sell':
+            sell_volume += value
+
+    total_volume = buy_volume + sell_volume
+    if total_volume == 0:
+        return 0.0, 0.0, 0.0
+
+    # Flow imbalance: (buy - sell) / total, ranges from -1 to +1
+    flow_imbalance = (buy_volume - sell_volume) / total_volume
+
+    return buy_volume, sell_volume, flow_imbalance
+
+
+def calculate_volume_ratio(
+    candles,
+    lookback: int = 20
+) -> float:
+    """
+    Calculate current volume vs average volume ratio.
+
+    REC-003: Volume confirmation for trade entries.
+
+    Args:
+        candles: Tuple of candle objects with volume attribute
+        lookback: Number of candles for average calculation
+
+    Returns:
+        Volume ratio (current / average). >1 = above average, <1 = below average
+    """
+    if not candles or len(candles) < 2:
+        return 1.0
+
+    recent = candles[-lookback:] if len(candles) > lookback else candles
+
+    volumes = []
+    for candle in recent:
+        vol = getattr(candle, 'volume', 0)
+        if vol > 0:
+            volumes.append(vol)
+
+    if not volumes:
+        return 1.0
+
+    avg_volume = sum(volumes[:-1]) / len(volumes[:-1]) if len(volumes) > 1 else volumes[0]
+    current_volume = volumes[-1] if volumes else 0
+
+    if avg_volume == 0:
+        return 1.0
+
+    return current_volume / avg_volume
+
+
+def check_liquidity_threshold(
+    volume_24h: float,
+    min_volume_usd: float
+) -> Tuple[bool, str]:
+    """
+    Check if market liquidity meets minimum threshold.
+
+    REC-006: Liquidity validation especially for XRP/BTC.
+
+    Args:
+        volume_24h: 24-hour trading volume in USD
+        min_volume_usd: Minimum required volume
+
+    Returns:
+        Tuple of (is_sufficient, reason)
+    """
+    if min_volume_usd <= 0:
+        return True, "liquidity_check_disabled"
+
+    if volume_24h >= min_volume_usd:
+        ratio = volume_24h / min_volume_usd
+        return True, f"liquidity_ok (ratio={ratio:.2f}x)"
+    else:
+        ratio = volume_24h / min_volume_usd if min_volume_usd > 0 else 0
+        return False, f"low_liquidity (ratio={ratio:.2f}x, need={min_volume_usd/1e6:.0f}M)"
+
+
+def calculate_rolling_correlation(
+    prices_a: List[float],
+    prices_b: List[float],
+    lookback: int = 20
+) -> Optional[float]:
+    """
+    Calculate rolling correlation between two price series.
+
+    REC-005: Real correlation monitoring for cross-pair exposure management.
+
+    Uses Pearson correlation coefficient on returns.
+
+    Args:
+        prices_a: List of prices for first symbol
+        prices_b: List of prices for second symbol
+        lookback: Number of periods for correlation calculation
+
+    Returns:
+        Correlation coefficient (-1 to +1) or None if insufficient data
+    """
+    if len(prices_a) < lookback + 1 or len(prices_b) < lookback + 1:
+        return None
+
+    # Use last N prices
+    a = prices_a[-(lookback + 1):]
+    b = prices_b[-(lookback + 1):]
+
+    # Calculate returns
+    returns_a = [(a[i] - a[i-1]) / a[i-1] for i in range(1, len(a)) if a[i-1] != 0]
+    returns_b = [(b[i] - b[i-1]) / b[i-1] for i in range(1, len(b)) if b[i-1] != 0]
+
+    if len(returns_a) < 2 or len(returns_b) < 2:
+        return None
+
+    # Ensure same length
+    min_len = min(len(returns_a), len(returns_b))
+    returns_a = returns_a[-min_len:]
+    returns_b = returns_b[-min_len:]
+
+    # Calculate means
+    mean_a = sum(returns_a) / len(returns_a)
+    mean_b = sum(returns_b) / len(returns_b)
+
+    # Calculate covariance and standard deviations
+    covariance = sum((ra - mean_a) * (rb - mean_b) for ra, rb in zip(returns_a, returns_b)) / len(returns_a)
+    variance_a = sum((r - mean_a) ** 2 for r in returns_a) / len(returns_a)
+    variance_b = sum((r - mean_b) ** 2 for r in returns_b) / len(returns_b)
+
+    std_a = variance_a ** 0.5
+    std_b = variance_b ** 0.5
+
+    if std_a == 0 or std_b == 0:
+        return None
+
+    correlation = covariance / (std_a * std_b)
+
+    # Clamp to valid range
+    return max(-1.0, min(1.0, correlation))
+
+
+def check_trade_flow_confirmation(
+    flow_imbalance: float,
+    side: str,
+    threshold: float = 0.1
+) -> Tuple[bool, str]:
+    """
+    Check if trade flow confirms the intended trade direction.
+
+    REC-003: Only enter when flow confirms direction to reduce adverse selection.
+
+    Args:
+        flow_imbalance: Flow imbalance from calculate_trade_flow (-1 to +1)
+        side: Intended trade side ('buy' or 'sell')
+        threshold: Minimum imbalance to require confirmation (default 0.1)
+
+    Returns:
+        Tuple of (is_confirmed, reason)
+    """
+    # For buys, we want positive or neutral flow (not heavily selling)
+    # For sells, we want negative or neutral flow (not heavily buying)
+
+    if side == 'buy':
+        if flow_imbalance >= -threshold:
+            # Flow is neutral or buying - confirmed
+            return True, f"flow_confirmed (imbalance={flow_imbalance:.2f})"
+        else:
+            # Heavy selling - not confirmed
+            return False, f"flow_against_buy (imbalance={flow_imbalance:.2f})"
+    else:  # sell
+        if flow_imbalance <= threshold:
+            # Flow is neutral or selling - confirmed
+            return True, f"flow_confirmed (imbalance={flow_imbalance:.2f})"
+        else:
+            # Heavy buying - not confirmed
+            return False, f"flow_against_sell (imbalance={flow_imbalance:.2f})"
+
+
+def calculate_grid_rr_ratio(
+    grid_spacing_pct: float,
+    stop_loss_pct: float,
+    num_accumulation_levels: int = 1
+) -> Tuple[float, str]:
+    """
+    Calculate Risk:Reward ratio for grid strategy.
+
+    REC-007: Explicit R:R calculation and documentation.
+
+    For grid strategies:
+    - Reward = grid_spacing_pct (profit per cycle)
+    - Risk = stop_loss_pct (max loss if stopped out)
+
+    For accumulated positions, R:R degrades as more levels are filled.
+
+    Args:
+        grid_spacing_pct: Grid spacing as percentage
+        stop_loss_pct: Stop loss percentage below lowest grid
+        num_accumulation_levels: Number of filled levels (affects effective R:R)
+
+    Returns:
+        Tuple of (r:r ratio, description string)
+    """
+    if stop_loss_pct <= 0:
+        return 0.0, "invalid_stop_loss"
+
+    # Base R:R for single grid level
+    base_rr = grid_spacing_pct / stop_loss_pct
+
+    # R:R degrades with accumulation (average entry moves closer to stop)
+    # Simplified: assume each level is equally spaced, average entry at midpoint
+    if num_accumulation_levels > 1:
+        # Average entry moves down by (levels-1)/2 * spacing from first entry
+        avg_entry_offset = (num_accumulation_levels - 1) / 2 * grid_spacing_pct
+        # Effective reward reduced, effective risk increased
+        effective_reward = grid_spacing_pct
+        effective_risk = stop_loss_pct + avg_entry_offset
+        adjusted_rr = effective_reward / effective_risk
+    else:
+        adjusted_rr = base_rr
+
+    # Generate description
+    if adjusted_rr >= 2.0:
+        desc = f"excellent ({adjusted_rr:.2f}:1)"
+    elif adjusted_rr >= 1.5:
+        desc = f"good ({adjusted_rr:.2f}:1)"
+    elif adjusted_rr >= 1.0:
+        desc = f"acceptable ({adjusted_rr:.2f}:1)"
+    else:
+        desc = f"poor ({adjusted_rr:.2f}:1) - consider wider spacing or tighter stop"
+
+    return adjusted_rr, desc
+
+
 def calculate_volatility(candles, lookback: int = 20) -> float:
     """
     Calculate price volatility from candle closes.

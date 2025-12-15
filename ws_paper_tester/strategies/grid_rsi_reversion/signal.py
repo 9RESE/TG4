@@ -35,7 +35,13 @@ from .config import (
 from .indicators import (
     calculate_rsi, calculate_atr, calculate_adx, calculate_volatility,
     get_adaptive_rsi_zones, calculate_rsi_confidence,
-    calculate_position_size_multiplier
+    calculate_position_size_multiplier, calculate_grid_rr_ratio,
+    # REC-003: Trade flow confirmation
+    calculate_trade_flow, calculate_volume_ratio, check_trade_flow_confirmation,
+    # REC-005: Correlation monitoring
+    calculate_rolling_correlation,
+    # REC-006: Liquidity validation
+    check_liquidity_threshold
 )
 from .regimes import (
     classify_volatility_regime, get_regime_adjustments,
@@ -85,19 +91,71 @@ def build_base_indicators(
     symbol: str,
     candle_count: int,
     status: str,
-    state: Dict[str, Any]
+    state: Dict[str, Any],
+    price: float = None,
+    rsi: float = None,
+    atr: float = None,
+    adx: float = None,
+    volatility: float = None,
+    regime: str = None,
 ) -> Dict[str, Any]:
-    """Build base indicators dict for early returns."""
-    return {
+    """
+    Build base indicators dict for early returns.
+
+    REC-002: Ensures comprehensive indicator logging on all code paths,
+    including early exits, for complete analysis capability.
+
+    Args:
+        symbol: Trading symbol
+        candle_count: Number of available candles
+        status: Current signal status/rejection reason
+        state: Strategy state dict
+        price: Current price (optional)
+        rsi: Current RSI value (optional)
+        atr: Current ATR value (optional)
+        adx: Current ADX value (optional)
+        volatility: Current volatility percentage (optional)
+        regime: Current volatility regime (optional)
+
+    Returns:
+        Dict containing all indicator data for logging
+    """
+    indicators = {
         'symbol': symbol,
         'candle_count': candle_count,
         'status': status,
+        # Position tracking
         'position_side': state.get('position_side'),
         'position_size': state.get('position_size', 0),
+        'position_size_symbol': round(state.get('position_by_symbol', {}).get(symbol, 0), 2),
         'consecutive_losses': state.get('consecutive_losses', 0),
-        'pnl_symbol': state.get('pnl_by_symbol', {}).get(symbol, 0),
+        'pnl_symbol': round(state.get('pnl_by_symbol', {}).get(symbol, 0), 4),
         'trades_symbol': state.get('trades_by_symbol', {}).get(symbol, 0),
     }
+
+    # Add optional indicator values if available (REC-002)
+    if price is not None:
+        indicators['price'] = round(price, 6)
+    if rsi is not None:
+        indicators['rsi'] = round(rsi, 2)
+    if atr is not None:
+        indicators['atr'] = round(atr, 8)
+    if adx is not None:
+        indicators['adx'] = round(adx, 2)
+    if volatility is not None:
+        indicators['volatility_pct'] = round(volatility, 4)
+    if regime is not None:
+        indicators['volatility_regime'] = regime
+
+    # Grid stats if available
+    grid_metadata = state.get('grid_metadata', {}).get(symbol, {})
+    if grid_metadata:
+        indicators['grid_center'] = grid_metadata.get('center_price')
+        indicators['grid_upper'] = grid_metadata.get('upper_price')
+        indicators['grid_lower'] = grid_metadata.get('lower_price')
+        indicators['cycles_completed'] = grid_metadata.get('cycles_completed', 0)
+
+    return indicators
 
 
 def generate_signal(
@@ -187,8 +245,11 @@ def _evaluate_symbol(
     min_candles = max(rsi_period, atr_period, adx_period) + 5
 
     if len(candles_5m) < min_candles:
+        # REC-002: Log available price even during warmup
+        price = data.prices.get(symbol)
         state['indicators'] = build_base_indicators(
-            symbol=symbol, candle_count=len(candles_5m), status='warming_up', state=state
+            symbol=symbol, candle_count=len(candles_5m), status='warming_up', state=state,
+            price=price
         )
         state['indicators']['required_candles'] = min_candles
         if track_rejections:
@@ -222,9 +283,34 @@ def _evaluate_symbol(
     grid_levels = state.get('grid_levels', {}).get(symbol, [])
     grid_metadata = state.get('grid_metadata', {}).get(symbol, {})
 
+    # ==========================================================================
+    # Liquidity Validation (REC-006)
+    # ==========================================================================
+    min_volume_usd = get_symbol_config(symbol, config, 'min_volume_usd')
+    if min_volume_usd and min_volume_usd > 0:
+        # Get 24h volume from data if available
+        volume_24h = data.volumes.get(symbol, 0) if hasattr(data, 'volumes') else 0
+
+        liquidity_ok, liquidity_reason = check_liquidity_threshold(volume_24h, min_volume_usd)
+        state['indicators']['volume_24h'] = volume_24h
+        state['indicators']['min_volume_required'] = min_volume_usd
+        state['indicators']['liquidity_reason'] = liquidity_reason
+
+        if not liquidity_ok:
+            state['indicators'] = build_base_indicators(
+                symbol=symbol, candle_count=len(candles_5m), status='low_liquidity', state=state,
+                price=current_price, rsi=rsi, atr=atr, adx=adx, volatility=volatility
+            )
+            state['indicators']['liquidity_reason'] = liquidity_reason
+            if track_rejections:
+                track_rejection(state, RejectionReason.LOW_LIQUIDITY, symbol)
+            return None
+
     if not grid_levels:
+        # REC-002: Include calculated indicators even when grid not initialized
         state['indicators'] = build_base_indicators(
-            symbol=symbol, candle_count=len(candles_5m), status='no_grid', state=state
+            symbol=symbol, candle_count=len(candles_5m), status='no_grid', state=state,
+            price=current_price, rsi=rsi, atr=atr, adx=adx, volatility=volatility
         )
         if track_rejections:
             track_rejection(state, RejectionReason.NO_GRID_LEVELS, symbol)
@@ -241,11 +327,12 @@ def _evaluate_symbol(
         regime_adjustments = get_regime_adjustments(regime, config)
 
         if regime_adjustments['pause_trading']:
+            # REC-002: Include all available indicators on regime pause
             state['indicators'] = build_base_indicators(
-                symbol=symbol, candle_count=len(candles_5m), status='regime_pause', state=state
+                symbol=symbol, candle_count=len(candles_5m), status='regime_pause', state=state,
+                price=current_price, rsi=rsi, atr=atr, adx=adx, volatility=volatility,
+                regime=regime.name
             )
-            state['indicators']['volatility_regime'] = regime.name
-            state['indicators']['volatility_pct'] = round(volatility, 4)
             if track_rejections:
                 track_rejection(state, RejectionReason.REGIME_PAUSE, symbol)
             return None
@@ -255,10 +342,12 @@ def _evaluate_symbol(
     # ==========================================================================
     is_trending, adx_value = check_trend_filter(adx, config)
     if is_trending:
+        # REC-002: Include all indicators on trend filter rejection
         state['indicators'] = build_base_indicators(
-            symbol=symbol, candle_count=len(candles_5m), status='trend_filter', state=state
+            symbol=symbol, candle_count=len(candles_5m), status='trend_filter', state=state,
+            price=current_price, rsi=rsi, atr=atr, adx=adx_value, volatility=volatility,
+            regime=regime.name
         )
-        state['indicators']['adx'] = round(adx_value, 2) if adx_value else None
         state['indicators']['adx_threshold'] = config.get('adx_threshold', 30)
         if track_rejections:
             track_rejection(state, RejectionReason.TREND_FILTER, symbol)
@@ -324,9 +413,12 @@ def _evaluate_symbol(
         return exit_signal
 
     # ==========================================================================
-    # Check Grid Recentering
+    # Check Grid Recentering (REC-008)
     # ==========================================================================
-    if should_recenter_grid(grid_metadata, current_time, config):
+    should_recenter, recenter_reason = should_recenter_grid(grid_metadata, current_time, config, adx)
+    state['indicators']['recenter_check_result'] = recenter_reason
+
+    if should_recenter:
         new_levels, new_metadata = recenter_grid(
             symbol, current_price, config, grid_metadata, atr
         )
@@ -337,17 +429,59 @@ def _evaluate_symbol(
         state['indicators']['status'] = 'grid_recentered'
 
     # ==========================================================================
+    # Calculate Correlations (REC-005)
+    # ==========================================================================
+    correlations = {}
+    if config.get('use_real_correlation', True):
+        # Store price history in state for correlation calculation
+        if 'price_history' not in state:
+            state['price_history'] = {}
+
+        # Update price history for current symbol
+        if symbol not in state['price_history']:
+            state['price_history'][symbol] = []
+        state['price_history'][symbol].append(current_price)
+        # Keep bounded history
+        max_history = config.get('correlation_lookback', 20) + 10
+        state['price_history'][symbol] = state['price_history'][symbol][-max_history:]
+
+        # Calculate correlations with other symbols
+        lookback = config.get('correlation_lookback', 20)
+        for other_symbol in SYMBOLS:
+            if other_symbol == symbol:
+                continue
+            other_prices = state['price_history'].get(other_symbol, [])
+            if len(other_prices) >= lookback and len(state['price_history'][symbol]) >= lookback:
+                corr = calculate_rolling_correlation(
+                    state['price_history'][symbol],
+                    other_prices,
+                    lookback
+                )
+                if corr is not None:
+                    pair_key = f"{symbol}_{other_symbol}"
+                    correlations[pair_key] = corr
+
+        # Log correlations in indicators
+        if correlations:
+            state['indicators']['correlations'] = {k: round(v, 3) for k, v in correlations.items()}
+
+    # ==========================================================================
     # Check Risk Limits
     # ==========================================================================
     base_size = get_symbol_config(symbol, config, 'position_size_usd')
     adjusted_size = base_size * combined_size_mult
 
+    # REC-005: Pass correlations to risk check
     can_trade, available_size, block_reason = check_all_risk_limits(
-        state, symbol, adjusted_size, config, adx, current_time
+        state, symbol, adjusted_size, config, adx, current_time, correlations
     )
 
     if not can_trade:
+        # REC-002: Include detailed rejection reason and available size info
         state['indicators']['status'] = f'risk_block_{block_reason}'
+        state['indicators']['rejection_reason'] = block_reason
+        state['indicators']['requested_size'] = round(adjusted_size, 2)
+        state['indicators']['available_size'] = round(available_size, 2)
         if track_rejections:
             reason_map = {
                 'circuit_breaker': RejectionReason.CIRCUIT_BREAKER,
@@ -363,10 +497,41 @@ def _evaluate_symbol(
         return None
 
     # ==========================================================================
+    # Trade Flow Confirmation (REC-003)
+    # ==========================================================================
+    trade_flow_ok = True
+    flow_imbalance = 0.0
+    volume_ratio = 1.0
+
+    if config.get('use_trade_flow_confirmation', True):
+        trades = data.trades.get(symbol, ())
+
+        # Calculate trade flow metrics
+        buy_vol, sell_vol, flow_imbalance = calculate_trade_flow(trades, lookback=50)
+        volume_ratio = calculate_volume_ratio(candles_5m, lookback=20)
+
+        # Log trade flow metrics in indicators
+        state['indicators']['trade_flow_buy_vol'] = round(buy_vol, 2)
+        state['indicators']['trade_flow_sell_vol'] = round(sell_vol, 2)
+        state['indicators']['trade_flow_imbalance'] = round(flow_imbalance, 3)
+        state['indicators']['volume_ratio'] = round(volume_ratio, 2)
+
+        # Check volume ratio
+        min_volume_ratio = config.get('min_volume_ratio', 0.8)
+        if volume_ratio < min_volume_ratio:
+            state['indicators']['status'] = 'low_volume'
+            state['indicators']['rejection_reason'] = f'volume_ratio={volume_ratio:.2f}<{min_volume_ratio}'
+            if track_rejections:
+                track_rejection(state, RejectionReason.LOW_VOLUME, symbol)
+            return None
+
+    # ==========================================================================
     # Check Grid Buy Entry
     # ==========================================================================
     if rsi is None:
+        # REC-002: Update status for RSI not available
         state['indicators']['status'] = 'no_rsi'
+        state['indicators']['rejection_reason'] = 'rsi_calculation_failed'
         if track_rejections:
             track_rejection(state, RejectionReason.WARMING_UP, symbol)
         return None
@@ -375,6 +540,19 @@ def _evaluate_symbol(
     buy_level = check_price_at_grid_level(grid_levels, current_price, 'buy', config)
 
     if buy_level:
+        # REC-003: Check trade flow confirmation for buy signals
+        if config.get('use_trade_flow_confirmation', True):
+            flow_threshold = config.get('flow_confirmation_threshold', 0.2)
+            flow_confirmed, flow_reason = check_trade_flow_confirmation(
+                flow_imbalance, 'buy', flow_threshold
+            )
+            if not flow_confirmed:
+                state['indicators']['status'] = 'flow_rejected'
+                state['indicators']['rejection_reason'] = flow_reason
+                if track_rejections:
+                    track_rejection(state, RejectionReason.FLOW_AGAINST_TRADE, symbol)
+                return None
+
         # Calculate RSI confidence
         confidence, confidence_reason = calculate_rsi_confidence(
             'buy', rsi, oversold, overbought, config
@@ -386,8 +564,15 @@ def _evaluate_symbol(
 
         # Calculate stop loss (below lowest grid level)
         lower_price = grid_metadata.get('lower_price', current_price * 0.9)
-        stop_loss_pct = config.get('stop_loss_pct', 3.0)
+        stop_loss_pct = get_symbol_config(symbol, config, 'stop_loss_pct')
         stop_loss = lower_price * (1 - stop_loss_pct / 100)
+
+        # REC-007: Calculate and log R:R ratio
+        grid_spacing_pct = get_symbol_config(symbol, config, 'grid_spacing_pct')
+        filled_buys = grid_stats['filled_buys'] + 1  # Including this entry
+        rr_ratio, rr_desc = calculate_grid_rr_ratio(
+            grid_spacing_pct, stop_loss_pct, filled_buys
+        )
 
         signal = Signal(
             action='buy',
@@ -404,6 +589,15 @@ def _evaluate_symbol(
                 'rsi': rsi,
                 'rsi_zone': 'oversold' if rsi < oversold else 'neutral',
                 'confidence': confidence,
+                # REC-007: Include R:R metrics
+                'rr_ratio': round(rr_ratio, 2),
+                'rr_description': rr_desc,
+                'grid_spacing_pct': grid_spacing_pct,
+                'stop_loss_pct': stop_loss_pct,
+                'accumulation_level': filled_buys,
+                # REC-003: Include trade flow metrics
+                'flow_imbalance': round(flow_imbalance, 3),
+                'volume_ratio': round(volume_ratio, 2),
             }
         )
 

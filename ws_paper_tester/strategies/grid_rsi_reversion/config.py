@@ -24,7 +24,7 @@ from typing import Dict, Any
 # Strategy Metadata
 # =============================================================================
 STRATEGY_NAME = "grid_rsi_reversion"
-STRATEGY_VERSION = "1.0.0"
+STRATEGY_VERSION = "1.1.0"
 SYMBOLS = ["XRP/USDT", "BTC/USDT", "XRP/BTC"]
 
 
@@ -69,6 +69,11 @@ class RejectionReason(Enum):
     CIRCUIT_BREAKER = "circuit_breaker"
     CORRELATION_LIMIT = "correlation_limit"
     NO_SIGNAL_CONDITIONS = "no_signal_conditions"
+    # REC-003: Trade flow rejection reasons
+    FLOW_AGAINST_TRADE = "flow_against_trade"
+    LOW_VOLUME = "low_volume"
+    # REC-006: Liquidity rejection
+    LOW_LIQUIDITY = "low_liquidity"
 
 
 class GridLevelStatus(Enum):
@@ -99,6 +104,9 @@ CONFIG: Dict[str, Any] = {
     'recenter_after_cycles': 5,         # Recenter grid after N completed cycles
     'min_recenter_interval': 3600,      # Minimum seconds between recenters (1 hour)
     'slippage_tolerance_pct': 0.5,      # Price tolerance for grid level matching
+    # REC-008: Trend check before recentering
+    'check_trend_before_recenter': True,  # Check ADX before recentering
+    'adx_recenter_threshold': 25,       # Don't recenter if ADX > this (trending)
 
     # ==========================================================================
     # RSI Settings
@@ -128,8 +136,11 @@ CONFIG: Dict[str, Any] = {
 
     # ==========================================================================
     # Risk Management
+    # REC-004: Widened stop-loss from 3% to 8% based on research showing
+    # grid strategies need 10-15% stops to avoid premature exits during
+    # normal crypto volatility
     # ==========================================================================
-    'stop_loss_pct': 3.0,               # Stop loss below lowest grid level
+    'stop_loss_pct': 8.0,               # Stop loss below lowest grid level (REC-004)
     'max_drawdown_pct': 10.0,           # Max portfolio drawdown
     'use_trend_filter': True,           # Pause in strong trends
     'adx_threshold': 30,                # ADX threshold for trend filter
@@ -158,11 +169,22 @@ CONFIG: Dict[str, Any] = {
     'regime_extreme_pause': True,       # Pause in EXTREME regime
 
     # ==========================================================================
-    # Cross-Pair Correlation Management
+    # Cross-Pair Correlation Management (REC-005)
     # ==========================================================================
     'use_correlation_management': True,
     'max_total_long_exposure': 150.0,   # Max total long USD exposure
     'same_direction_size_mult': 0.75,   # Reduce size if multiple pairs same direction
+    # REC-005: Real correlation monitoring
+    'use_real_correlation': True,       # Calculate actual correlation vs position proxy
+    'correlation_block_threshold': 0.85, # Block same-direction when correlation > this
+    'correlation_lookback': 20,         # Periods for rolling correlation
+
+    # ==========================================================================
+    # Trade Flow Confirmation (REC-003)
+    # ==========================================================================
+    'use_trade_flow_confirmation': True,   # REC-003: Enable trade flow checks
+    'min_volume_ratio': 0.8,               # Minimum volume vs average to trade
+    'flow_confirmation_threshold': 0.2,    # Flow imbalance threshold for rejection
 
     # ==========================================================================
     # Signal Tracking
@@ -178,8 +200,9 @@ CONFIG: Dict[str, Any] = {
 SYMBOL_CONFIGS: Dict[str, Dict[str, Any]] = {
     # ==========================================================================
     # XRP/USDT Configuration
-    # Research: High liquidity, 5.1% intraday volatility, 0.15% spread
+    # Research: High liquidity, 1.76% daily volatility, 0.15% spread
     # Suitability: HIGH for Grid RSI Reversion
+    # REC-004: stop_loss_pct 5% for XRP (moderate volatility)
     # ==========================================================================
     'XRP/USDT': {
         'grid_type': 'geometric',
@@ -191,12 +214,14 @@ SYMBOL_CONFIGS: Dict[str, Dict[str, Any]] = {
         'max_accumulation_levels': 5,
         'rsi_oversold': 30,
         'rsi_overbought': 70,
+        'stop_loss_pct': 5.0,           # REC-004: Wider than default for crypto
     },
 
     # ==========================================================================
     # BTC/USDT Configuration
-    # Research: Deepest liquidity, lower volatility, institutional dominated
+    # Research: Deepest liquidity, 12-18% monthly volatility, institutional dominated
     # Suitability: MEDIUM-HIGH (requires wider range, conservative RSI)
+    # REC-004: stop_loss_pct 10% for BTC (higher volatility swings)
     # ==========================================================================
     'BTC/USDT': {
         'grid_type': 'arithmetic',      # Works well for established ranges
@@ -208,24 +233,29 @@ SYMBOL_CONFIGS: Dict[str, Dict[str, Any]] = {
         'max_accumulation_levels': 4,
         'rsi_oversold': 35,             # Relaxed (BTC trends)
         'rsi_overbought': 65,           # Relaxed
+        'stop_loss_pct': 10.0,          # REC-004: Wider for BTC volatility
     },
 
     # ==========================================================================
     # XRP/BTC Configuration
     # Research: 7-10x lower liquidity, XRP 1.55x more volatile than BTC
     # Suitability: MEDIUM (requires wider spacing, smaller positions)
+    # REC-004: stop_loss_pct 8% for cross-pair ratio volatility
+    # REC-006: min_volume_usd for liquidity validation
     # ==========================================================================
     'XRP/BTC': {
         'grid_type': 'geometric',
         'num_grids': 10,                # Fewer levels due to liquidity
-        'grid_spacing_pct': 2.0,        # Wider to account for slippage
+        'grid_spacing_pct': 2.5,        # REC-006: Wider to account for slippage
         'range_pct': 10.0,
-        'position_size_usd': 15.0,      # Smaller due to liquidity
+        'position_size_usd': 10.0,      # REC-006: Smaller due to liquidity
         'max_position_usd': 60.0,
-        'max_accumulation_levels': 3,
+        'max_accumulation_levels': 2,   # REC-006: Very conservative
         'rsi_oversold': 25,             # More aggressive (ratio moves)
         'rsi_overbought': 75,
-        'cooldown_seconds': 120.0,      # Longer cooldown
+        'cooldown_seconds': 180.0,      # REC-006: Longer cooldown
+        'stop_loss_pct': 8.0,           # REC-004: Wider for ratio volatility
+        'min_volume_usd': 100_000_000,  # REC-006: $100M daily minimum
     },
 }
 

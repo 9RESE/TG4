@@ -71,11 +71,15 @@ def validate_config(config: Dict[str, Any]) -> List[str]:
         )
 
     # Risk validation
-    stop_loss = config.get('stop_loss_pct', 3.0)
-    if stop_loss < 1.0:
-        warnings.append(f"stop_loss_pct={stop_loss}% is very tight for grid strategy")
-    if stop_loss > 10.0:
-        warnings.append(f"stop_loss_pct={stop_loss}% allows large drawdown")
+    # REC-004: Research recommends 10-15% stop-loss for grid strategies
+    stop_loss = config.get('stop_loss_pct', 8.0)
+    if stop_loss < 5.0:
+        warnings.append(
+            f"stop_loss_pct={stop_loss}% is tight for grid strategy (REC-004). "
+            f"Research recommends 10-15%. Consider 5-10% minimum to reduce premature exits."
+        )
+    if stop_loss > 15.0:
+        warnings.append(f"stop_loss_pct={stop_loss}% allows very large drawdown")
 
     # Fee check
     fee_rate = config.get('fee_rate', 0.001)
@@ -91,6 +95,34 @@ def validate_config(config: Dict[str, Any]) -> List[str]:
         warnings.append(f"adx_threshold={adx_threshold} may pause trading too often")
     if adx_threshold > 40:
         warnings.append(f"adx_threshold={adx_threshold} may allow trading in strong trends")
+
+    # REC-007: R:R ratio validation
+    # Grid R:R = spacing / stop_loss (simplified for single level)
+    rr_ratio = grid_spacing / stop_loss if stop_loss > 0 else 0
+    if rr_ratio < 1.0:
+        warnings.append(
+            f"R:R ratio ({rr_ratio:.2f}:1) is below 1:1 (REC-007). "
+            f"spacing={grid_spacing}%, stop_loss={stop_loss}%. "
+            f"Need >50% win rate to profit. Consider wider spacing or tighter stop."
+        )
+    elif rr_ratio < 1.5:
+        warnings.append(
+            f"R:R ratio ({rr_ratio:.2f}:1) is marginal (REC-007). "
+            f"Consider spacing >= 1.5x stop_loss for better risk/reward."
+        )
+
+    # Check per-symbol R:R
+    from .config import SYMBOL_CONFIGS
+    for sym, sym_config in SYMBOL_CONFIGS.items():
+        sym_spacing = sym_config.get('grid_spacing_pct', grid_spacing)
+        sym_stop = sym_config.get('stop_loss_pct', stop_loss)
+        if sym_stop > 0:
+            sym_rr = sym_spacing / sym_stop
+            if sym_rr < 1.0:
+                warnings.append(
+                    f"{sym} R:R ratio ({sym_rr:.2f}:1) below 1:1 (REC-007). "
+                    f"spacing={sym_spacing}%, stop_loss={sym_stop}%"
+                )
 
     return warnings
 

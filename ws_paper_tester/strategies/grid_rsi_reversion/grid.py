@@ -339,28 +339,33 @@ def check_cycle_completion(
 def should_recenter_grid(
     metadata: Dict[str, Any],
     current_time: datetime,
-    config: Dict[str, Any]
-) -> bool:
+    config: Dict[str, Any],
+    adx: Optional[float] = None
+) -> Tuple[bool, str]:
     """
     Check if grid should be recentered.
+
+    REC-008: Enhanced with trend check before recentering.
 
     Recentering conditions:
     1. Completed cycles exceeds threshold since last recenter
     2. Minimum time has passed since last recenter
+    3. REC-008: Not in a strong trend (ADX < threshold)
 
     Args:
         metadata: Grid metadata dict
         current_time: Current timestamp
         config: Strategy configuration
+        adx: Current ADX value (REC-008)
 
     Returns:
-        True if grid should be recentered
+        Tuple of (should_recenter, reason)
     """
     cycles_since_recenter = metadata.get('cycles_completed', 0) - metadata.get('cycles_at_last_recenter', 0)
     recenter_threshold = config.get('recenter_after_cycles', 5)
 
     if cycles_since_recenter < recenter_threshold:
-        return False
+        return False, f'insufficient_cycles ({cycles_since_recenter}/{recenter_threshold})'
 
     # Check minimum time interval
     last_recenter = metadata.get('last_recenter_time')
@@ -368,9 +373,16 @@ def should_recenter_grid(
         elapsed = (current_time - last_recenter).total_seconds()
         min_interval = config.get('min_recenter_interval', 3600)
         if elapsed < min_interval:
-            return False
+            return False, f'cooldown_active ({elapsed/60:.0f}/{min_interval/60:.0f}min)'
 
-    return True
+    # REC-008: Check trend before recentering
+    # Don't recenter in strong trends - grid will likely break out again
+    if config.get('check_trend_before_recenter', True) and adx is not None:
+        adx_recenter_threshold = config.get('adx_recenter_threshold', 25)
+        if adx > adx_recenter_threshold:
+            return False, f'trending_market (ADX={adx:.1f}>{adx_recenter_threshold})'
+
+    return True, f'recenter_ready (cycles={cycles_since_recenter})'
 
 
 def recenter_grid(
