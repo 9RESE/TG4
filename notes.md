@@ -1,41 +1,61 @@
 update the docs with the recent work and ALL the changes in git. Ensure documentation complies with the documentation standards and expectations outlined in the claude.md file. Then commit.
 
-cd ws_paper_tester
-# Install dependencies
-pip install -r requirements.txt
-# Run with live Kraken WebSocket data
-python ws_tester.py
-# Run with simulated data
-python ws_tester.py --simulated
-# Run for 30 minutes with dashboard disabled
-python ws_tester.py --duration 30 --no-dashboard
-# Run tests
-pytest tests/ -v
-
-
-
-Strategies:
-- btc and xrp usdt pairs- 9 week moving average on the 5 min and 1 hour. One candle opposite the trend the trend close position. 2 candles closed above/below the 9 is a trend(the equation for a trend is not a set definition and is open to improvement)
-- does xrp follow btc predictably enough to trade on?
-
-I want to develop these strategies. 
-| Scalping (momentum) | 1m-5m             | Quick momentum bursts                      |
-| Arbitrage           | Tick-level        | Cross-exchange price differences           |
 
 
 
 
+- wavetrend /home/rese/Documents/rese/trading-bots/grok-4_1/src/strategies/wavetrend
+- whale_sentiment /home/rese/Documents/rese/trading-bots/grok-4_1/src/strategies/whale_sentiment
+- grid_rsi_reversion /home/rese/Documents/rese/trading-bots/grok-4_1/src/strategies/grid_base.py /home/rese/Documents/rese/trading-bots/grok-4_1/src/strategies/grid_wrappers.py /home/rese/Documents/rese/trading-bots/grok-4_1/src/grid_ensemble_orchestrator.py
 
----
 
 # REUSABLE STRATEGY PROMPTS
 
+## Task: Research and plan a new strategy for the ws_paper_tester framework.
+### Context
+- Location: ws_paper_tester/strategies/
+- Existing strategies have been refined and are working
+- Must comply with: ws_paper_tester/docs/development/strategy-development-guide.md
+- Must integrate with existing ws_paper_tester/ infrastructure
+- Docs: ws_paper_tester/docs/development/features/momentum_scalping ws_paper_tester/docs/development/review/momentum_scalping
+### Strategy Specifications
+- Name: Momentum Scalping
+- Timeframes: 1m and 5m
+- Style: Quick momentum bursts
+- Pairs: XRP/USDT, BTC/USDT, XRP/BTC
+### Required Research Areas
+1. Momentum scalping fundamentals and best practices
+2. Optimal indicators for 1m-5m momentum detection
+3. Pair-specific characteristics:
+    - XRP/USDT: Volatility patterns, typical spread, liquidity
+    - BTC/USDT: Market structure, momentum behavior
+    - XRP/BTC: Cross-pair dynamics, correlation factors
+4. Entry/exit signal criteria for scalping timeframes
+5. Risk management specific to momentum scalping
+6. Known pitfalls and failure modes
+### Deliverable
+Create a research document at:
+ws_paper_tester/docs/development/review/momentum_scalping/master-plan-v1.0.md
+Structure:
+- Executive Summary
+- Research Findings (per area above)
+- Pair-Specific Analysis
+- Recommended Approach
+- Development Plan (phases, no code)
+- Compliance Checklist (vs strategy-development-guide.md)
+Constraint: Documentation only - no implementation code.
+---
+
+
+
+
+
 ## Deep Review Prompt (Copy & Fill Placeholders)
 ```
-## Task: Deep Review of market_making Strategy
+## Task: Deep Review of momentum_scalping Strategy
 ### Scope
-- **Strategy:** `ws_paper_tester/strategies/market_making/`
-- **Docs:** `ws_paper_tester/docs/development/features/market_making/` (if exists)
+- **Strategy:** `ws_paper_tester/strategies/momentum_scalping/`
+- **Docs:** `ws_paper_tester/docs/development/features/momentum_scalping/` (if exists)
 - **Pairs:** XRP/USDT, BTC/USDT, XRP/BTC
 ### Review Requirements
 #### 1. Strategy Research
@@ -67,7 +87,7 @@ Review against `ws_paper_tester/docs/development/strategy-development-guide.md` 
 - Edge cases and failure modes
 - Regime change handling
 ### Deliverable
-Create documentation at: `ws_paper_tester/docs/development/review/market_making/`
+Create documentation at: `ws_paper_tester/docs/development/review/momentum_scalping/`
 Include:
 1. **Executive Summary** - Overall assessment and risk level
 2. **Research Findings** - Academic and industry research
@@ -85,10 +105,10 @@ Include:
 
 ## Implementation Prompt (Copy & Fill Placeholders)
 ```
-## Task: Implement Review Findings for order_flow Strategy
+## Task: Implement Review Findings for momentum_scalping Strategy
 ### Files
-- **Strategy:** `ws_paper_tester/strategies/order_flow/`
-- **Review:** `ws_paper_tester/docs/development/review/order_flow/deep-review-v8.0.md`
+- **Strategy:** `ws_paper_tester/strategies/momentum_scalping/`
+- **Review:** `ws_paper_tester/docs/development/review/momentum_scalping/deep-review-v1.0.md`
 - **Guide:** `ws_paper_tester/docs/development/strategy-development-guide.md`
 ### Instructions
 1. Read the review document - identify all recommendations (REC-XXX)
@@ -137,3 +157,12 @@ Provide:
 - Pairs: XRP/USDT, BTC/USDT, XRP/BTC
 - Key concepts: Avellaneda-Stoikov, inventory skew, micro-price
 - Watch for: minimum spread > 0.2% (fees), stale inventory decay
+## Momentum Scalping (v2.0.0 - 2025-12-14)
+- Pairs: XRP/USDT, BTC/USDT, XRP/BTC
+- Key concepts: RSI 7, MACD (6,13,5), EMA 8/21/50 ribbon, volume spikes
+- v2.0 additions:
+  - REC-001: XRP/BTC correlation pause (threshold 0.50)
+  - REC-002: 5m trend filter (50 EMA alignment)
+  - REC-003: ADX filter for BTC (threshold 25)
+  - REC-004: Regime-based RSI bands (75/25 in HIGH vol)
+- Watch for: correlation breakdown on XRP/BTC, BTC trending markets (ADX>25)
