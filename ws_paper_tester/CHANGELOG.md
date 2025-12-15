@@ -5,6 +5,51 @@ All notable changes to the WebSocket Paper Tester will be documented in this fil
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.13.0] - 2025-12-15
+
+### Added
+- **Centralized Indicator Library v1.0.0** - Major refactoring initiative
+  - Consolidated ~45 duplicated indicator functions from 8 strategy modules
+  - New `ws_tester/indicators/` package with 7 specialized modules:
+    - `moving_averages.py`: SMA, EMA (single value and series)
+    - `oscillators.py`: RSI (Wilder's smoothing), ADX, MACD with crossover detection
+    - `volatility.py`: ATR, Bollinger Bands, volatility percentage, z-score, regime classification
+    - `correlation.py`: Rolling Pearson correlation on returns, correlation trend detection
+    - `volume.py`: Volume ratio, volume spike, micro-price, VPIN
+    - `flow.py`: Trade flow analysis, flow confirmation for signal validation
+    - `trend.py`: Trend slope (linear regression), trend strength, trailing stops
+  - 5 structured return types (NamedTuples): `BollingerResult`, `ATRResult`, `TradeFlowResult`, `TrendResult`, `CorrelationTrendResult`
+  - Flexible `PriceInput` type accepts both Candle objects and raw price lists
+  - 27 public functions exported via `__init__.py`
+
+- **Comprehensive Test Suite**
+  - `tests/test_indicators.py`: 46 tests covering all indicator functions
+  - `tests/fixtures/indicator_test_data.py`: Golden fixtures with pre-calculated expected values
+  - Regression testing with 1e-10 floating-point tolerance
+  - Edge case coverage: empty data, insufficient data, extreme values, flat markets
+
+- **Documentation**
+  - `docs/development/features/indicators/indicator-library-v1.0.md`: Complete API reference
+  - `docs/development/plans/indicator-library-refactoring-v1.0.md`: Implementation plan (Phases 0-7 complete)
+
+### Technical Details
+- RSI uses Wilder's smoothing method (industry standard)
+- Correlation calculated on percentage returns (not raw prices) to avoid spurious correlation
+- Volatility uses population variance for consistency with original implementations
+- All indicators properly handle edge cases (division by zero, insufficient data)
+
+### Code Quality Improvements
+- Proper type annotations throughout (`Tuple[Trade, ...]`, Union types)
+- Fixed correlation zero-handling to maintain array alignment
+- Removed internal helper `extract_volumes` from public exports
+- Added documentation explaining population variance choice
+
+### Migration Status
+- Phases 0-7 complete (library implementation)
+- Phase 8 pending (strategy migration to use centralized library)
+- All 46 indicator tests pass
+- No breaking changes to existing strategies (library is additive)
+
 ## [1.12.2] - 2025-12-15
 
 ### Added
