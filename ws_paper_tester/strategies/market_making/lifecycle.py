@@ -29,7 +29,12 @@ def on_start(config: Dict[str, Any], state: Dict[str, Any]) -> None:
     v1.4.0: Added config validation and trailing stop tracking.
     v1.5.0: Enhanced with all v1.4 review recommendations.
     v2.0.0: Added circuit breaker and rejection tracking initialization.
+    v2.2.1: Store config in state for on_fill access (circuit breaker fix).
     """
+    # Store config in state so on_fill can access it (v2.2.1 fix)
+    # The strategy_loader only passes (fill, state) to on_fill, not config
+    state['_config'] = config
+
     # Validate configuration
     errors = validate_config(config)
     if errors:
@@ -66,7 +71,7 @@ def on_start(config: Dict[str, Any], state: Dict[str, Any]) -> None:
     state['trend_consecutive'] = {}
 
 
-def on_fill(fill: Dict[str, Any], state: Dict[str, Any], config: Dict[str, Any] = None) -> None:
+def on_fill(fill: Dict[str, Any], state: Dict[str, Any]) -> None:
     """
     Update inventory on fill.
 
@@ -74,6 +79,8 @@ def on_fill(fill: Dict[str, Any], state: Dict[str, Any], config: Dict[str, Any] 
     v1.4.0: Added position tracking for trailing stops and per-pair metrics.
     v1.5.0: Added entry_time tracking for position decay (MM-E04).
     v2.0.0: Added circuit breaker tracking (MM-C01).
+    v2.2.1: Fixed signature to match strategy_loader interface (2 args, not 3).
+            Config is now accessed via state['_config'] set in on_start().
 
     For XRP/BTC:
     - Buy: +XRP inventory, track BTC spent
@@ -87,8 +94,11 @@ def on_fill(fill: Dict[str, Any], state: Dict[str, Any], config: Dict[str, Any] 
     timestamp = fill.get('timestamp', datetime.now())
     value = fill.get('value', size * price)
 
+    # v2.2.1: Get config from state (stored in on_start)
+    config = state.get('_config', {})
+
     # v2.0.0 MM-C01: Update circuit breaker on fill with PnL
-    if config is not None and pnl != 0:
+    if config and pnl != 0:
         triggered = update_circuit_breaker_on_fill(state, config, pnl, timestamp)
         if triggered:
             print(f"[market_making] Circuit breaker triggered after {state.get('consecutive_losses', 0)} consecutive losses")

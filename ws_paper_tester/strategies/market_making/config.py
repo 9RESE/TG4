@@ -4,6 +4,11 @@ Market Making Strategy - Configuration
 Strategy metadata, default configuration, and per-symbol overrides.
 
 Version History:
+v2.2.1 (2025-12-14) - Circuit Breaker Fix:
+- Fixed on_fill signature to match strategy_loader interface (2 args, not 3)
+- Config is now stored in state['_config'] during on_start() for on_fill access
+- Circuit breaker tracking now works correctly
+
 v2.2.0 (2025-12-14) - Session Awareness & Correlation Monitoring:
 - REC-002: Session awareness with time-of-day adjustments (Guide v2.0 Section 20)
 - REC-003: XRP/BTC correlation monitoring with pause thresholds (Guide v2.0 Section 24)
@@ -26,7 +31,7 @@ from enum import Enum
 # Strategy Metadata
 # =============================================================================
 STRATEGY_NAME = "market_making"
-STRATEGY_VERSION = "2.2.0"
+STRATEGY_VERSION = "2.2.1"
 SYMBOLS = ["XRP/USDT", "BTC/USDT", "XRP/BTC"]
 
 

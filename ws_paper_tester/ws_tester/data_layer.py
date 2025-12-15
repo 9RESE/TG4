@@ -112,7 +112,9 @@ class KrakenWSClient:
 
         while self._running:
             try:
-                if not self.ws or self.ws.closed:
+                # Check if connection is closed (compatible with websockets v11+)
+                ws_closed = not self.ws or getattr(self.ws, 'close_code', None) is not None
+                if ws_closed:
                     if await self.connect():
                         await self.subscribe(['trade', 'ticker', 'book'])
                     else:

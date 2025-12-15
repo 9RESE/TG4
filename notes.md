@@ -8,8 +8,57 @@ update the docs with the recent work and ALL the changes in git. Ensure document
 - whale_sentiment /home/rese/Documents/rese/trading-bots/grok-4_1/src/strategies/whale_sentiment
 - grid_rsi_reversion /home/rese/Documents/rese/trading-bots/grok-4_1/src/strategies/grid_base.py /home/rese/Documents/rese/trading-bots/grok-4_1/src/strategies/grid_wrappers.py /home/rese/Documents/rese/trading-bots/grok-4_1/src/grid_ensemble_orchestrator.py
 
+i want to add the grid_rsi_reversion from /home/rese/Documents/rese/trading-bots/grok-4_1/src/strategies/grid_base.py /home/rese/Documents/rese/trading-bots/grok-4_1/src/strategies/grid_wrappers.py /home/rese/Documents/rese/trading-bots/grok-4_1/src/grid_ensemble_orchestrator.py to the ws_paper_tester/. as we are rewriting it for the platform I want to do deep research on the strategy and its use with XRP/usdt, btc/usdt, and xrp/btc. I then want you to make a document on your findings, recommendations, and implementation plan. We need to ensure the new strategy complies with ws_paper_tester/docs/development/strategy-development-guide.md and integrates with existing ws_paper_tester/ infrastructure
+
 
 # REUSABLE STRATEGY PROMPTS
+
+## Task: Research and Plan Grid RSI Reversion Strategy for ws_paper_tester
+### Context
+- **Source Strategy:** Legacy implementation being ported
+- `src/strategies/grid_base.py`
+- `src/strategies/grid_wrappers.py`
+- `src/grid_ensemble_orchestrator.py`
+- **Target Location:** `ws_paper_tester/strategies/grid_rsi_reversion/`
+- **Must comply with:** `ws_paper_tester/docs/development/strategy-development-guide.md`
+- **Must integrate with:** Existing ws_paper_tester infrastructure
+### Strategy Specifications
+- **Name:** Grid RSI Reversion
+- **Style:** Grid-based mean reversion with RSI filtering
+- **Pairs:** XRP/USDT, BTC/USDT, XRP/BTC
+### Required Research Areas
+1. Grid trading fundamentals and mean reversion theory
+    - Academic foundations (Ornstein-Uhlenbeck, half-life concepts)
+    - Grid spacing optimization approaches
+    - RSI reversion confluence strategies
+2. Pair-specific characteristics:
+    - XRP/USDT: Volatility patterns, typical range behavior, liquidity
+    - BTC/USDT: Grid suitability, trending vs ranging frequency
+    - XRP/BTC: Cross-pair dynamics, correlation factors
+3. Source code analysis:
+    - Extract core logic from legacy files
+    - Identify components that translate vs require rewrite
+    - Document ensemble orchestration patterns
+4. Entry/exit signal criteria for grid + RSI combination
+5. Risk management:
+    - Grid exposure accumulation limits
+    - Stop-loss placement for grid strategies
+    - Capital allocation across grid levels
+6. Known pitfalls and failure modes for grid strategies
+### Deliverable
+Create a research document at:
+`ws_paper_tester/docs/development/review/grid_rsi_reversion/master-plan-v1.0.md`
+Structure:
+- Executive Summary
+- Research Findings (per area above)
+- Source Code Analysis (legacy → new mapping)
+- Pair-Specific Analysis
+- Recommended Approach
+- Development Plan (phases, no code)
+- Compliance Checklist (vs strategy-development-guide.md v2.0)
+### Constraints
+- Documentation only - no implementation code
+- Focus on adaptation, not blind copy
 
 ## Task: Research and plan a new strategy for the ws_paper_tester framework.
 ### Context
@@ -52,10 +101,10 @@ Constraint: Documentation only - no implementation code.
 
 ## Deep Review Prompt (Copy & Fill Placeholders)
 ```
-## Task: Deep Review of momentum_scalping Strategy
+## Task: Deep Review of grid_rsi_reversion Strategy
 ### Scope
-- **Strategy:** `ws_paper_tester/strategies/momentum_scalping/`
-- **Docs:** `ws_paper_tester/docs/development/features/momentum_scalping/` (if exists)
+- **Strategy:** `ws_paper_tester/strategies/grid_rsi_reversion/`
+- **Docs:** `ws_paper_tester/docs/development/features/grid_rsi_reversion/` (if exists)
 - **Pairs:** XRP/USDT, BTC/USDT, XRP/BTC
 ### Review Requirements
 #### 1. Strategy Research
@@ -87,7 +136,7 @@ Review against `ws_paper_tester/docs/development/strategy-development-guide.md` 
 - Edge cases and failure modes
 - Regime change handling
 ### Deliverable
-Create documentation at: `ws_paper_tester/docs/development/review/momentum_scalping/`
+Create documentation at: `ws_paper_tester/docs/development/review/grid_rsi_reversion/`
 Include:
 1. **Executive Summary** - Overall assessment and risk level
 2. **Research Findings** - Academic and industry research

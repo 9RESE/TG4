@@ -363,11 +363,34 @@ class WebSocketPaperTester:
 
                             # Log fill
                             portfolio = self.portfolio_manager.get_portfolio(name)
+                            portfolio_dict = portfolio.to_dict(snapshot.prices) if portfolio else {}
                             self.logger.log_fill(
                                 fill,
                                 correlation_id,
                                 name,
-                                portfolio.to_dict(snapshot.prices) if portfolio else {},
+                                portfolio_dict,
+                            )
+
+                            # Log aggregated entry (complete audit trail)
+                            self.logger.log_aggregated(
+                                correlation_id=correlation_id,
+                                data={
+                                    'timestamp': snapshot.timestamp.isoformat() if snapshot.timestamp else None,
+                                    'prices': snapshot.prices,
+                                    'data_hash': data_hash,
+                                },
+                                strategy=name,
+                                signal=signal,
+                                execution={
+                                    'fill_id': fill.fill_id,
+                                    'symbol': fill.symbol,
+                                    'side': fill.side,
+                                    'size': fill.size,
+                                    'price': fill.price,
+                                    'fee': fill.fee,
+                                    'pnl': fill.pnl,
+                                },
+                                portfolio=portfolio_dict,
                             )
 
                             # Update dashboard (LOW-002: imports moved outside loop)
@@ -399,9 +422,40 @@ class WebSocketPaperTester:
                     )
                     last_dashboard_update = time.time()
 
-                # Periodic console status report
+                # Periodic status report (console + log)
                 if (time.time() - last_report) > 30:
                     self._print_status(snapshot)
+
+                    # Log status to file
+                    leaderboard = self.portfolio_manager.get_leaderboard(snapshot.prices)
+                    self.logger.log_status(
+                        tick_count=self.tick_count,
+                        signal_count=self.signal_count,
+                        fill_count=self.fill_count,
+                        prices=snapshot.prices,
+                        portfolios=leaderboard,
+                    )
+
+                    # Log portfolio snapshot for each strategy
+                    for name, strategy in self.strategies.items():
+                        portfolio = self.portfolio_manager.get_portfolio(name)
+                        if portfolio:
+                            portfolio_dict = portfolio.to_dict(snapshot.prices)
+                            # Get per-symbol stats from portfolio
+                            symbol_stats = {
+                                sym: {
+                                    'pnl': portfolio_dict.get('pnl_by_symbol', {}).get(sym, 0),
+                                    'trades': portfolio_dict.get('trades_by_symbol', {}).get(sym, 0),
+                                }
+                                for sym in strategy.symbols
+                            }
+                            self.logger.log_portfolio_snapshot(
+                                strategy=name,
+                                portfolio=portfolio_dict,
+                                prices=snapshot.prices,
+                                symbol_stats=symbol_stats,
+                            )
+
                     last_report = time.time()
 
                 await asyncio.sleep(interval_ms / 1000)

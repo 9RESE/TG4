@@ -5,6 +5,51 @@ All notable changes to the WebSocket Paper Tester will be documented in this fil
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.10.0] - 2025-12-14
+
+### Added
+- **Grid RSI Reversion strategy v1.0.0** - New hybrid strategy combining grid trading with RSI mean reversion
+  - Grid level setup with geometric (default) and arithmetic spacing options
+  - RSI as confidence modifier for entries (not hard filter)
+  - Adaptive RSI zones based on ATR volatility
+  - Multi-level position accumulation with cycle tracking
+  - Grid cycle completion (buy-sell pair) for profit taking
+  - Trend filter using ADX > 30 to pause in trending markets
+  - Per-symbol configuration for XRP/USDT, BTC/USDT, XRP/BTC
+  - Volatility regime classification (LOW/MEDIUM/HIGH/EXTREME)
+  - Circuit breaker with consecutive loss tracking
+  - Comprehensive state management for grid levels and metadata
+
+- **Enhanced logging infrastructure** (`ws_tester.py`)
+  - `log_aggregated()` - Complete audit trail with data hash, signal, execution, portfolio
+  - `log_status()` - Periodic status logging (every 30s)
+  - `log_portfolio_snapshot()` - Per-strategy portfolio state with symbol stats
+
+- **Feature Documentation**
+  - `docs/development/features/grid_rsi_reversion/grid-rsi-reversion-v1.0.md`
+  - `docs/development/review/grid_rsi_reversion/master-plan-v1.0.md` (updated to IMPLEMENTED status)
+
+### Changed
+- **Dashboard WebSocket** (`ws_tester/dashboard/server.py`)
+  - Thread-safe queue using `queue.Queue` instead of `asyncio.Queue` for cross-thread safety
+  - Custom JSON serializer handles Infinity, NaN, and datetime values
+  - Non-blocking event polling with 50ms sleep
+  - Graceful handling when no clients connected
+
+- **WebSocket Client** (`ws_tester/data_layer.py`)
+  - Compatible with websockets v11+ (uses `close_code` attribute instead of `.closed`)
+
+### Fixed
+- **Market Making v2.2.1**: Circuit breaker consecutive loss tracking
+  - Fixed `on_fill()` signature to match strategy_loader interface (2 args, not 3)
+  - Config now stored in `state['_config']` during `on_start()` for `on_fill()` access
+  - Circuit breaker now correctly triggers after consecutive losses
+
+### Documentation
+- Market Making v2.2 docs updated with v2.2.1 patch notes
+- Grid RSI Reversion feature documentation created following Arc42/Diataxis standards
+- Master plan document marked as IMPLEMENTED
+
 ## [1.9.0] - 2025-12-14
 
 ### Added

@@ -209,6 +209,27 @@ All imports and tests passed!
 
 ---
 
-**Document Version:** 1.0
+## 9. Patch Notes
+
+### v2.2.1 (2025-12-14) - Circuit Breaker Fix
+
+**Issue:** Circuit breaker was not tracking consecutive losses correctly because `on_fill()` signature did not match the strategy_loader interface.
+
+**Root Cause:** The strategy_loader calls `on_fill(fill, state)` with only 2 arguments, but market_making's `on_fill()` expected 3 arguments: `(fill, state, config)`.
+
+**Fix:**
+1. Changed `on_fill` signature from `(fill, state, config=None)` to `(fill, state)`
+2. Store config in `state['_config']` during `on_start()`
+3. Access config via `state.get('_config', {})` in `on_fill()`
+
+**Files Modified:**
+- `config.py`: Version bump to 2.2.1, updated version history
+- `lifecycle.py`: Fixed `on_fill` signature, config access pattern
+
+**Impact:** Circuit breaker now correctly tracks consecutive losses and triggers cooldown as designed.
+
+---
+
+**Document Version:** 1.1
 **Last Updated:** 2025-12-14
 **Author:** Claude Code (Deep Analysis)

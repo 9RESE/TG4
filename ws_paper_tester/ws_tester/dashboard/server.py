@@ -11,13 +11,25 @@ Security Features:
 import asyncio
 import copy
 import json
+import math
 import os
+import queue
 import threading
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Depends, Header
 from fastapi.responses import HTMLResponse
+
+
+def json_serializer(obj):
+    """Custom JSON serializer that handles Infinity, NaN, and datetime."""
+    if isinstance(obj, float):
+        if math.isinf(obj) or math.isnan(obj):
+            return None  # Convert Infinity/NaN to null
+    if isinstance(obj, datetime):
+        return obj.isoformat()
+    return str(obj)
 
 
 # Security: API key authentication (set via environment variable or config)
@@ -62,35 +74,40 @@ class DashboardPublisher:
     """Publishes updates from trading loop to dashboard clients."""
 
     def __init__(self):
-        self.queue: asyncio.Queue = asyncio.Queue()
+        # Use thread-safe queue.Queue for cross-thread communication
+        self._queue: queue.Queue = queue.Queue(maxsize=1000)
 
-    async def publish(self, event_type: str, data: dict):
-        """Queue an update for broadcast."""
-        await self.queue.put({
-            "type": event_type,
-            "timestamp": datetime.now().isoformat(),
-            "data": data
-        })
+    def put(self, event: dict):
+        """Add event to queue (thread-safe, non-blocking)."""
+        try:
+            self._queue.put_nowait(event)
+        except queue.Full:
+            # Drop oldest if full
+            try:
+                self._queue.get_nowait()
+                self._queue.put_nowait(event)
+            except queue.Empty:
+                pass
 
     async def broadcast_loop(self):
         """Continuously broadcast queued updates."""
         while True:
             try:
-                event = await self.queue.get()
-                message = json.dumps(event, default=str)
+                # Non-blocking check for events
+                try:
+                    event = self._queue.get_nowait()
+                except queue.Empty:
+                    await asyncio.sleep(0.05)  # 50ms polling
+                    continue
 
-                # Update latest state with thread safety
-                with _state_lock:
-                    if event["type"] == "state_update":
-                        latest_state.update(event["data"])
-                        latest_state["timestamp"] = event["timestamp"]
-                    elif event["type"] == "trade":
-                        latest_state["recent_trades"].insert(0, event["data"])
-                        latest_state["recent_trades"] = latest_state["recent_trades"][:100]
+                message = json.dumps(event, default=json_serializer)
 
                 # Get current clients list safely
                 with _clients_lock:
                     clients_copy = list(dashboard_clients)
+
+                if not clients_copy:
+                    continue
 
                 # Broadcast to all connected clients concurrently (non-blocking)
                 async def send_to_client(client: WebSocket):
@@ -141,7 +158,7 @@ async def websocket_endpoint(websocket: WebSocket):
     await websocket.send_text(json.dumps({
         "type": "initial_state",
         "data": state_snapshot
-    }, default=str))
+    }, default=json_serializer))
 
     try:
         while True:
@@ -509,13 +526,27 @@ def update_state(
     session_info: dict = None
 ):
     """Update latest state directly (for non-async contexts). Thread-safe."""
+    timestamp = datetime.now().isoformat()
+
     with _state_lock:
-        latest_state["timestamp"] = datetime.now().isoformat()
+        latest_state["timestamp"] = timestamp
         latest_state["prices"] = copy.deepcopy(prices)
         latest_state["strategies"] = copy.deepcopy(strategies)
         latest_state["aggregate"] = copy.deepcopy(aggregate)
         if session_info:
             latest_state["session_info"] = copy.deepcopy(session_info)
+
+    # Also queue broadcast to connected WebSocket clients
+    publisher.put({
+        "type": "state_update",
+        "timestamp": timestamp,
+        "data": {
+            "prices": prices,
+            "strategies": strategies,
+            "aggregate": aggregate,
+            "session_info": session_info or {},
+        }
+    })
 
 
 def add_trade(trade: dict):
@@ -525,6 +556,13 @@ def add_trade(trade: dict):
     with _state_lock:
         latest_state["recent_trades"].insert(0, sanitized_trade)
         latest_state["recent_trades"] = latest_state["recent_trades"][:100]
+
+    # Also queue broadcast to connected WebSocket clients
+    publisher.put({
+        "type": "trade",
+        "timestamp": datetime.now().isoformat(),
+        "data": sanitized_trade
+    })
 
 
 def _sanitize_trade(trade: dict) -> dict:
@@ -555,7 +593,7 @@ async def broadcast_shutdown_message():
         "type": "shutdown",
         "timestamp": datetime.now().isoformat(),
         "message": "Server is shutting down"
-    })
+    }, default=json_serializer)
 
     for client in clients_copy:
         try:

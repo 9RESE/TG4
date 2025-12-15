@@ -253,15 +253,22 @@ def discover_strategies(
                 print(f"  * Verified {file.name}: {reason}")
 
         try:
-            # Load module using spec_from_file_location to avoid sys.path pollution
-            module_name = f"strategy_{file.stem}_{id(file)}"  # Unique module name
-            spec = importlib.util.spec_from_file_location(module_name, file)
-            if not spec or not spec.loader:
-                continue
+            # Add strategies directory parent to sys.path for proper package imports
+            strategies_parent = str(strategies_path.parent)
+            if strategies_parent not in sys.path:
+                sys.path.insert(0, strategies_parent)
 
-            module = importlib.util.module_from_spec(spec)
-            sys.modules[module_name] = module
-            spec.loader.exec_module(module)
+            # Use package import to support relative imports in shim files
+            # This treats strategies/ as a package and imports e.g. strategies.momentum_scalping
+            package_name = strategies_path.name  # "strategies"
+            module_name = f"{package_name}.{file.stem}"  # e.g. "strategies.momentum_scalping"
+
+            # Remove from sys.modules if already loaded (for reloading)
+            if module_name in sys.modules:
+                del sys.modules[module_name]
+
+            # Import the module properly as part of the strategies package
+            module = importlib.import_module(module_name)
 
             # Check for required attributes
             if not hasattr(module, 'STRATEGY_NAME'):
