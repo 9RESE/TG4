@@ -1,16 +1,19 @@
 """
-Whale Sentiment Strategy v1.0.0
+Whale Sentiment Strategy v1.1.0
 
 Trades based on whale activity proxy (volume spikes) and market sentiment
 indicators (RSI, price deviation) using a contrarian approach.
 
-Based on research from master-plan-v1.0.md:
-- Volume spike detection as whale activity proxy
-- RSI + price deviation for sentiment classification
+REC-009: Research Foundation
+Based on internal research and academic literature analysis. Key features:
+- Volume spike detection as whale activity proxy (primary signal per REC-001)
+- RSI + price deviation for sentiment classification (reduced weight per REC-001)
 - Contrarian mode: buy fear, sell greed
 - Trade flow confirmation for signal validation
 - Cross-pair correlation management
 - Session-aware position sizing
+
+See deep-review-v1.0.md Section 7 for full research references.
 
 Entry Logic:
 - Long: Fear sentiment (RSI < 40) + whale accumulation or neutral
@@ -22,7 +25,16 @@ Exit Logic:
 - Trailing stop (optional)
 
 Version History:
-- 1.0.0: Initial implementation based on master-plan-v1.0.md research
+- 1.1.0: Deep Review v1.0 Implementation
+         - REC-001: Recalibrated confidence weights (volume 40%, RSI 15%)
+         - REC-005: Enhanced indicator logging on all code paths
+         - REC-007: Disabled XRP/BTC by default (liquidity concerns)
+         - REC-008: Reduced short size multiplier to 0.5x (squeeze risk)
+         - REC-009: Updated research documentation references
+         - REC-010: Documented UTC timezone requirement for sessions
+         - REC-002/REC-004: Documented for future implementation
+         - REC-003: Clarified trade flow logic for contrarian mode
+- 1.0.0: Initial implementation
          - Volume spike detection as whale proxy
          - RSI sentiment classification
          - Fear/greed price deviation proxy

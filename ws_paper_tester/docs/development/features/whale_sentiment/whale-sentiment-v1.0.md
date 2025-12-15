@@ -1,17 +1,37 @@
-# Whale Sentiment Strategy v1.0.0
+# Whale Sentiment Strategy v1.1.0
 
 **Implementation Date:** December 2025
-**Status:** Initial Release
-**Based On:** master-plan-v1.0.md
+**Status:** Deep Review v1.0 Implementation Complete
+**Research References:** See deep-review-v1.0.md Section 7
 
 ## Overview
 
 The Whale Sentiment Strategy combines institutional activity detection (via volume spike analysis) with market sentiment indicators (RSI, price deviation) to identify contrarian trading opportunities. The strategy operates on the principle that extreme market fear or greed, particularly when coupled with large-holder activity, often precedes price reversals.
 
+## Version 1.1.0 Changes (Deep Review v1.0)
+
+| REC ID | Change | Rationale |
+|--------|--------|-----------|
+| REC-001 | Volume weight 40%, RSI weight 15% | RSI proven ineffective in crypto per academic research |
+| REC-003 | Clarified trade flow logic | Intentionally lenient for contrarian mode |
+| REC-005 | Enhanced indicator logging | Better debugging on circuit breaker/cooldown paths |
+| REC-007 | XRP/BTC disabled by default | 7-10x lower liquidity than USD pairs |
+| REC-008 | Short multiplier 0.50x | Reduced from 0.75x for crypto squeeze risk |
+| REC-009 | Updated research references | Points to deep-review-v1.0.md |
+| REC-010 | UTC timezone documented | Session boundaries are UTC-only |
+
+### Deferred Recommendations
+
+| REC ID | Description | Effort | Documented In |
+|--------|-------------|--------|---------------|
+| REC-002 | Candle data persistence | Medium | config.py header |
+| REC-004 | Volatility regime classification | High | config.py header |
+| REC-006 | Backtest confidence weights | High | config.py header |
+
 ## Key Features
 
 ### 1. Volume Spike Detection (Whale Proxy)
-- Volume spikes >= 2x average detected as whale activity
+- Volume spikes >= 2x average detected as whale activity (PRIMARY signal per REC-001)
 - False positive filtering (price movement, spread, trade count)
 - Classification: Accumulation (spike + price up), Distribution (spike + price down), Neutral
 
@@ -19,16 +39,18 @@ The Whale Sentiment Strategy combines institutional activity detection (via volu
 - RSI-based sentiment zones (Extreme Fear < 25, Fear < 40, Greed > 60, Extreme Greed > 75)
 - Price deviation from recent high/low as supplementary signal
 - Composite sentiment zone classification
+- **Note:** RSI weight reduced to 15% per REC-001 due to ineffectiveness in crypto markets
 
 ### 3. Contrarian Mode
 - Default: Buy fear, sell greed
 - Optional: Momentum following mode
 - Signal alignment with whale activity direction
+- **REC-003:** Trade flow logic is intentionally lenient to allow contrarian entries
 
 ### 4. Risk Management
 - Stricter circuit breaker (2 consecutive losses, 45 min cooldown)
 - Wider stops for counter-trend entries (2.5% default)
-- Lower short exposure limit (75 USD vs 100 USD for longs)
+- **REC-008:** Lower short exposure (0.50x multiplier, down from 0.75x)
 - Cross-pair correlation management
 
 ## Module Structure
@@ -59,6 +81,16 @@ strategies/whale_sentiment/
 | `rsi_extreme_greed` | 75 | Extreme greed threshold |
 | `contrarian_mode` | true | Buy fear, sell greed |
 
+### Confidence Weights (REC-001 Updated)
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `weight_volume_spike` | **0.40** | Volume spike contribution (increased from 0.30) |
+| `weight_rsi_sentiment` | **0.15** | RSI sentiment contribution (reduced from 0.25) |
+| `weight_price_deviation` | 0.20 | Price deviation contribution |
+| `weight_trade_flow` | 0.15 | Trade flow confirmation |
+| `weight_divergence` | 0.10 | RSI divergence bonus |
+
 ### Position Sizing
 
 | Parameter | Default | Description |
@@ -66,7 +98,7 @@ strategies/whale_sentiment/
 | `position_size_usd` | 25.0 | Base position size |
 | `max_position_usd` | 150.0 | Total position limit |
 | `max_position_per_symbol_usd` | 75.0 | Per-symbol limit |
-| `short_size_multiplier` | 0.75 | Reduce short sizes (squeeze risk) |
+| `short_size_multiplier` | **0.50** | Reduce short sizes (REC-008: reduced from 0.75) |
 
 ### Risk Management
 
@@ -90,15 +122,31 @@ strategies/whale_sentiment/
 - Larger position sizes (50 USD base)
 - Tighter stops (1.5%)
 
-### XRP/BTC
-- Highest volume threshold (3x) due to low liquidity
+### XRP/BTC (REC-007: Disabled by Default)
+- **Not included in SYMBOLS by default** due to 7-10x lower liquidity
+- Configuration retained in SYMBOL_CONFIGS for optional re-enablement
+- Highest volume threshold (3x) if enabled
 - Smallest position sizes (15 USD)
 - Widest stops (3.0%)
+
+## Session Boundaries (REC-010: UTC Only)
+
+All session times are **UTC-only**. No DST adjustment is performed.
+
+| Session | Start (UTC) | End (UTC) | Size Multiplier |
+|---------|-------------|-----------|-----------------|
+| Asia | 00:00 | 08:00 | 0.8x |
+| Europe | 08:00 | 14:00 | 1.0x |
+| US-Europe Overlap | 14:00 | 17:00 | 1.1x |
+| US | 17:00 | 21:00 | 1.0x |
+| Off Hours | 21:00 | 24:00 | 0.5x |
 
 ## Signal Generation Flow
 
 1. **Check Circuit Breaker** - 2 consecutive losses triggers 45 min pause
+   - **REC-005:** Enhanced logging with elapsed/remaining cooldown times
 2. **Check Cooldown** - 120 seconds between signals
+   - **REC-005:** Enhanced logging with last signal time
 3. **For Each Symbol:**
    - Warmup check (310 candles minimum)
    - Calculate indicators (RSI, volume spike, fear/greed)
@@ -106,37 +154,28 @@ strategies/whale_sentiment/
    - Classify sentiment regime
    - Validate contrarian opportunity
    - Validate volume spike (false positive filter)
-   - Check trade flow confirmation
+   - Check trade flow confirmation (**REC-003:** lenient for contrarian)
    - Check correlation limits
-   - Calculate composite confidence
+   - Calculate composite confidence (**REC-001:** volume-weighted)
    - Generate signal if confidence >= 0.55
 
-## Entry Conditions
+## Trade Flow Confirmation (REC-003 Clarification)
 
-### Long Entry (Contrarian Mode)
-- Sentiment zone: FEAR or EXTREME_FEAR
-- Whale signal: ACCUMULATION or NEUTRAL
-- Trade flow: Not strongly negative (imbalance >= -0.10)
-- Confidence >= 0.55
+For **contrarian mode**, trade flow logic is intentionally lenient:
 
-### Short Entry (Contrarian Mode)
-- Sentiment zone: GREED or EXTREME_GREED
-- Whale signal: DISTRIBUTION or NEUTRAL
-- Trade flow: Not strongly positive (imbalance <= 0.10)
-- Confidence >= 0.55
+- **BUY signals (in fear):** Accept mild selling pressure (imbalance >= -0.10)
+  - Rationale: Contrarian buys occur during panic selling. Requiring positive flow would reject valid entries.
 
-## Exit Conditions
+- **SHORT signals (in greed):** Accept mild buying pressure (imbalance <= +0.10)
+  - Rationale: Contrarian shorts occur during FOMO buying. Requiring negative flow would reject valid entries.
 
-1. **Stop Loss** - Price drops below stop level
-2. **Take Profit** - Price reaches profit target
-3. **Trailing Stop** (Optional) - Activates after 50% of TP
-4. **Sentiment Reversal** - Sentiment shifts opposite to entry
+This differs from momentum strategies which would require flow alignment.
 
-## Confidence Calculation
+## Confidence Calculation (REC-001 Updated)
 
 Weighted composite of:
-- Volume spike (30%): Higher contribution for stronger spikes
-- RSI sentiment (25%): Extreme zones get full weight
+- **Volume spike (40%):** Primary signal, higher contribution for stronger spikes
+- RSI sentiment (15%): Reduced weight due to crypto ineffectiveness
 - Price deviation (20%): Implicit in sentiment classification
 - Trade flow (15%): Confirms market microstructure alignment
 - Divergence bonus (10%): RSI divergence adds confirmation
@@ -152,31 +191,15 @@ Required for:
 - RSI calculation stability
 - Price deviation reference points
 
-## Implementation Notes
-
-### False Positive Filtering
-- Volume spike without price movement rejected
-- Wide spreads during spikes rejected
-- Low trade counts during spikes rejected
-
-### Contrarian Risk Management
-- Stricter circuit breaker (catching falling knives)
-- Wider stops (counter-trend entries)
-- Lower short exposure (squeeze risk)
-- Requires volume spike OR moderate sentiment alignment
-
-### Cross-Pair Correlation
-- Real-time rolling correlation calculation
-- Same-direction trades blocked if correlation > 0.85
-- Size reduction for correlated positions
+**REC-002 Note:** Candle persistence mechanism is documented for future implementation to reduce warmup impact after restarts.
 
 ## Compliance Checklist
 
 | Requirement | Status |
 |-------------|--------|
 | `STRATEGY_NAME` defined | Yes (`whale_sentiment`) |
-| `STRATEGY_VERSION` defined | Yes (`1.0.0`) |
-| `SYMBOLS` list defined | Yes |
+| `STRATEGY_VERSION` defined | Yes (`1.1.0`) |
+| `SYMBOLS` list defined | Yes (XRP/USDT, BTC/USDT) |
 | `CONFIG` dict defined | Yes (56 keys) |
 | `generate_signal()` function | Yes |
 | `on_start()` callback | Yes |
@@ -190,6 +213,7 @@ Required for:
 | Circuit breaker | Yes |
 | Rejection tracking | Yes |
 | Warmup documentation | Yes |
+| Enhanced indicator logging | Yes (REC-005) |
 
 ## Testing Notes
 
@@ -200,14 +224,21 @@ For faster testing, config.yaml override reduces:
 
 ## Future Improvements
 
-1. External whale data integration (Whale Alert API)
-2. Social sentiment API integration
-3. On-chain metrics integration
-4. Adaptive thresholds based on market conditions
-5. Machine learning for pattern recognition
+### Deferred from Deep Review v1.0:
+1. **REC-002:** Candle data persistence for faster warmup
+2. **REC-004:** Volatility regime classification
+3. **REC-006:** Backtest-validated confidence weights
+
+### Additional Ideas:
+4. External whale data integration (Whale Alert API)
+5. Social sentiment API integration
+6. On-chain metrics integration
+7. Adaptive thresholds based on market conditions
+8. Machine learning for pattern recognition
 
 ---
 
-**Document Version:** 1.0.0
-**Author:** Implementation Agent
+**Document Version:** 1.1.0
+**Author:** Deep Review Implementation
 **Platform Version:** WebSocket Paper Tester v1.0.2+
+**Review Reference:** deep-review-v1.0.md

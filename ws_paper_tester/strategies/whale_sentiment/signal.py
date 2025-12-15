@@ -141,10 +141,18 @@ def generate_signal(
         cooldown_min = config.get('circuit_breaker_minutes', 45)
 
         if check_circuit_breaker(state, current_time, max_losses, cooldown_min):
+            # REC-005: Enhanced indicator logging for circuit breaker path
             state['indicators'] = build_base_indicators(
                 symbol='N/A', candle_count=0, status='circuit_breaker', state=state
             )
             state['indicators']['circuit_breaker_active'] = True
+            state['indicators']['max_consecutive_losses'] = max_losses
+            state['indicators']['cooldown_minutes'] = cooldown_min
+            breaker_time = state.get('circuit_breaker_time')
+            if breaker_time:
+                elapsed = (current_time - breaker_time).total_seconds() / 60
+                state['indicators']['cooldown_elapsed_min'] = round(elapsed, 1)
+                state['indicators']['cooldown_remaining_min'] = round(cooldown_min - elapsed, 1)
             if track_rejections:
                 track_rejection(state, RejectionReason.CIRCUIT_BREAKER)
             return None
@@ -154,11 +162,16 @@ def generate_signal(
     # ==========================================================================
     if state['last_signal_time'] is not None:
         elapsed = (current_time - state['last_signal_time']).total_seconds()
-        if elapsed < config.get('cooldown_seconds', 120.0):
+        cooldown_secs = config.get('cooldown_seconds', 120.0)
+        if elapsed < cooldown_secs:
+            # REC-005: Enhanced indicator logging for cooldown path
             state['indicators'] = build_base_indicators(
                 symbol='N/A', candle_count=0, status='cooldown', state=state
             )
-            state['indicators']['cooldown_remaining'] = config.get('cooldown_seconds', 120.0) - elapsed
+            state['indicators']['cooldown_seconds'] = cooldown_secs
+            state['indicators']['cooldown_elapsed'] = round(elapsed, 1)
+            state['indicators']['cooldown_remaining'] = round(cooldown_secs - elapsed, 1)
+            state['indicators']['last_signal_time'] = state['last_signal_time'].isoformat()
             if track_rejections:
                 track_rejection(state, RejectionReason.TIME_COOLDOWN)
             return None

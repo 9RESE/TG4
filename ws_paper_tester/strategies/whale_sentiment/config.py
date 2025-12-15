@@ -2,7 +2,15 @@
 Whale Sentiment Strategy - Configuration and Enums
 
 Contains strategy metadata, enums for type safety, and default configuration.
-Based on research from master-plan-v1.0.md.
+
+REC-009: Research Foundation
+This strategy is based on internal research documented in the whale_sentiment
+feature documentation. Key research sources include:
+- QuantifiedStrategies.com: RSI effectiveness analysis
+- PMC Academic Studies: Cryptocurrency market indicators
+- Kaiko Research: XRP liquidity analysis
+- CME Group: XRP correlation studies
+See deep-review-v1.0.md Section 7 for full research references.
 
 The Whale Sentiment Strategy combines institutional activity detection (via volume
 spike analysis) with market sentiment indicators (RSI, price deviation) to identify
@@ -29,10 +37,41 @@ NO SIGNALS will be generated until warmup is complete. This is by design:
 - Volume spike detection requires 24h volume baseline (288 candles @ 5m)
 - RSI calculation needs historical data for smoothing
 - Fear/greed deviation needs recent high/low reference points
+
+===============================================================================
+DEFERRED RECOMMENDATIONS (Future Implementation)
+===============================================================================
+REC-002 (CRITICAL, Medium Effort): Candle Data Persistence
+- Current: 25+ hour warmup on every restart
+- Proposed: Implement candle persistence/reload mechanism
+- Benefits: Faster recovery after restarts, no missed opportunities
+- Implementation: Serialize candle buffer to file, reload on startup
+
+REC-004 (HIGH, High Effort): Volatility Regime Classification
+- Current: Uses sentiment regimes only
+- Proposed: Add volatility regime detection (low/medium/high volatility)
+- Benefits: Adjust parameters for different market conditions
+- Implementation: ATR-based classification, dynamic thresholds
+- Reference: Strategy Development Guide Section 15 (when available)
+
+REC-006 (MEDIUM, High Effort): Backtest Confidence Weights
+- Current: Weights based on theoretical analysis
+- Proposed: Validate weights with historical backtesting
+- Benefits: Empirically optimized confidence calculation
+- Implementation: Run historical simulation, optimize weights
 ===============================================================================
 
 Version History:
-- 1.0.0: Initial implementation based on master-plan-v1.0.md research
+- 1.1.0: Deep Review v1.0 Implementation
+         - REC-001: Recalibrated confidence weights (volume 40%, RSI 15%)
+         - REC-005: Enhanced indicator logging on all code paths
+         - REC-007: Disabled XRP/BTC by default (liquidity concerns)
+         - REC-008: Reduced short size multiplier to 0.5x (squeeze risk)
+         - REC-009: Updated research documentation references
+         - REC-010: Documented UTC timezone requirement for sessions
+         - REC-002/REC-004/REC-006: Documented for future implementation
+         - REC-003: Clarified trade flow logic for contrarian mode
+- 1.0.0: Initial implementation
          - Volume spike detection as whale proxy
          - RSI sentiment classification
          - Fear/greed price deviation proxy
@@ -48,8 +87,11 @@ from typing import Dict, Any
 # Strategy Metadata
 # =============================================================================
 STRATEGY_NAME = "whale_sentiment"
-STRATEGY_VERSION = "1.0.0"
-SYMBOLS = ["XRP/USDT", "BTC/USDT", "XRP/BTC"]
+STRATEGY_VERSION = "1.1.0"  # Deep Review v1.0 Implementation
+# REC-007: XRP/BTC disabled by default due to 7-10x lower liquidity than USD pairs.
+# Re-enable with caution and increased volume spike threshold if needed.
+SYMBOLS = ["XRP/USDT", "BTC/USDT"]
+# SYMBOLS_WITH_XRPBTC = ["XRP/USDT", "BTC/USDT", "XRP/BTC"]  # Use with caution
 
 
 # =============================================================================
@@ -150,9 +192,11 @@ CONFIG: Dict[str, Any] = {
 
     # ==========================================================================
     # Composite Confidence Weights
+    # REC-001: Recalibrated based on academic research showing RSI ineffectiveness
+    # in crypto markets. Increased volume spike weight as primary signal.
     # ==========================================================================
-    'weight_volume_spike': 0.30,        # Volume spike contribution
-    'weight_rsi_sentiment': 0.25,       # RSI sentiment contribution
+    'weight_volume_spike': 0.40,        # Volume spike contribution (REC-001: increased from 0.30)
+    'weight_rsi_sentiment': 0.15,       # RSI sentiment contribution (REC-001: reduced from 0.25)
     'weight_price_deviation': 0.20,     # Price deviation contribution
     'weight_trade_flow': 0.15,          # Trade flow confirmation
     'weight_divergence': 0.10,          # RSI divergence bonus
@@ -166,7 +210,7 @@ CONFIG: Dict[str, Any] = {
     'max_position_usd': 150.0,          # Maximum TOTAL position exposure
     'max_position_per_symbol_usd': 75.0,  # Maximum per symbol
     'min_trade_size_usd': 5.0,          # Minimum USD per trade
-    'short_size_multiplier': 0.75,      # Reduce short position size (squeeze risk)
+    'short_size_multiplier': 0.50,      # REC-008: Reduced from 0.75 for crypto squeeze risk
     'high_correlation_size_mult': 0.60, # Reduce when correlated
 
     # ==========================================================================
@@ -206,15 +250,17 @@ CONFIG: Dict[str, Any] = {
     # Session Awareness
     # ==========================================================================
     'use_session_awareness': True,
+    # REC-010: Session boundaries are UTC-only. No DST adjustment.
+    # All times assume server runs in UTC timezone.
     'session_boundaries': {
-        'asia_start': 0,                # 00:00 UTC
-        'asia_end': 8,                  # 08:00 UTC
-        'europe_start': 8,              # 08:00 UTC
-        'europe_end': 14,               # 14:00 UTC
-        'overlap_start': 14,            # 14:00 UTC
-        'overlap_end': 17,              # 17:00 UTC
-        'us_start': 17,                 # 17:00 UTC
-        'us_end': 21,                   # 21:00 UTC
+        'asia_start': 0,                # 00:00 UTC (Tokyo 09:00 JST)
+        'asia_end': 8,                  # 08:00 UTC (Tokyo 17:00 JST)
+        'europe_start': 8,              # 08:00 UTC (London 08:00/09:00 GMT/BST)
+        'europe_end': 14,               # 14:00 UTC (London 14:00/15:00 GMT/BST)
+        'overlap_start': 14,            # 14:00 UTC (NY 09:00/10:00 EST/EDT)
+        'overlap_end': 17,              # 17:00 UTC (NY 12:00/13:00 EST/EDT)
+        'us_start': 17,                 # 17:00 UTC (NY 12:00/13:00 EST/EDT)
+        'us_end': 21,                   # 21:00 UTC (NY 16:00/17:00 EST/EDT)
         'off_hours_start': 21,          # 21:00 UTC
         'off_hours_end': 24,            # 24:00 UTC
     },

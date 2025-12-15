@@ -550,17 +550,25 @@ def check_trade_flow_confirmation(
     """
     Check if trade flow supports the signal direction.
 
-    For long signals, we want positive imbalance (more buying)
-    For short signals, we want negative imbalance (more selling)
+    REC-003: Contrarian Mode Logic Clarification
+    ============================================
+    For contrarian strategy, the trade flow check is intentionally lenient:
 
-    Note: For contrarian strategy, we're often buying into selling pressure
-    (fear) or selling into buying pressure (greed). The trade flow check
-    ensures the imbalance isn't too extreme in the wrong direction.
+    - BUY signals (in fear): We ACCEPT mild selling pressure (imbalance >= -threshold)
+      Rationale: Contrarian buys occur during fear/panic selling. Requiring positive
+      flow would reject valid contrarian entries. We only reject if selling is EXTREME.
+
+    - SHORT signals (in greed): We ACCEPT mild buying pressure (imbalance <= +threshold)
+      Rationale: Contrarian shorts occur during FOMO buying. Requiring negative
+      flow would reject valid contrarian entries. We only reject if buying is EXTREME.
+
+    This differs from momentum strategies which would require flow alignment.
+    The threshold (-0.10/+0.10) allows mild opposing flow while blocking extreme cases.
 
     Args:
         trades: Tuple/list of trade objects
         direction: Signal direction ('buy' or 'short')
-        threshold: Minimum imbalance to confirm (0.10 = 10%)
+        threshold: Maximum opposing imbalance to accept (0.10 = 10%)
         lookback: Number of recent trades to analyze
 
     Returns:
