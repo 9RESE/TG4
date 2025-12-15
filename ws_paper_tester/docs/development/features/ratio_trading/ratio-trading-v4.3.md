@@ -88,7 +88,39 @@ class RejectionReason(Enum):
 
 ---
 
-## Version 4.3.1 Changes (Documentation Update)
+## Version 4.3.1 Changes
+
+### Bugfix: Correlation None Handling
+
+**Problem:** Two TypeError bugs occurred during runtime when correlation monitoring was enabled:
+1. `'<' not supported between instances of 'NoneType' and 'float'` - When comparing correlation with threshold
+2. `unsupported operand type(s) for +: 'int' and 'NoneType'` in `on_stop()` - When summing correlation history
+
+**Root Cause:** `calculate_rolling_correlation()` returns `None` in edge cases:
+- Insufficient data (fewer than `window + 1` data points)
+- Zero standard deviation (flat price series)
+
+The previous code didn't check for `None` before using the result.
+
+**Fix Applied:**
+```python
+# Before (buggy):
+correlation = calculate_rolling_correlation(price_history, btc_history, corr_lookback)
+if correlation < warn_threshold:  # TypeError if correlation is None
+    state['correlation_warnings'] += 1
+state['correlation_history'].append(correlation)  # Appends None
+
+# After (fixed):
+corr_result = calculate_rolling_correlation(price_history, btc_history, corr_lookback)
+if corr_result is not None:
+    correlation = corr_result
+if corr_result is not None and correlation < warn_threshold:
+    state['correlation_warnings'] += 1
+if corr_result is not None:
+    state['correlation_history'].append(correlation)  # Only valid values
+```
+
+**Additional Fix:** Data length check updated from `>= corr_lookback` to `>= corr_lookback + 1` to match the function's actual data requirement.
 
 ### Deep Review v10.0 Validation
 
@@ -195,6 +227,7 @@ Per REC-041/042/043 from v10.0 review:
 - `enums.py`: Added `FEE_NOT_PROFITABLE` rejection reason
 
 ### v4.3.1
+- `signals.py`: Fixed correlation None handling bugs (TypeError on comparison and sum)
 - `__init__.py`: Updated version history, FUTURE ENHANCEMENTS with v10.0 REC numbers
 - `config.py`: Version bump to 4.3.1
 

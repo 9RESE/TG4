@@ -5,6 +5,32 @@ All notable changes to the WebSocket Paper Tester will be documented in this fil
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.13.1] - 2025-12-15
+
+### Fixed
+- **Ratio Trading v4.3.1** - Fixed two TypeError bugs in correlation monitoring
+  - `'<' not supported between instances of 'NoneType' and 'float'` - Occurred when `calculate_rolling_correlation()` returned `None` (insufficient data or zero standard deviation) and the result was compared with threshold floats
+  - `unsupported operand type(s) for +: 'int' and 'NoneType'` in `on_stop()` - Occurred when `None` correlation values were appended to `correlation_history` and `sum()` was called on the list
+  - Root cause: `calculate_rolling_correlation()` can return `None` in edge cases (zero std dev, insufficient data), but callers weren't checking for this
+  - Fix: Added proper `None` checks before comparisons, only append valid (non-None) correlation values to history
+
+### Changed
+- **Strategy Indicator Shims** - Updated 8 strategy indicator modules to use centralized library
+  - `grid_rsi_reversion/indicators.py`: Re-exports from `ws_tester.indicators`
+  - `market_making/calculations.py`: Re-exports from `ws_tester.indicators`
+  - `mean_reversion/indicators.py`: Re-exports from `ws_tester.indicators`
+  - `momentum_scalping/indicators.py`: Re-exports from `ws_tester.indicators`
+  - `order_flow/indicators.py`: Re-exports from `ws_tester.indicators`
+  - `ratio_trading/indicators.py`: Re-exports from `ws_tester.indicators`
+  - `wavetrend/indicators.py`: Re-exports from `ws_tester.indicators`
+  - `whale_sentiment/indicators.py`: Re-exports from `ws_tester.indicators`
+  - All shims provide backward compatibility with original function signatures
+
+### Technical Details
+- Correlation calculation edge case: when both price series have zero variance (flat prices), the correlation is undefined and returns `None`
+- Data length check updated from `>= corr_lookback` to `>= corr_lookback + 1` to match function's actual requirement (`window + 1` data points)
+- All 46 indicator tests pass, 35/36 strategy tests pass (1 unrelated pre-existing failure)
+
 ## [1.13.0] - 2025-12-15
 
 ### Added

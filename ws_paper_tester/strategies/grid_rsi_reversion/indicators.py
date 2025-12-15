@@ -1,193 +1,114 @@
 """
 Grid RSI Reversion Strategy - Indicator Calculations
 
-Contains functions for calculating RSI, ATR, and adaptive RSI zones.
-Implements the RSI confidence calculation from legacy code.
+Contains strategy-specific indicator functions for grid RSI reversion analysis.
+Common indicators are imported from the centralized ws_tester.indicators library.
+
+Technical indicators:
+- RSI, ATR, ADX
+- Adaptive RSI zones
+- RSI confidence calculation from legacy code
 """
 from typing import Dict, Any, List, Optional, Tuple
 
 from .config import RSIZone, get_symbol_config
 
+# Import common indicators from centralized library
+from ws_tester.indicators import (
+    calculate_rsi,
+    calculate_atr,
+    calculate_adx,
+    calculate_volatility,
+    calculate_volume_ratio,
+    calculate_rolling_correlation,
+    check_trade_flow_confirmation as _check_trade_flow_lib,
+    calculate_trade_flow as _calculate_trade_flow_lib,
+    TradeFlowResult,
+)
 
-def calculate_rsi(closes: List[float], period: int = 14) -> Optional[float]:
+
+def calculate_trade_flow(
+    trades: tuple,
+    lookback: int = 50
+) -> Tuple[float, float, float]:
     """
-    Calculate Relative Strength Index using Wilder's smoothing method.
+    Calculate trade flow metrics from recent trades.
 
-    Formula:
-    RS = Average Gain / Average Loss (over N periods)
-    RSI = 100 - (100 / (1 + RS))
+    REC-003: Trade flow confirmation to avoid entering against market momentum.
+
+    This is a thin wrapper around ws_tester.indicators.calculate_trade_flow
+    that returns (buy_volume, sell_volume, flow_imbalance) tuple for backward
+    compatibility.
 
     Args:
-        closes: List of closing prices (oldest first)
-        period: RSI period
+        trades: Tuple of Trade objects with side, value attributes
+        lookback: Number of trades to analyze
 
     Returns:
-        RSI value (0-100) or None if insufficient data
+        Tuple of (buy_volume, sell_volume, flow_imbalance)
+        flow_imbalance: -1 to +1 where positive = more buy volume
     """
-    if len(closes) < period + 1:
-        return None
-
-    # Calculate price changes
-    changes = [closes[i] - closes[i - 1] for i in range(1, len(closes))]
-
-    # Initial average gain/loss (first 'period' changes)
-    gains = [max(0, change) for change in changes[:period]]
-    losses = [max(0, -change) for change in changes[:period]]
-
-    avg_gain = sum(gains) / period
-    avg_loss = sum(losses) / period
-
-    # Wilder's smoothing for remaining periods
-    for change in changes[period:]:
-        gain = max(0, change)
-        loss = max(0, -change)
-
-        avg_gain = (avg_gain * (period - 1) + gain) / period
-        avg_loss = (avg_loss * (period - 1) + loss) / period
-
-    if avg_loss == 0:
-        return 100.0 if avg_gain > 0 else 50.0
-
-    rs = avg_gain / avg_loss
-    rsi = 100.0 - (100.0 / (1.0 + rs))
-
-    return rsi
+    result = _calculate_trade_flow_lib(trades, lookback)
+    return result.buy_volume, result.sell_volume, result.imbalance
 
 
-def calculate_atr(candles, period: int = 14) -> Optional[float]:
+def check_trade_flow_confirmation(
+    flow_imbalance: float,
+    side: str,
+    threshold: float = 0.1
+) -> Tuple[bool, str]:
     """
-    Calculate Average True Range.
+    Check if trade flow confirms the intended trade direction.
+
+    REC-003: Only enter when flow confirms direction to reduce adverse selection.
+
+    Uses ws_tester.indicators.check_trade_flow_confirmation with pre-calculated
+    imbalance for backward compatibility.
 
     Args:
-        candles: Tuple/list of candle objects with high, low, close
-        period: ATR period
+        flow_imbalance: Flow imbalance from calculate_trade_flow (-1 to +1)
+        side: Intended trade side ('buy' or 'sell')
+        threshold: Minimum imbalance to require confirmation (default 0.1)
 
     Returns:
-        ATR value or None if insufficient data
+        Tuple of (is_confirmed, reason)
     """
-    if len(candles) < period + 1:
-        return None
+    # Use library version with pre-calculated imbalance
+    direction = 'buy' if side == 'buy' else 'short'
+    is_confirmed, flow_data = _check_trade_flow_lib(flow_imbalance, direction, threshold)
 
-    true_ranges = []
-    for i in range(1, len(candles)):
-        high = candles[i].high
-        low = candles[i].low
-        prev_close = candles[i - 1].close
-
-        tr = max(
-            high - low,
-            abs(high - prev_close),
-            abs(low - prev_close)
-        )
-        true_ranges.append(tr)
-
-    if len(true_ranges) < period:
-        return None
-
-    # Simple average of recent true ranges
-    return sum(true_ranges[-period:]) / period
-
-
-def calculate_adx(candles, period: int = 14) -> Optional[float]:
-    """
-    Calculate Average Directional Index for trend strength.
-
-    ADX measures trend strength (not direction):
-    - ADX < 20: Weak trend / ranging
-    - ADX 20-25: Trend developing
-    - ADX 25-50: Strong trend
-    - ADX > 50: Very strong trend
-
-    Args:
-        candles: Tuple/list of candle objects
-        period: ADX period
-
-    Returns:
-        ADX value (0-100) or None if insufficient data
-    """
-    if len(candles) < period * 2:
-        return None
-
-    # Calculate True Range, +DM, -DM
-    true_ranges = []
-    plus_dm = []
-    minus_dm = []
-
-    for i in range(1, len(candles)):
-        high = candles[i].high
-        low = candles[i].low
-        prev_high = candles[i - 1].high
-        prev_low = candles[i - 1].low
-        prev_close = candles[i - 1].close
-
-        # True Range
-        tr = max(
-            high - low,
-            abs(high - prev_close),
-            abs(low - prev_close)
-        )
-        true_ranges.append(tr)
-
-        # Directional Movement
-        up_move = high - prev_high
-        down_move = prev_low - low
-
-        if up_move > down_move and up_move > 0:
-            plus_dm.append(up_move)
+    # Generate reason string for backward compatibility
+    if is_confirmed:
+        reason = f"flow_confirmed (imbalance={flow_imbalance:.2f})"
+    else:
+        if side == 'buy':
+            reason = f"flow_against_buy (imbalance={flow_imbalance:.2f})"
         else:
-            plus_dm.append(0)
+            reason = f"flow_against_sell (imbalance={flow_imbalance:.2f})"
 
-        if down_move > up_move and down_move > 0:
-            minus_dm.append(down_move)
-        else:
-            minus_dm.append(0)
+    return is_confirmed, reason
 
-    if len(true_ranges) < period:
-        return None
 
-    # Wilder's smoothing
-    def wilder_smooth(values: List[float], period: int) -> List[float]:
-        if len(values) < period:
-            return []
-        smoothed = [sum(values[:period]) / period]
-        for i in range(period, len(values)):
-            smoothed.append((smoothed[-1] * (period - 1) + values[i]) / period)
-        return smoothed
-
-    atr = wilder_smooth(true_ranges, period)
-    smooth_plus_dm = wilder_smooth(plus_dm, period)
-    smooth_minus_dm = wilder_smooth(minus_dm, period)
-
-    if not atr or not smooth_plus_dm or not smooth_minus_dm:
-        return None
-
-    # Calculate +DI and -DI
-    dx_values = []
-    for i in range(len(atr)):
-        if atr[i] == 0:
-            plus_di = 0
-            minus_di = 0
-        else:
-            plus_di = 100 * smooth_plus_dm[i] / atr[i]
-            minus_di = 100 * smooth_minus_dm[i] / atr[i]
-
-        # Calculate DX
-        di_sum = plus_di + minus_di
-        if di_sum == 0:
-            dx_values.append(0)
-        else:
-            dx_values.append(100 * abs(plus_di - minus_di) / di_sum)
-
-    if len(dx_values) < period:
-        return None
-
-    # Calculate ADX (smoothed DX)
-    adx_values = wilder_smooth(dx_values, period)
-
-    if not adx_values:
-        return None
-
-    return adx_values[-1]
+# Re-export for backward compatibility
+__all__ = [
+    # From centralized library (re-exported)
+    'calculate_rsi',
+    'calculate_atr',
+    'calculate_adx',
+    'calculate_volatility',
+    'calculate_volume_ratio',
+    'calculate_rolling_correlation',
+    # Wrapper functions
+    'calculate_trade_flow',
+    'check_trade_flow_confirmation',
+    # Strategy-specific functions
+    'get_adaptive_rsi_zones',
+    'classify_rsi_zone',
+    'calculate_rsi_confidence',
+    'calculate_position_size_multiplier',
+    'check_liquidity_threshold',
+    'calculate_grid_rr_ratio',
+]
 
 
 def get_adaptive_rsi_zones(
@@ -355,94 +276,6 @@ def calculate_position_size_multiplier(
         return 1.0
 
 
-def calculate_trade_flow(
-    trades: tuple,
-    lookback: int = 50
-) -> Tuple[float, float, float]:
-    """
-    Calculate trade flow metrics from recent trades.
-
-    REC-003: Trade flow confirmation to avoid entering against market momentum.
-
-    Args:
-        trades: Tuple of Trade objects with side, value attributes
-        lookback: Number of trades to analyze
-
-    Returns:
-        Tuple of (buy_volume, sell_volume, flow_imbalance)
-        flow_imbalance: -1 to +1 where positive = more buy volume
-    """
-    if not trades or len(trades) == 0:
-        return 0.0, 0.0, 0.0
-
-    recent_trades = trades[-lookback:] if len(trades) > lookback else trades
-
-    buy_volume = 0.0
-    sell_volume = 0.0
-
-    for trade in recent_trades:
-        # Handle both object and dict access
-        if hasattr(trade, 'side'):
-            side = trade.side
-            value = getattr(trade, 'value', getattr(trade, 'size', 0) * getattr(trade, 'price', 0))
-        else:
-            side = trade.get('side', '')
-            value = trade.get('value', trade.get('size', 0) * trade.get('price', 0))
-
-        if side == 'buy':
-            buy_volume += value
-        elif side == 'sell':
-            sell_volume += value
-
-    total_volume = buy_volume + sell_volume
-    if total_volume == 0:
-        return 0.0, 0.0, 0.0
-
-    # Flow imbalance: (buy - sell) / total, ranges from -1 to +1
-    flow_imbalance = (buy_volume - sell_volume) / total_volume
-
-    return buy_volume, sell_volume, flow_imbalance
-
-
-def calculate_volume_ratio(
-    candles,
-    lookback: int = 20
-) -> float:
-    """
-    Calculate current volume vs average volume ratio.
-
-    REC-003: Volume confirmation for trade entries.
-
-    Args:
-        candles: Tuple of candle objects with volume attribute
-        lookback: Number of candles for average calculation
-
-    Returns:
-        Volume ratio (current / average). >1 = above average, <1 = below average
-    """
-    if not candles or len(candles) < 2:
-        return 1.0
-
-    recent = candles[-lookback:] if len(candles) > lookback else candles
-
-    volumes = []
-    for candle in recent:
-        vol = getattr(candle, 'volume', 0)
-        if vol > 0:
-            volumes.append(vol)
-
-    if not volumes:
-        return 1.0
-
-    avg_volume = sum(volumes[:-1]) / len(volumes[:-1]) if len(volumes) > 1 else volumes[0]
-    current_volume = volumes[-1] if volumes else 0
-
-    if avg_volume == 0:
-        return 1.0
-
-    return current_volume / avg_volume
-
-
 def check_liquidity_threshold(
     volume_24h: float,
     min_volume_usd: float
@@ -468,103 +301,6 @@ def check_liquidity_threshold(
     else:
         ratio = volume_24h / min_volume_usd if min_volume_usd > 0 else 0
         return False, f"low_liquidity (ratio={ratio:.2f}x, need={min_volume_usd/1e6:.0f}M)"
-
-
-def calculate_rolling_correlation(
-    prices_a: List[float],
-    prices_b: List[float],
-    lookback: int = 20
-) -> Optional[float]:
-    """
-    Calculate rolling correlation between two price series.
-
-    REC-005: Real correlation monitoring for cross-pair exposure management.
-
-    Uses Pearson correlation coefficient on returns.
-
-    Args:
-        prices_a: List of prices for first symbol
-        prices_b: List of prices for second symbol
-        lookback: Number of periods for correlation calculation
-
-    Returns:
-        Correlation coefficient (-1 to +1) or None if insufficient data
-    """
-    if len(prices_a) < lookback + 1 or len(prices_b) < lookback + 1:
-        return None
-
-    # Use last N prices
-    a = prices_a[-(lookback + 1):]
-    b = prices_b[-(lookback + 1):]
-
-    # Calculate returns
-    returns_a = [(a[i] - a[i-1]) / a[i-1] for i in range(1, len(a)) if a[i-1] != 0]
-    returns_b = [(b[i] - b[i-1]) / b[i-1] for i in range(1, len(b)) if b[i-1] != 0]
-
-    if len(returns_a) < 2 or len(returns_b) < 2:
-        return None
-
-    # Ensure same length
-    min_len = min(len(returns_a), len(returns_b))
-    returns_a = returns_a[-min_len:]
-    returns_b = returns_b[-min_len:]
-
-    # Calculate means
-    mean_a = sum(returns_a) / len(returns_a)
-    mean_b = sum(returns_b) / len(returns_b)
-
-    # Calculate covariance and standard deviations
-    covariance = sum((ra - mean_a) * (rb - mean_b) for ra, rb in zip(returns_a, returns_b)) / len(returns_a)
-    variance_a = sum((r - mean_a) ** 2 for r in returns_a) / len(returns_a)
-    variance_b = sum((r - mean_b) ** 2 for r in returns_b) / len(returns_b)
-
-    std_a = variance_a ** 0.5
-    std_b = variance_b ** 0.5
-
-    if std_a == 0 or std_b == 0:
-        return None
-
-    correlation = covariance / (std_a * std_b)
-
-    # Clamp to valid range
-    return max(-1.0, min(1.0, correlation))
-
-
-def check_trade_flow_confirmation(
-    flow_imbalance: float,
-    side: str,
-    threshold: float = 0.1
-) -> Tuple[bool, str]:
-    """
-    Check if trade flow confirms the intended trade direction.
-
-    REC-003: Only enter when flow confirms direction to reduce adverse selection.
-
-    Args:
-        flow_imbalance: Flow imbalance from calculate_trade_flow (-1 to +1)
-        side: Intended trade side ('buy' or 'sell')
-        threshold: Minimum imbalance to require confirmation (default 0.1)
-
-    Returns:
-        Tuple of (is_confirmed, reason)
-    """
-    # For buys, we want positive or neutral flow (not heavily selling)
-    # For sells, we want negative or neutral flow (not heavily buying)
-
-    if side == 'buy':
-        if flow_imbalance >= -threshold:
-            # Flow is neutral or buying - confirmed
-            return True, f"flow_confirmed (imbalance={flow_imbalance:.2f})"
-        else:
-            # Heavy selling - not confirmed
-            return False, f"flow_against_buy (imbalance={flow_imbalance:.2f})"
-    else:  # sell
-        if flow_imbalance <= threshold:
-            # Flow is neutral or selling - confirmed
-            return True, f"flow_confirmed (imbalance={flow_imbalance:.2f})"
-        else:
-            # Heavy buying - not confirmed
-            return False, f"flow_against_sell (imbalance={flow_imbalance:.2f})"
 
 
 def calculate_grid_rr_ratio(
@@ -620,34 +356,3 @@ def calculate_grid_rr_ratio(
         desc = f"poor ({adjusted_rr:.2f}:1) - consider wider spacing or tighter stop"
 
     return adjusted_rr, desc
-
-
-def calculate_volatility(candles, lookback: int = 20) -> float:
-    """
-    Calculate price volatility from candle closes.
-
-    Returns volatility as a percentage (std dev of returns * 100).
-
-    Args:
-        candles: Tuple of candle objects with .close attribute
-        lookback: Number of candles for calculation
-
-    Returns:
-        Volatility percentage
-    """
-    if len(candles) < lookback + 1:
-        return 0.0
-
-    closes = [c.close for c in candles[-(lookback + 1):]]
-    if len(closes) < 2:
-        return 0.0
-
-    returns = [(closes[i] - closes[i - 1]) / closes[i - 1]
-               for i in range(1, len(closes)) if closes[i - 1] != 0]
-
-    if not returns:
-        return 0.0
-
-    mean_return = sum(returns) / len(returns)
-    variance = sum((r - mean_return) ** 2 for r in returns) / len(returns)
-    return (variance ** 0.5) * 100

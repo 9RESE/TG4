@@ -1,7 +1,10 @@
 """
 Mean Reversion Strategy - Indicator Calculations
 
-Contains pure functions for calculating technical indicators:
+Contains strategy-specific indicator functions for mean reversion analysis.
+Common indicators are imported from the centralized ws_tester.indicators library.
+
+Technical indicators:
 - Simple Moving Average (SMA)
 - Relative Strength Index (RSI)
 - Bollinger Bands
@@ -10,51 +13,39 @@ Contains pure functions for calculating technical indicators:
 """
 from typing import List, Tuple, Optional
 
+# Import common indicators from centralized library
+from ws_tester.indicators import (
+    calculate_sma as _calculate_sma_lib,
+    calculate_rsi as _calculate_rsi_lib,
+    calculate_bollinger_bands as _calculate_bollinger_bands_lib,
+    calculate_volatility,
+    calculate_trend_slope as _calculate_trend_slope_lib,
+    calculate_rolling_correlation,
+    calculate_adx,
+    BollingerResult,
+    TrendResult,
+)
+
 
 def calculate_sma(candles: List, period: int) -> float:
-    """Calculate simple moving average."""
-    if len(candles) < period:
-        return 0.0
-    closes = [c.close for c in candles[-period:]]
-    return sum(closes) / len(closes)
+    """
+    Calculate simple moving average.
+
+    Thin wrapper around ws_tester.indicators.calculate_sma that
+    returns 0.0 instead of None for backward compatibility.
+    """
+    result = _calculate_sma_lib(candles, period)
+    return result if result is not None else 0.0
 
 
 def calculate_rsi(candles: List, period: int = 14) -> float:
     """
-    Calculate RSI indicator.
+    Calculate RSI indicator using Wilder's smoothing.
 
-    LOW-007: Fixed edge case where index could go negative.
+    Thin wrapper around ws_tester.indicators.calculate_rsi.
+    Note: The library uses Wilder's smoothing (industry standard).
     """
-    if len(candles) < period + 1:
-        return 50.0  # Neutral
-
-    gains = []
-    losses = []
-
-    # LOW-007: Ensure we don't access negative indices
-    start_idx = max(1, len(candles) - period)
-    for i in range(start_idx, len(candles)):
-        change = candles[i].close - candles[i-1].close
-        if change > 0:
-            gains.append(change)
-            losses.append(0)
-        else:
-            gains.append(0)
-            losses.append(abs(change))
-
-    if not gains:
-        return 50.0  # Neutral if no data
-
-    avg_gain = sum(gains) / len(gains)
-    avg_loss = sum(losses) / len(losses)
-
-    if avg_loss == 0:
-        return 100.0
-
-    rs = avg_gain / avg_loss
-    rsi = 100 - (100 / (1 + rs))
-
-    return rsi
+    return _calculate_rsi_lib(candles, period)
 
 
 def calculate_bollinger_bands(
@@ -62,44 +53,14 @@ def calculate_bollinger_bands(
     period: int = 20,
     std_dev: float = 2.0
 ) -> Tuple[Optional[float], Optional[float], Optional[float]]:
-    """Calculate Bollinger Bands."""
-    if len(candles) < period:
-        return None, None, None
-
-    closes = [c.close for c in candles[-period:]]
-    sma = sum(closes) / len(closes)
-
-    variance = sum((c - sma) ** 2 for c in closes) / len(closes)
-    std = variance ** 0.5
-
-    upper = sma + (std_dev * std)
-    lower = sma - (std_dev * std)
-
-    return lower, sma, upper
-
-
-def calculate_volatility(candles: List, lookback: int = 20) -> float:
     """
-    Calculate price volatility from candle closes.
+    Calculate Bollinger Bands.
 
-    Returns volatility as a percentage (std dev of returns * 100).
+    Thin wrapper around ws_tester.indicators.calculate_bollinger_bands that
+    returns (lower, sma, upper) tuple for backward compatibility.
     """
-    if len(candles) < lookback + 1:
-        return 0.0
-
-    closes = [c.close for c in candles[-(lookback + 1):]]
-    if len(closes) < 2:
-        return 0.0
-
-    returns = [(closes[i] - closes[i - 1]) / closes[i - 1]
-               for i in range(1, len(closes)) if closes[i - 1] != 0]
-
-    if not returns:
-        return 0.0
-
-    mean_return = sum(returns) / len(returns)
-    variance = sum((r - mean_return) ** 2 for r in returns) / len(returns)
-    return (variance ** 0.5) * 100
+    result = _calculate_bollinger_bands_lib(candles, period, std_dev)
+    return result.lower, result.sma, result.upper
 
 
 def calculate_trend_slope(candles: List, period: int = 50) -> float:
@@ -108,32 +69,12 @@ def calculate_trend_slope(candles: List, period: int = 50) -> float:
 
     Returns slope as percentage change per candle.
     Positive = uptrend, Negative = downtrend, Near zero = ranging.
+
+    Thin wrapper around ws_tester.indicators.calculate_trend_slope
+    that returns just the slope_pct value for backward compatibility.
     """
-    if len(candles) < period:
-        return 0.0
-
-    closes = [c.close for c in candles[-period:]]
-    if len(closes) < 2:
-        return 0.0
-
-    # Calculate linear regression slope
-    n = len(closes)
-    sum_x = sum(range(n))
-    sum_y = sum(closes)
-    sum_xy = sum(i * closes[i] for i in range(n))
-    sum_x2 = sum(i * i for i in range(n))
-
-    denominator = n * sum_x2 - sum_x * sum_x
-    if denominator == 0:
-        return 0.0
-
-    slope = (n * sum_xy - sum_x * sum_y) / denominator
-
-    # Convert to percentage of average price
-    avg_price = sum_y / n if n > 0 else 1.0
-    slope_pct = (slope / avg_price) * 100 if avg_price > 0 else 0.0
-
-    return slope_pct
+    result = _calculate_trend_slope_lib(candles, period)
+    return result.slope_pct
 
 
 def calculate_correlation(
@@ -148,6 +89,9 @@ def calculate_correlation(
     Research shows XRP correlation with BTC declining (24.86% over 90 days),
     which affects ratio mean reversion timing.
 
+    Uses ws_tester.indicators.calculate_rolling_correlation with closes
+    extracted from candles.
+
     Args:
         xrp_candles: XRP/USDT candles
         btc_candles: BTC/USDT candles
@@ -159,152 +103,20 @@ def calculate_correlation(
     if len(xrp_candles) < lookback + 1 or len(btc_candles) < lookback + 1:
         return None
 
-    # Get returns for correlation calculation
-    xrp_closes = [c.close for c in xrp_candles[-(lookback + 1):]]
-    btc_closes = [c.close for c in btc_candles[-(lookback + 1):]]
+    # Extract closes for the library function
+    xrp_closes = [c.close for c in xrp_candles]
+    btc_closes = [c.close for c in btc_candles]
 
-    if len(xrp_closes) != len(btc_closes):
-        return None
-
-    # Calculate returns
-    xrp_returns = [(xrp_closes[i] - xrp_closes[i-1]) / xrp_closes[i-1]
-                   for i in range(1, len(xrp_closes)) if xrp_closes[i-1] != 0]
-    btc_returns = [(btc_closes[i] - btc_closes[i-1]) / btc_closes[i-1]
-                   for i in range(1, len(btc_closes)) if btc_closes[i-1] != 0]
-
-    if len(xrp_returns) < 2 or len(btc_returns) < 2:
-        return None
-
-    # Ensure same length
-    n = min(len(xrp_returns), len(btc_returns))
-    xrp_returns = xrp_returns[-n:]
-    btc_returns = btc_returns[-n:]
-
-    # Calculate Pearson correlation
-    mean_xrp = sum(xrp_returns) / n
-    mean_btc = sum(btc_returns) / n
-
-    # Covariance
-    covariance = sum((xrp_returns[i] - mean_xrp) * (btc_returns[i] - mean_btc)
-                     for i in range(n)) / n
-
-    # Standard deviations
-    std_xrp = (sum((r - mean_xrp) ** 2 for r in xrp_returns) / n) ** 0.5
-    std_btc = (sum((r - mean_btc) ** 2 for r in btc_returns) / n) ** 0.5
-
-    if std_xrp == 0 or std_btc == 0:
-        return None
-
-    correlation = covariance / (std_xrp * std_btc)
-
-    # Clamp to valid range
-    return max(-1.0, min(1.0, correlation))
+    return calculate_rolling_correlation(xrp_closes, btc_closes, lookback)
 
 
-def calculate_adx(candles: List, period: int = 14) -> Optional[float]:
-    """
-    Calculate Average Directional Index (ADX).
-
-    REC-003 (v4.3.0): Added for BTC trend strength filtering.
-    Research shows BTC exhibits stronger trending behavior than mean reversion.
-    ADX > 25 indicates strong trend, unsuitable for mean reversion.
-
-    Args:
-        candles: List of candles with high, low, close attributes
-        period: ADX period (default 14)
-
-    Returns:
-        ADX value (0-100), None if insufficient data
-    """
-    # Need 2*period + 1 candles for stable ADX
-    if len(candles) < 2 * period + 1:
-        return None
-
-    # Extract OHLC data
-    highs = [c.high for c in candles]
-    lows = [c.low for c in candles]
-    closes = [c.close for c in candles]
-
-    n = len(candles)
-
-    # Calculate True Range and Directional Movement
-    tr_list = []
-    plus_dm_list = []
-    minus_dm_list = []
-
-    for i in range(1, n):
-        high = highs[i]
-        low = lows[i]
-        prev_close = closes[i - 1]
-        prev_high = highs[i - 1]
-        prev_low = lows[i - 1]
-
-        # True Range: max of (high-low, |high-prev_close|, |low-prev_close|)
-        tr = max(high - low, abs(high - prev_close), abs(low - prev_close))
-        tr_list.append(tr)
-
-        # Directional Movement
-        up_move = high - prev_high
-        down_move = prev_low - low
-
-        plus_dm = up_move if up_move > down_move and up_move > 0 else 0
-        minus_dm = down_move if down_move > up_move and down_move > 0 else 0
-
-        plus_dm_list.append(plus_dm)
-        minus_dm_list.append(minus_dm)
-
-    if len(tr_list) < period:
-        return None
-
-    # Calculate smoothed values using Wilder's smoothing
-    def wilder_smooth(values: List[float], period: int) -> List[float]:
-        if len(values) < period:
-            return []
-        smoothed = [sum(values[:period])]
-        for i in range(period, len(values)):
-            smoothed.append(smoothed[-1] - (smoothed[-1] / period) + values[i])
-        return smoothed
-
-    smooth_tr = wilder_smooth(tr_list, period)
-    smooth_plus_dm = wilder_smooth(plus_dm_list, period)
-    smooth_minus_dm = wilder_smooth(minus_dm_list, period)
-
-    if not smooth_tr or len(smooth_tr) < period:
-        return None
-
-    # Calculate +DI and -DI
-    plus_di_list = []
-    minus_di_list = []
-    dx_list = []
-
-    for i in range(len(smooth_tr)):
-        if smooth_tr[i] == 0:
-            plus_di_list.append(0)
-            minus_di_list.append(0)
-            dx_list.append(0)
-            continue
-
-        plus_di = (smooth_plus_dm[i] / smooth_tr[i]) * 100
-        minus_di = (smooth_minus_dm[i] / smooth_tr[i]) * 100
-        plus_di_list.append(plus_di)
-        minus_di_list.append(minus_di)
-
-        # Calculate DX
-        di_sum = plus_di + minus_di
-        if di_sum == 0:
-            dx_list.append(0)
-        else:
-            dx = abs(plus_di - minus_di) / di_sum * 100
-            dx_list.append(dx)
-
-    if len(dx_list) < period:
-        return None
-
-    # Smooth DX to get ADX
-    smooth_dx = wilder_smooth(dx_list, period)
-    if not smooth_dx:
-        return None
-
-    # Return latest ADX value
-    adx = smooth_dx[-1] / period  # Normalize by period
-    return max(0.0, min(100.0, adx))
+# Re-export for backward compatibility
+__all__ = [
+    'calculate_sma',
+    'calculate_rsi',
+    'calculate_bollinger_bands',
+    'calculate_volatility',
+    'calculate_trend_slope',
+    'calculate_correlation',
+    'calculate_adx',
+]

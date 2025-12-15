@@ -301,28 +301,33 @@ def generate_signal(
         corr_lookback = config.get('correlation_lookback', 20)
         btc_history = state.get('btc_price_history', [])
 
-        if len(price_history) >= corr_lookback and len(btc_history) >= corr_lookback:
-            correlation = calculate_rolling_correlation(
+        # Note: calculate_rolling_correlation needs window+1 data points
+        if len(price_history) >= corr_lookback + 1 and len(btc_history) >= corr_lookback + 1:
+            corr_result = calculate_rolling_correlation(
                 price_history, btc_history, corr_lookback
             )
+            # Only use result if not None (can happen with zero std dev)
+            if corr_result is not None:
+                correlation = corr_result
 
-            # Store correlation history
+            # Store correlation history (only valid values)
             if 'correlation_history' not in state:
                 state['correlation_history'] = []
-            state['correlation_history'].append(correlation)
-            state['correlation_history'] = state['correlation_history'][-20:]  # Keep last 20
+            if corr_result is not None:
+                state['correlation_history'].append(correlation)
+                state['correlation_history'] = state['correlation_history'][-20:]  # Keep last 20
 
-            # Check correlation thresholds
+            # Check correlation thresholds (only if we have a valid correlation)
             warn_threshold = config.get('correlation_warning_threshold', 0.5)
             pause_threshold = config.get('correlation_pause_threshold', 0.3)
             pause_enabled = config.get('correlation_pause_enabled', False)
 
             # Warning if correlation is low
-            if correlation < warn_threshold:
+            if corr_result is not None and correlation < warn_threshold:
                 state['correlation_warnings'] = state.get('correlation_warnings', 0) + 1
 
             # Pause trading if enabled and correlation is very low
-            if pause_enabled and correlation < pause_threshold and correlation != 0.0:
+            if pause_enabled and corr_result is not None and correlation < pause_threshold and correlation != 0.0:
                 state['indicators'] = build_base_indicators(
                     symbol=symbol, status='correlation_pause', state=state, price=price
                 )

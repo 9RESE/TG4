@@ -1,8 +1,8 @@
 """
 WaveTrend Oscillator Strategy - Indicator Calculations
 
-Contains functions for calculating WaveTrend oscillator, EMA, SMA,
-zone classification, crossover detection, and divergence detection.
+Contains strategy-specific indicator functions for WaveTrend oscillator analysis.
+Common indicators are imported from the centralized ws_tester.indicators library.
 
 WaveTrend Formula (LazyBear):
 1. HLC3 = (High + Low + Close) / 3        # Typical Price
@@ -41,101 +41,66 @@ from typing import List, Dict, Any, Optional, Tuple
 
 from .config import WaveTrendZone, CrossoverType, DivergenceType
 
+# Import common indicators from centralized library
+from ws_tester.indicators import (
+    calculate_sma,
+    calculate_sma_series,
+    calculate_ema,
+    calculate_ema_series,
+    calculate_rolling_correlation,
+    calculate_trade_flow as _calculate_trade_flow_lib,
+    check_trade_flow_confirmation,
+    TradeFlowResult,
+)
 
-def calculate_ema(values: List[float], period: int) -> Optional[float]:
+
+def calculate_trade_flow(trades, lookback: int = 50) -> Dict[str, Any]:
     """
-    Calculate Exponential Moving Average.
+    Calculate buy/sell volume and imbalance from recent trades.
 
-    Formula:
-    Multiplier = 2 / (Period + 1)
-    EMA_today = (Value_today * Multiplier) + (EMA_yesterday * (1 - Multiplier))
+    This is a thin wrapper around ws_tester.indicators.calculate_trade_flow
+    that converts the TradeFlowResult NamedTuple to a dict for backward
+    compatibility with code that uses dict-style access.
 
     Args:
-        values: List of values (oldest first)
-        period: EMA period
+        trades: Tuple/list of trade objects with side and value attributes
+        lookback: Number of recent trades to analyze
 
     Returns:
-        EMA value or None if insufficient data
+        Dict with buy_volume, sell_volume, total_volume, imbalance, trade_count, valid
     """
-    if len(values) < period:
-        return None
-
-    # Initialize EMA with SMA for the first 'period' values
-    sma = sum(values[:period]) / period
-    multiplier = 2.0 / (period + 1)
-
-    ema = sma
-    for value in values[period:]:
-        ema = (value * multiplier) + (ema * (1 - multiplier))
-
-    return ema
+    result = _calculate_trade_flow_lib(trades, lookback)
+    return {
+        'buy_volume': result.buy_volume,
+        'sell_volume': result.sell_volume,
+        'total_volume': result.total_volume,
+        'imbalance': result.imbalance,
+        'trade_count': result.trade_count,
+        'valid': result.valid,
+    }
 
 
-def calculate_ema_series(values: List[float], period: int) -> List[float]:
-    """
-    Calculate EMA series for the entire value history.
-
-    Args:
-        values: List of values (oldest first)
-        period: EMA period
-
-    Returns:
-        List of EMA values
-    """
-    if len(values) < period:
-        return []
-
-    # Initialize EMA with SMA for the first 'period' values
-    sma = sum(values[:period]) / period
-    multiplier = 2.0 / (period + 1)
-
-    ema_series = [sma]
-    ema = sma
-
-    for value in values[period:]:
-        ema = (value * multiplier) + (ema * (1 - multiplier))
-        ema_series.append(ema)
-
-    return ema_series
-
-
-def calculate_sma(values: List[float], period: int) -> Optional[float]:
-    """
-    Calculate Simple Moving Average.
-
-    Args:
-        values: List of values (oldest first)
-        period: SMA period
-
-    Returns:
-        SMA value or None if insufficient data
-    """
-    if len(values) < period:
-        return None
-
-    return sum(values[-period:]) / period
-
-
-def calculate_sma_series(values: List[float], period: int) -> List[float]:
-    """
-    Calculate SMA series for the entire value history.
-
-    Args:
-        values: List of values (oldest first)
-        period: SMA period
-
-    Returns:
-        List of SMA values
-    """
-    if len(values) < period:
-        return []
-
-    sma_series = []
-    for i in range(period - 1, len(values)):
-        sma = sum(values[i - period + 1:i + 1]) / period
-        sma_series.append(sma)
-
-    return sma_series
+# Re-export for backward compatibility
+__all__ = [
+    # From centralized library (re-exported)
+    'calculate_sma',
+    'calculate_sma_series',
+    'calculate_ema',
+    'calculate_ema_series',
+    'calculate_rolling_correlation',
+    'calculate_trade_flow',
+    'check_trade_flow_confirmation',
+    # Strategy-specific functions
+    'calculate_wavetrend',
+    'classify_zone',
+    'get_zone_string',
+    'detect_crossover',
+    'detect_divergence',
+    'is_in_oversold_zone',
+    'is_in_overbought_zone',
+    'is_extreme_zone',
+    'calculate_confidence',
+]
 
 
 def calculate_wavetrend(
@@ -391,184 +356,6 @@ def is_in_overbought_zone(zone: WaveTrendZone) -> bool:
 def is_extreme_zone(zone: WaveTrendZone) -> bool:
     """Check if zone is extreme (either direction)."""
     return zone in (WaveTrendZone.EXTREME_OVERBOUGHT, WaveTrendZone.EXTREME_OVERSOLD)
-
-
-def calculate_rolling_correlation(
-    prices_a: List[float],
-    prices_b: List[float],
-    window: int = 20
-) -> Optional[float]:
-    """
-    Calculate Pearson correlation on price returns.
-
-    REC-002: Real-time rolling correlation for cross-pair exposure management.
-
-    Args:
-        prices_a: List of prices for asset A (oldest first)
-        prices_b: List of prices for asset B (oldest first)
-        window: Number of periods for correlation calculation
-
-    Returns:
-        Pearson correlation coefficient (-1 to +1) or None if insufficient data
-    """
-    if len(prices_a) < window + 1 or len(prices_b) < window + 1:
-        return None
-
-    # Calculate returns (percentage change)
-    returns_a = []
-    returns_b = []
-
-    for i in range(1, window + 1):
-        idx = -(window + 1 - i)
-        if prices_a[idx - 1] > 0:
-            returns_a.append((prices_a[idx] - prices_a[idx - 1]) / prices_a[idx - 1])
-        if prices_b[idx - 1] > 0:
-            returns_b.append((prices_b[idx] - prices_b[idx - 1]) / prices_b[idx - 1])
-
-    if len(returns_a) != len(returns_b) or len(returns_a) < window // 2:
-        return None
-
-    n = len(returns_a)
-
-    # Calculate means
-    mean_a = sum(returns_a) / n
-    mean_b = sum(returns_b) / n
-
-    # Calculate covariance and standard deviations
-    cov = 0.0
-    var_a = 0.0
-    var_b = 0.0
-
-    for i in range(n):
-        diff_a = returns_a[i] - mean_a
-        diff_b = returns_b[i] - mean_b
-        cov += diff_a * diff_b
-        var_a += diff_a ** 2
-        var_b += diff_b ** 2
-
-    # Avoid division by zero
-    if var_a < 1e-10 or var_b < 1e-10:
-        return None
-
-    std_a = (var_a / n) ** 0.5
-    std_b = (var_b / n) ** 0.5
-
-    if std_a < 1e-10 or std_b < 1e-10:
-        return None
-
-    correlation = (cov / n) / (std_a * std_b)
-
-    # Clamp to valid range
-    return max(-1.0, min(1.0, correlation))
-
-
-def calculate_trade_flow(trades, lookback: int = 50) -> Dict[str, Any]:
-    """
-    Calculate buy/sell volume and imbalance from recent trades.
-
-    REC-001: Trade Flow Confirmation
-    Analyzes market microstructure to validate signal direction.
-
-    Args:
-        trades: Tuple/list of trade objects with side and value attributes
-        lookback: Number of recent trades to analyze
-
-    Returns:
-        Dict with buy_volume, sell_volume, total_volume, imbalance, and trade_count
-    """
-    result = {
-        'buy_volume': 0.0,
-        'sell_volume': 0.0,
-        'total_volume': 0.0,
-        'imbalance': 0.0,  # Range: -1 (all sells) to +1 (all buys)
-        'trade_count': 0,
-        'valid': False,
-    }
-
-    if not trades or len(trades) == 0:
-        return result
-
-    # Get recent trades
-    recent_trades = trades[-lookback:] if len(trades) > lookback else trades
-    result['trade_count'] = len(recent_trades)
-
-    if result['trade_count'] < 5:  # Need minimum trades for meaningful analysis
-        return result
-
-    # Aggregate buy/sell volumes
-    for trade in recent_trades:
-        # Handle different trade object formats
-        if hasattr(trade, 'side'):
-            side = trade.side
-            value = getattr(trade, 'value', getattr(trade, 'size', 0) * getattr(trade, 'price', 1))
-        elif isinstance(trade, dict):
-            side = trade.get('side', '')
-            value = trade.get('value', trade.get('size', 0) * trade.get('price', 1))
-        else:
-            continue
-
-        if side == 'buy':
-            result['buy_volume'] += value
-        elif side == 'sell':
-            result['sell_volume'] += value
-
-    result['total_volume'] = result['buy_volume'] + result['sell_volume']
-
-    # Calculate imbalance: (buy - sell) / total
-    if result['total_volume'] > 0:
-        result['imbalance'] = (result['buy_volume'] - result['sell_volume']) / result['total_volume']
-        result['valid'] = True
-
-    return result
-
-
-def check_trade_flow_confirmation(
-    trades,
-    direction: str,
-    threshold: float = 0.10,
-    lookback: int = 50
-) -> Tuple[bool, Dict[str, Any]]:
-    """
-    Check if trade flow supports the signal direction.
-
-    REC-001: Trade Flow Confirmation
-    For long signals, we want positive imbalance (more buying)
-    For short signals, we want negative imbalance (more selling)
-
-    Args:
-        trades: Tuple/list of trade objects
-        direction: Signal direction ('buy' or 'short')
-        threshold: Minimum imbalance to confirm (0.10 = 10%)
-        lookback: Number of recent trades to analyze
-
-    Returns:
-        Tuple of (is_confirmed, flow_data)
-    """
-    flow_data = calculate_trade_flow(trades, lookback)
-
-    if not flow_data['valid']:
-        # If we can't calculate trade flow, don't block the signal
-        return True, flow_data
-
-    imbalance = flow_data['imbalance']
-
-    # For buy signals, we want positive imbalance (buying pressure)
-    if direction == 'buy':
-        # Confirmed if imbalance is not strongly negative
-        is_confirmed = imbalance >= -threshold
-        flow_data['confirms_signal'] = is_confirmed
-        flow_data['direction_wanted'] = 'positive (buy pressure)'
-    # For short signals, we want negative imbalance (selling pressure)
-    elif direction == 'short':
-        # Confirmed if imbalance is not strongly positive
-        is_confirmed = imbalance <= threshold
-        flow_data['confirms_signal'] = is_confirmed
-        flow_data['direction_wanted'] = 'negative (sell pressure)'
-    else:
-        is_confirmed = True  # Unknown direction, don't block
-        flow_data['confirms_signal'] = True
-
-    return is_confirmed, flow_data
 
 
 def calculate_confidence(
