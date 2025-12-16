@@ -4,12 +4,12 @@ WebSocket Paper Trading Tester
 Lightweight, strategy-focused paper trading with live WebSocket data.
 
 Usage:
-    python ws_tester.py                         # Run with default strategies
-    python ws_tester.py --duration 60           # Run for 60 minutes
-    python ws_tester.py --strategies mm,of      # Only specific strategies
-    python ws_tester.py --simulated             # Use simulated data
-    python ws_tester.py --no-dashboard          # Disable web dashboard
-    python ws_tester.py --config config.yaml    # Use specific config file
+    python paper_tester.py                         # Run with default strategies
+    python paper_tester.py --duration 60           # Run for 60 minutes
+    python paper_tester.py --strategies mm,of      # Only specific strategies
+    python paper_tester.py --simulated             # Use simulated data
+    python paper_tester.py --no-dashboard          # Disable web dashboard
+    python paper_tester.py --config config.yaml    # Use specific config file
 """
 
 import asyncio

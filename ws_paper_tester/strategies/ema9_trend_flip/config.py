@@ -96,13 +96,6 @@ CONFIG: Dict[str, Any] = {
     'use_circuit_breaker': True,
     'max_consecutive_losses': 3,        # Max losses before cooldown
     'circuit_breaker_minutes': 30,      # Cooldown after max losses
-
-    # ==========================================================================
-    # Database Warmup (Issue #8 - Historical Data Integration)
-    # ==========================================================================
-    'use_db_warmup': True,              # Use database for historical warmup
-    'warmup_candles_1h': 100,           # Number of 1H candles to fetch for warmup
-    'db_url': None,                     # Database URL (uses env var if None)
 }
 
 

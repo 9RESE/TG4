@@ -196,15 +196,20 @@ def _evaluate_symbol(
 
     # ==========================================================================
     # Get Candle Data
-    # WaveTrend is designed for hourly timeframes, but we use 5m candles
-    # as our longer timeframe data available in ws_paper_tester
+    # WaveTrend is designed for hourly timeframes - use pre-aggregated 1h candles
+    # when available (backtesting), fall back to 5m/1m for live trading
     # ==========================================================================
+    candles_1h = data.candles_1h.get(symbol, ()) if hasattr(data, 'candles_1h') else ()
     candles_5m = data.candles_5m.get(symbol, ())
     candles_1m = data.candles_1m.get(symbol, ())
 
-    # Use 5m candles for WaveTrend calculation (closer to hourly behavior)
-    # Fall back to 1m if 5m not available
-    candles = candles_5m if len(candles_5m) > 0 else candles_1m
+    # Prefer hourly candles (what WaveTrend was designed for), then 5m, then 1m
+    if len(candles_1h) > 0:
+        candles = candles_1h
+    elif len(candles_5m) > 0:
+        candles = candles_5m
+    else:
+        candles = candles_1m
 
     # Minimum candles required
     min_candles = config.get('min_candle_buffer', 50)
@@ -461,8 +466,10 @@ def _evaluate_symbol(
                     track_rejection(state, RejectionReason.TRADE_FLOW_AGAINST, symbol)
             else:
                 # REC-002: Check real-time correlation with existing positions
+                # Prefer hourly candles when available (backtesting)
                 candles_by_symbol = {
-                    sym: data.candles_5m.get(sym, data.candles_1m.get(sym, ()))
+                    sym: (data.candles_1h.get(sym, ()) if hasattr(data, 'candles_1h') and data.candles_1h.get(sym) else
+                          data.candles_5m.get(sym, data.candles_1m.get(sym, ())))
                     for sym in SYMBOLS
                 }
                 corr_allowed, corr_adj, corr_info = check_real_correlation(
@@ -550,8 +557,10 @@ def _evaluate_symbol(
                     track_rejection(state, RejectionReason.TRADE_FLOW_AGAINST, symbol)
             else:
                 # REC-002: Check real-time correlation with existing positions
+                # Prefer hourly candles when available (backtesting)
                 candles_by_symbol = {
-                    sym: data.candles_5m.get(sym, data.candles_1m.get(sym, ()))
+                    sym: (data.candles_1h.get(sym, ()) if hasattr(data, 'candles_1h') and data.candles_1h.get(sym) else
+                          data.candles_5m.get(sym, data.candles_1m.get(sym, ())))
                     for sym in SYMBOLS
                 }
                 corr_allowed, corr_adj, corr_info = check_real_correlation(

@@ -28,7 +28,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 # Import main tester (defer to avoid import errors if not fully set up)
 try:
-    from ws_tester import WebSocketPaperTester, load_config
+    from paper_tester import WebSocketPaperTester, load_config
     TESTER_AVAILABLE = True
 except ImportError as e:
     print(f"Warning: Could not import WebSocketPaperTester: {e}")
@@ -187,6 +187,41 @@ class HistoricalPaperTester:
                 simulated=self.simulated,
                 enable_dashboard=self.enable_dashboard,
             )
+
+            # =========================================
+            # PHASE 4b: Warm up strategies with historical data
+            # =========================================
+            if self.historical_provider and hasattr(self.tester, 'data_manager'):
+                try:
+                    logger.info("Loading historical candles for strategy warmup...")
+                    total_loaded = 0
+
+                    for symbol in self.symbols:
+                        # Load 1m candles (400 = MAX_CANDLES in DataManager)
+                        candles_1m = await self.historical_provider.get_latest_candles(
+                            symbol, interval_minutes=1, count=400
+                        )
+                        if candles_1m:
+                            loaded = await self.tester.data_manager.prefill_candles(
+                                candles_1m, interval_minutes=1
+                            )
+                            total_loaded += loaded
+                            logger.info(f"  {symbol}: Loaded {loaded} 1m candles")
+
+                        # Load 5m candles (400 = ~33 hours of data)
+                        candles_5m = await self.historical_provider.get_latest_candles(
+                            symbol, interval_minutes=5, count=400
+                        )
+                        if candles_5m:
+                            loaded = await self.tester.data_manager.prefill_candles(
+                                candles_5m, interval_minutes=5
+                            )
+                            total_loaded += loaded
+                            logger.info(f"  {symbol}: Loaded {loaded} 5m candles")
+
+                    logger.info(f"Strategy warmup complete: {total_loaded:,} total candles loaded")
+                except Exception as e:
+                    logger.warning(f"Historical warmup failed (continuing anyway): {e}")
 
             # Integrate DB writer with WebSocket client (if available)
             if self.db_writer and not self.simulated:

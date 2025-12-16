@@ -135,6 +135,10 @@ class DataSnapshot:
     # Market regime (optional, populated by RegimeDetector)
     regime: Optional['RegimeSnapshot'] = None
 
+    # Higher timeframe candles (optional - loaded from pre-aggregated tables)
+    candles_1h: Dict[str, Tuple[Candle, ...]] = field(default_factory=dict)  # Hourly candles
+    candles_1d: Dict[str, Tuple[Candle, ...]] = field(default_factory=dict)  # Daily candles
+
     @cached_property
     def spreads(self) -> Dict[str, float]:
         """Get spreads for all symbols."""

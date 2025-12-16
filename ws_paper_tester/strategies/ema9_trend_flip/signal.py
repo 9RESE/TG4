@@ -198,22 +198,31 @@ def _evaluate_symbol(
         return None
 
     # ==========================================================================
-    # Get 1-Minute Candles
-    # ==========================================================================
-    candles_1m = data.candles_1m.get(symbol, ())
-    if not candles_1m:
-        state['indicators'] = build_indicators(
-            symbol=symbol,
-            status='no_candle_data',
-            state=state
-        )
-        return None
-
-    # ==========================================================================
-    # Build Hourly Candles
+    # Get Candle Data
     # ==========================================================================
     timeframe_minutes = config.get('candle_timeframe_minutes', 60)
-    hourly_candles = build_hourly_candles(candles_1m, timeframe_minutes)
+
+    # Use pre-aggregated hourly candles if available (PERF: ~60x faster)
+    # Fall back to building from 1m candles for live trading or if not available
+    if timeframe_minutes == 60 and hasattr(data, 'candles_1h') and data.candles_1h.get(symbol):
+        # Use pre-aggregated hourly candles from database
+        raw_candles = data.candles_1h.get(symbol, ())
+        hourly_candles = [
+            {'timestamp': c.timestamp, 'open': c.open, 'high': c.high,
+             'low': c.low, 'close': c.close, 'volume': c.volume}
+            for c in raw_candles
+        ]
+    else:
+        # Build hourly candles from 1m data (legacy path for live trading)
+        candles_1m = data.candles_1m.get(symbol, ())
+        if not candles_1m:
+            state['indicators'] = build_indicators(
+                symbol=symbol,
+                status='no_candle_data',
+                state=state
+            )
+            return None
+        hourly_candles = build_hourly_candles(candles_1m, timeframe_minutes)
 
     min_candles = config.get('min_candles_required', 15)
     if len(hourly_candles) < min_candles:

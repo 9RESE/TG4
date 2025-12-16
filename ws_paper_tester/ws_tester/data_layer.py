@@ -6,7 +6,7 @@ Handles WebSocket connections and market data management.
 import asyncio
 import json
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, List, Optional, Callable, Any, Tuple
 from collections import deque
 
@@ -160,7 +160,7 @@ class DataManager:
     - Provides thread-safe snapshots via copy
     """
 
-    MAX_CANDLES = 100  # Keep last 100 candles per timeframe
+    MAX_CANDLES = 400  # Keep last 400 candles per timeframe (supports 300+ strategy warmup)
     MAX_TRADES = 100   # Keep last 100 trades per symbol
 
     def __init__(self, symbols: List[str]):
@@ -226,7 +226,7 @@ class DataManager:
                 timestamp = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
             except (ValueError, AttributeError) as e:
                 # HIGH-007: Replace bare except with specific exceptions
-                timestamp = datetime.now()
+                timestamp = datetime.now(timezone.utc)
 
             trade_obj = Trade(
                 timestamp=timestamp,
@@ -365,7 +365,7 @@ class DataManager:
                 )
             except (ValueError, AttributeError, TypeError) as e:
                 # HIGH-007: Replace bare except with specific exceptions
-                timestamp = datetime.now()
+                timestamp = datetime.now(timezone.utc)
 
             candle_obj = Candle(
                 timestamp=timestamp,
@@ -533,7 +533,7 @@ class DataManager:
             candles_5m[symbol] = tuple(candle_deque)
 
         return DataSnapshot(
-            timestamp=datetime.now(),
+            timestamp=datetime.now(timezone.utc),
             prices=dict(self._prices),
             candles_1m=candles_1m,
             candles_5m=candles_5m,
@@ -573,7 +573,7 @@ class DataManager:
                 candles_5m[symbol] = tuple(candle_deque)
 
         return DataSnapshot(
-            timestamp=datetime.now(),
+            timestamp=datetime.now(timezone.utc),
             prices=dict(self._prices),
             candles_1m=candles_1m,
             candles_5m=candles_5m,
@@ -594,6 +594,51 @@ class DataManager:
         if self._last_update == 0:
             return True
         return (time.time() - self._last_update) > max_age_seconds
+
+    async def prefill_candles(
+        self,
+        historical_candles: List[Any],
+        interval_minutes: int = 1
+    ) -> int:
+        """
+        Pre-fill candle buffer with historical data for strategy warmup.
+
+        Args:
+            historical_candles: List of candles from HistoricalDataProvider
+                                (with Decimal fields that will be converted to float)
+            interval_minutes: 1 for 1m candles, 5 for 5m candles
+
+        Returns:
+            Number of candles loaded
+        """
+        if not historical_candles:
+            return 0
+
+        loaded = 0
+        async with self._candle_lock:
+            for candle in historical_candles:
+                symbol = candle.symbol
+                if symbol not in self.symbols:
+                    continue
+
+                # Convert from historical Candle (Decimal) to types.Candle (float)
+                candle_obj = Candle(
+                    timestamp=candle.timestamp,
+                    open=float(candle.open),
+                    high=float(candle.high),
+                    low=float(candle.low),
+                    close=float(candle.close),
+                    volume=float(candle.volume)
+                )
+
+                if interval_minutes == 1:
+                    self._candles_1m[symbol].append(candle_obj)
+                elif interval_minutes == 5:
+                    self._candles_5m[symbol].append(candle_obj)
+
+                loaded += 1
+
+        return loaded
 
 
 class SimulatedDataManager(DataManager):
@@ -652,7 +697,7 @@ class SimulatedDataManager(DataManager):
             # Generate simulated trade
             side = 'buy' if change > 0 else 'sell'
             trade = Trade(
-                timestamp=datetime.now(),
+                timestamp=datetime.now(timezone.utc),
                 price=new_price,
                 size=random.uniform(10, 100),
                 side=side

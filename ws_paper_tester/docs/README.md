@@ -1,9 +1,9 @@
 # WebSocket Paper Tester Documentation
 
-**Version:** 1.15.1
-**Last Updated:** 2025-12-15
+**Version:** 1.17.0
+**Last Updated:** 2025-12-16
 
-Welcome to the WebSocket Paper Tester documentation. This system provides real-time paper trading with Kraken WebSocket data and comprehensive strategy backtesting capabilities.
+Welcome to the WebSocket Paper Tester documentation. This system provides real-time paper trading with Kraken WebSocket data, comprehensive historical backtesting, and automated strategy parameter optimization.
 
 ---
 
@@ -29,6 +29,7 @@ Located in `development/features/`:
 
 | Strategy | Latest Version |
 |----------|---------------|
+| [EMA-9 Trend Flip](development/features/ema9_trend_flip/) | v1.0 |
 | [Mean Reversion](development/features/mean_reversion/) | v4.2 |
 | [Market Making](development/features/market_maker/) | v2.2 |
 | [Order Flow](development/features/order_flow/) | v5.0 |
@@ -42,6 +43,8 @@ Located in `development/features/`:
 
 | Component | Documentation |
 |-----------|---------------|
+| [Backtest Runner](development/features/backtesting/backtest-runner-v1.0.md) | Historical backtesting framework |
+| [Optimization System](development/features/optimization/optimization-system-v1.0.md) | Automated parameter tuning |
 | [Indicator Library](development/features/indicators/indicator-library-v1.0.md) | Centralized indicator functions |
 | [Regime Detection](development/features/regime_detection/regime-detection-v1.0.md) | Market regime classification |
 | [Historical Data](development/features/historical-data-system/historical-data-system-v1.0.md) | TimescaleDB data storage |
@@ -57,16 +60,24 @@ Located in `development/features/`:
 - **Leveraged positions** (longs up to 1.5x, shorts up to 2x)
 - **Margin call liquidation** (25% maintenance margin)
 
+### Backtesting & Optimization
+- **Historical backtesting** with 4+ years of data
+- Pre-aggregated candle tables (1m, 5m, 1h, 1d) for performance
+- **Parameter optimization** with grid search
+- Parallel execution support (8+ workers)
+- Detailed metrics: P&L, win rate, Sharpe, profit factor, drawdown
+- JSON export for analysis
+
 ### Strategy Framework
-- Auto-discovery of strategy modules
+- Auto-discovery of strategy modules (9 strategies)
 - Per-strategy isolated portfolios
 - Lifecycle callbacks (`on_start`, `on_fill`, `on_stop`)
 - Signal rejection tracking
 - Circuit breaker protection
 
 ### Data Infrastructure
-- TimescaleDB historical data storage
-- Multi-timeframe candle aggregation
+- TimescaleDB historical data storage (4M+ candles)
+- Multi-timeframe candle aggregation (automatic)
 - Gap detection and filling
 - External indicators (Fear & Greed, BTC Dominance)
 
@@ -85,13 +96,20 @@ Located in `development/features/`:
 pip install -r requirements.txt
 
 # 2. Run with simulated data (quick test)
-python ws_tester.py --duration 5 --simulated
+python paper_tester.py --duration 5 --simulated
 
 # 3. Run with live Kraken data
-python ws_tester.py --duration 60
+python paper_tester.py --duration 60
 
 # 4. View dashboard
 # Open http://127.0.0.1:8787 in browser
+
+# 5. Run historical backtest
+python backtest_runner.py --period 3m --strategies ema9_trend_flip
+
+# 6. Optimize strategy parameters
+cd optimization
+python optimize_ema9.py --symbol BTC/USDT --period 3m --quick
 ```
 
 See [Configure Paper Tester](user/how-to/configure-paper-tester.md) for detailed configuration.
@@ -134,6 +152,9 @@ docs/
     ├── strategy-development-guide.md   # Main dev guide
     ├── features/                       # Feature documentation
     │   ├── README.md                   # Version index
+    │   ├── backtesting/                # Backtest runner
+    │   ├── optimization/               # Parameter optimization
+    │   ├── ema9_trend_flip/            # EMA-9 strategy
     │   ├── mean_reversion/
     │   ├── market_maker/
     │   ├── order_flow/
@@ -147,6 +168,7 @@ docs/
     │   └── historical-data-system/
     ├── review/                         # Strategy reviews
     └── plans/                          # Design documents
+        └── ml-v1/                      # ML integration plans
 ```
 
 ---
@@ -157,4 +179,4 @@ See [CHANGELOG.md](../CHANGELOG.md) for version history and release notes.
 
 ---
 
-*WebSocket Paper Tester v1.15.1*
+*WebSocket Paper Tester v1.17.0*

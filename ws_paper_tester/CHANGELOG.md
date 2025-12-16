@@ -5,6 +5,86 @@ All notable changes to the WebSocket Paper Tester will be documented in this fil
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.17.0] - 2025-12-16
+
+### Added
+- **Pre-Aggregated Candle Tables Integration** - Significant performance improvement for backtesting
+  - `DataSnapshot` extended with `candles_1h` and `candles_1d` fields for hourly/daily candles
+  - Backtest runner now loads candles directly from pre-aggregated database tables:
+    - `candles` (1m): 4M+ rows
+    - `candles_5m`: 1.5M+ rows
+    - `candles_1h`: 178K+ rows
+    - `candles_1d`: 7.6K+ rows
+  - ~60x faster indicator calculation for hourly strategies (no on-the-fly candle building)
+
+- **Comprehensive Backtest Runner** (`backtest_runner.py`)
+  - Full backtesting framework with historical data replay
+  - Multi-strategy support with strategy auto-discovery
+  - Detailed performance metrics: P&L, win rate, Sharpe ratio, profit factor, max drawdown
+  - Per-symbol breakdown and trade logging
+  - Equity curve tracking and results export to JSON
+  - Configurable warmup periods, fee rates, and slippage
+
+- **Strategy Parameter Optimization System** (`optimization/`)
+  - `base_optimizer.py`: Base class with parallel execution support
+  - Individual optimizers for all 9 strategies:
+    - `optimize_ema9.py`, `optimize_wavetrend.py`, `optimize_momentum.py`
+    - `optimize_mean_reversion.py`, `optimize_grid_rsi.py`
+    - `optimize_whale_sentiment.py`, `optimize_order_flow.py`
+    - `optimize_market_making.py`, `optimize_ratio_trading.py`
+  - `run_optimization.py`: Batch optimization runner for multiple strategies
+  - Features: parameter grid search, focused optimization modes, parallel workers
+  - Results saved to JSON with best parameters by P&L and win rate
+
+- **ML Integration Foundation** (`ml/`)
+  - LSTM model architecture for price prediction
+  - GPU-accelerated training support (ROCm/CUDA)
+  - Feature engineering pipeline from OHLCV data
+  - Model training and evaluation scripts
+
+### Fixed
+- **CRITICAL: P&L Calculation** - Fixed $0.00 P&L showing for all trades
+  - Root cause: Exit signals set `signal.price` to exit price, but backtest used it as entry price
+  - Fix: Now uses `signal.metadata['entry_price']` for accurate P&L calculation
+
+- **CRITICAL: USD Size Detection** - Fixed trades being rejected due to "insufficient capital"
+  - Root cause: `signal.size` is in USD (e.g., $50), but was multiplied by price ($50 × $87,000 = $4.35M)
+  - Fix: Detects USD-based sizing when `size <= 1000 && price > 100`, converts to base asset quantity
+
+- **Short Position Handling** - Added proper support for `short` and `cover` actions
+  - Short entry: Reserves margin, tracks position in `{asset}_short`
+  - Cover exit: Calculates short P&L (profit when price goes down)
+  - Entry price tracking via `portfolio.short_entries` dict
+
+- **Warmup Period** - Increased from 400 to 2000 for hourly strategies
+  - EMA-9 on 1H needs 15+ hourly candles = 900+ 1-minute candles minimum
+
+### Changed
+- **EMA-9 Trend Flip Strategy** - Now uses pre-aggregated hourly candles
+  - Uses `data.candles_1h` when available (backtesting)
+  - Falls back to building from 1m candles (live trading)
+  - Significant performance improvement in backtests
+
+- **WaveTrend Oscillator Strategy** - Now uses pre-aggregated hourly candles
+  - Strategy was designed for hourly timeframes but used 5m as workaround
+  - Now properly uses `data.candles_1h` for intended behavior
+  - Falls back to 5m/1m for live trading compatibility
+
+- **Historical Data Provider** - Already had interval routing via `INTERVAL_VIEWS`
+  - Routes to appropriate pre-aggregated table based on interval
+  - 1m → `candles`, 5m → `candles_5m`, 60m → `candles_1h`, 1440m → `candles_1d`
+
+### Documentation
+- `docs/development/plans/ml-v1/`: ML integration planning documents
+  - `00-overview.md`: System analysis and ML opportunity assessment
+  - `01-system-analysis.md` through `07-model-catalog.md`: Detailed implementation plans
+
+### Technical Details
+- Backtest execution: Iterates through 1-minute candles, updates higher timeframe windows
+- Pre-aggregated candles loaded in parallel for all symbols at startup
+- Window sizes: 1m/5m (2000 candles), 1h (500 candles), 1d (365 candles)
+- Trade execution with 0.05% slippage and 0.1% fee rate (configurable)
+
 ## [1.16.1] - 2025-12-15
 
 ### Fixed

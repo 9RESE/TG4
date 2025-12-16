@@ -464,17 +464,28 @@ class KrakenTradesBackfill:
             )
 
     async def get_resume_point(self, symbol: str) -> int:
-        """Get the point to resume backfill from."""
+        """Get the point to resume backfill from.
+
+        Uses the actual latest trade timestamp from the trades table,
+        converted to nanoseconds for the Kraken API 'since' parameter.
+        """
         async with self.pool.acquire() as conn:
+            # Get the latest trade timestamp directly from trades table
             row = await conn.fetchrow(
                 """
-                SELECT last_kraken_since
-                FROM data_sync_status
-                WHERE symbol = $1 AND data_type = 'trades'
+                SELECT MAX(timestamp) as latest_timestamp
+                FROM trades
+                WHERE symbol = $1
                 """,
                 symbol
             )
-            return row['last_kraken_since'] if row and row['last_kraken_since'] else 0
+            if row and row['latest_timestamp']:
+                # Convert to nanoseconds for Kraken API
+                latest_ts = row['latest_timestamp'].timestamp()
+                since_ns = int(latest_ts * 1_000_000_000)
+                logger.info(f"{symbol}: Resuming from {row['latest_timestamp']} (since={since_ns})")
+                return since_ns
+            return 0
 
 
 async def main():
