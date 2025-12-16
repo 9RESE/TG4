@@ -22,7 +22,12 @@ import csv
 
 
 def load_all_reports(results_dir: str) -> List[Dict[str, Any]]:
-    """Load all JSON report files from the results directory."""
+    """Load all JSON report files from the results directory.
+
+    Supports both old flat structure and new nested structure:
+    - Old: optimization_results/strategy_symbol_timestamp_report.json
+    - New: optimization_results/strategy/symbol_timestamp/report.json
+    """
     reports = []
     results_path = Path(results_dir)
 
@@ -30,6 +35,18 @@ def load_all_reports(results_dir: str) -> List[Dict[str, Any]]:
         print(f"Results directory not found: {results_dir}")
         return []
 
+    # Search recursively for report.json files (new structure)
+    for report_file in results_path.glob("**/report.json"):
+        try:
+            with open(report_file) as f:
+                data = json.load(f)
+                data['_file'] = str(report_file)
+                data['_run_dir'] = str(report_file.parent)
+                reports.append(data)
+        except Exception as e:
+            print(f"Error loading {report_file}: {e}")
+
+    # Also check for old-style *_report.json files (backward compatibility)
     for report_file in results_path.glob("*_report.json"):
         try:
             with open(report_file) as f:
@@ -43,10 +60,36 @@ def load_all_reports(results_dir: str) -> List[Dict[str, Any]]:
 
 
 def load_all_runs(results_dir: str) -> List[Dict[str, Any]]:
-    """Load all CSV run files and return as list of dicts."""
+    """Load all CSV run files and return as list of dicts.
+
+    Supports both old flat structure and new nested structure:
+    - Old: optimization_results/strategy_symbol_timestamp_runs.csv
+    - New: optimization_results/strategy/symbol_timestamp/runs.csv
+    """
     runs = []
     results_path = Path(results_dir)
 
+    # Search recursively for runs.csv files (new structure)
+    for csv_file in results_path.glob("**/runs.csv"):
+        try:
+            with open(csv_file) as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    row['_file'] = str(csv_file)
+                    row['_run_dir'] = str(csv_file.parent)
+                    # Convert numeric fields
+                    for key in ['total_pnl', 'total_pnl_pct', 'win_rate',
+                               'max_drawdown_pct', 'profit_factor', 'total_trades']:
+                        if key in row and row[key]:
+                            try:
+                                row[key] = float(row[key])
+                            except ValueError:
+                                pass
+                    runs.append(row)
+        except Exception as e:
+            print(f"Error loading {csv_file}: {e}")
+
+    # Also check for old-style *_runs.csv files (backward compatibility)
     for csv_file in results_path.glob("*_runs.csv"):
         try:
             with open(csv_file) as f:

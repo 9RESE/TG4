@@ -217,11 +217,20 @@ class BaseOptimizer(ABC):
     def __init__(self, config: OptimizationConfig):
         self.config = config
         self.results: List[RunResult] = []
-        self.output_path = Path(config.output_dir)
-        self.output_path.mkdir(parents=True, exist_ok=True)
 
         # Generate run timestamp
         self.run_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+        # Create organized folder structure:
+        # optimization_results/{strategy}/{symbol}_{timestamp}/
+        base_path = Path(config.output_dir)
+        symbol_safe = config.symbol.replace('/', '_')
+        self.output_path = base_path / config.strategy_name / f"{symbol_safe}_{self.run_timestamp}"
+        self.output_path.mkdir(parents=True, exist_ok=True)
+
+        # Also store the strategy folder path for aggregate reports
+        self.strategy_path = base_path / config.strategy_name
+        self.strategy_path.mkdir(parents=True, exist_ok=True)
 
     @abstractmethod
     def get_param_grid(self) -> Dict[str, List[Any]]:
@@ -482,7 +491,8 @@ class BaseOptimizer(ABC):
 
     def _save_run_result(self, result: RunResult):
         """Save individual run result to CSV (append mode)."""
-        csv_file = self.output_path / f"{self.config.strategy_name}_{self.config.symbol.replace('/', '_')}_{self.run_timestamp}_runs.csv"
+        # Simplified filename - path already contains strategy/symbol/timestamp
+        csv_file = self.output_path / "runs.csv"
 
         file_exists = csv_file.exists()
 
@@ -516,7 +526,8 @@ class BaseOptimizer(ABC):
 
     def _generate_report(self):
         """Generate final optimization report."""
-        report_file = self.output_path / f"{self.config.strategy_name}_{self.config.symbol.replace('/', '_')}_{self.run_timestamp}_report.json"
+        # Simplified filename - path already contains strategy/symbol/timestamp
+        report_file = self.output_path / "report.json"
 
         # Filter successful runs
         successful = [r for r in self.results if r.error is None and r.total_trades > 0]
