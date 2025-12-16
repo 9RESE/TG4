@@ -5,6 +5,79 @@ All notable changes to the WebSocket Paper Tester will be documented in this fil
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.16.0] - 2025-12-15
+
+### Added
+- **EMA-9 Trend Flip Strategy v1.0.0** - New trend-following strategy based on 9-period EMA
+  - Entry signals on price "flip" from one side of EMA to the other
+  - Build 1H candles from 1-minute data for longer timeframe analysis
+  - EMA-9 calculation on hourly candle open prices
+  - Consecutive candle confirmation (N candles on one side before flip)
+  - Buffer percentage (0.1%) to reduce whipsaw false signals
+  - Exit on opposing EMA flip, stop loss, take profit, or max hold time
+  - 2:1 risk-reward ratio (1% SL, 2% TP default)
+  - ATR-based stops option (1.5x ATR for SL, 3.0x ATR for TP)
+  - Time-based cooldown mechanisms (30min default, 60min after loss)
+  - Maximum hold time exit (72 hours default)
+  - BTC/USDT optimized per research analysis
+
+- **EMA-9 Package Structure**
+  - `strategies/ema9_trend_flip/` package with modular design:
+    - `config.py`: Strategy metadata, enums, CONFIG, SYMBOL_CONFIGS
+    - `indicators.py`: EMA calculation, candle aggregation, ATR
+    - `signal.py`: Main signal generation logic
+    - `exits.py`: Exit condition checks
+    - `risk.py`: Position limits, entry signal creation
+    - `lifecycle.py`: on_start, on_fill, on_stop callbacks
+  - `strategies/ema9_trend_flip.py`: Backward compatibility shim
+
+- **Test Suite**
+  - `tests/test_ema9_trend_flip.py`: 26 unit tests
+  - Tests for EMA calculation, candle building, position tracking
+  - Edge cases: insufficient data, position limits, cooldowns
+
+- **Documentation**
+  - `docs/development/features/ema9_trend_flip/ema9-trend-flip-v1.0.md`: Feature documentation
+  - `docs/development/plans/ema9/ema-9-strategy-analysis.md`: Research and analysis
+
+### Technical Details
+- Based on Option 3 (1H timeframe) from EMA-9 Strategy Analysis
+- Builds 1H candles by aggregating 60 consecutive 1-minute candles
+- EMA calculated on open prices (configurable to close)
+- Flip detection requires N consecutive candles (default: 3) on opposite side
+- Strategy Development Guide v2.0 compliant
+
+## [1.15.1] - 2025-12-15
+
+### Added
+- **Leveraged Long Positions** - Symmetric leverage support for long positions
+  - New `DEFAULT_MAX_LONG_LEVERAGE = 1.5` (conservative due to unlimited downside)
+  - New `max_long_leverage` parameter in `PaperExecutor.__init__`
+  - Modified `_execute_buy()` to allow buying up to `equity * max_long_leverage`
+  - USDT balance can now go negative (borrowed funds) for leveraged longs
+  - Config support via `execution.max_long_leverage` in config.yaml
+
+- **Margin Call Liquidation System**
+  - New `MAINTENANCE_MARGIN_RATIO = 0.25` (25% maintenance margin)
+  - New `_calculate_portfolio_equity()` helper for real-time equity calculation
+  - New `_check_margin_call()` detects when equity drops below maintenance threshold
+  - Enhanced `check_stops()` to check margin calls before regular stops
+  - Margin calls force-liquidate all positions with reason "MARGIN CALL"
+
+- **Leverage Test Suite** (`tests/test_executor.py`)
+  - `TestLeveragedPositions` class with 5 new tests
+  - Tests for leveraged execution, cap verification, 1x disabling, margin calls
+
+### Changed
+- Executor docstring updated to document leverage and margin features
+- All strategies using shorts now have access to symmetric leveraged longs
+
+### Documentation
+- `docs/user/how-to/configure-paper-tester.md`: Updated with leverage settings, margin docs
+- `docs/development/strategy-development-guide.md`: Added leveraged positions section
+- `docs/CODE_REVIEW_ISSUES.md`: Added v1.15.1 features section
+- `docs/README.md`: Created documentation entry point
+
 ## [1.15.0] - 2025-12-15
 
 ### Added

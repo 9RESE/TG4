@@ -31,6 +31,8 @@ data:
 execution:
   fee_rate: 0.001            # 0.1%
   slippage_rate: 0.0005      # 0.05%
+  max_short_leverage: 2.0    # Maximum leverage for short positions (2x default)
+  max_long_leverage: 1.5     # Maximum leverage for long positions (1.5x default, conservative)
 
 # Dashboard settings
 dashboard:

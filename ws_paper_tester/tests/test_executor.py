@@ -231,6 +231,139 @@ class TestPaperExecutor:
         assert portfolio.total_pnl > 0
 
 
+class TestLeveragedPositions:
+    """Tests for leveraged long and short positions."""
+
+    def test_leveraged_long_execution(self):
+        """Test that longs can exceed cash balance with leverage."""
+        pm = PortfolioManager(['test'])
+        # 1.5x leverage means $100 cash can buy $150 worth
+        executor = PaperExecutor(pm, max_long_leverage=1.5)
+        snapshot = create_test_snapshot(2.35)
+
+        # Try to buy $120 worth (exceeds $100 cash, but within 1.5x leverage)
+        signal = Signal(
+            action='buy',
+            symbol='XRP/USD',
+            size=120.0,
+            price=2.35,
+            reason='Leveraged buy'
+        )
+
+        fill = executor.execute(signal, 'test', snapshot)
+
+        assert fill is not None
+        portfolio = pm.get_portfolio('test')
+        # USDT should be negative (borrowed)
+        assert portfolio.usdt < 0
+        # Should have significant XRP holdings
+        assert portfolio.assets.get('XRP', 0) > 40  # ~$120 / $2.35 = ~51 XRP
+
+    def test_leveraged_long_capped_at_max(self):
+        """Test that leverage is capped at max_long_leverage."""
+        pm = PortfolioManager(['test'])
+        executor = PaperExecutor(pm, max_long_leverage=1.5)
+        snapshot = create_test_snapshot(2.35)
+
+        # Try to buy $200 worth (exceeds 1.5x of $100)
+        signal = Signal(
+            action='buy',
+            symbol='XRP/USD',
+            size=200.0,
+            price=2.35,
+            reason='Over-leveraged buy'
+        )
+
+        fill = executor.execute(signal, 'test', snapshot)
+
+        assert fill is not None
+        # Should be capped at ~$150 (1.5x of $100)
+        portfolio = pm.get_portfolio('test')
+        total_value = portfolio.assets.get('XRP', 0) * 2.35
+        assert total_value < 160  # Should be around $150, accounting for fees
+
+    def test_no_leverage_when_set_to_one(self):
+        """Test that setting leverage to 1.0 disables leveraged longs."""
+        pm = PortfolioManager(['test'])
+        # Disable fees to test pure leverage cap
+        executor = PaperExecutor(pm, max_long_leverage=1.0, fee_rate=0.0, slippage_rate=0.0)
+        snapshot = create_test_snapshot(2.35)
+
+        # Try to buy $120 worth
+        signal = Signal(
+            action='buy',
+            symbol='XRP/USD',
+            size=120.0,
+            price=2.35,
+            reason='Should be limited to cash'
+        )
+
+        fill = executor.execute(signal, 'test', snapshot)
+
+        assert fill is not None
+        portfolio = pm.get_portfolio('test')
+        # With 1x leverage and no fees, should use exactly all cash
+        # Position value should be capped at ~$100 (1x of equity)
+        position_value = portfolio.assets.get('XRP', 0) * 2.35
+        assert position_value <= 105  # Allow small tolerance
+        assert portfolio.usdt >= -1  # Near zero with no fees
+
+    def test_margin_call_liquidation(self):
+        """Test that margin call triggers liquidation."""
+        pm = PortfolioManager(['test'])
+        executor = PaperExecutor(pm, max_long_leverage=2.0, fee_rate=0.0, slippage_rate=0.0)
+        snapshot_entry = create_test_snapshot(2.35)
+
+        # Buy with 2x leverage ($200 worth on $100 equity)
+        signal = Signal(
+            action='buy',
+            symbol='XRP/USD',
+            size=180.0,  # ~1.8x leverage
+            price=2.35,
+            reason='Leveraged buy'
+        )
+
+        executor.execute(signal, 'test', snapshot_entry)
+
+        portfolio = pm.get_portfolio('test')
+        assert portfolio.usdt < 0  # Leveraged
+
+        # Price drops significantly (50% - should trigger margin call)
+        # With 25% maintenance margin and 1.8x leverage, a ~45% drop should liquidate
+        snapshot_crash = create_test_snapshot(1.30)
+        margin_signals = executor.check_stops(snapshot_crash)
+
+        # Should have a margin call liquidation signal
+        assert len(margin_signals) >= 1
+        margin_signal = margin_signals[0][1]
+        assert 'MARGIN CALL' in margin_signal.reason
+
+    def test_short_leverage_unchanged(self):
+        """Test that short leverage still works as before."""
+        pm = PortfolioManager(['test'])
+        executor = PaperExecutor(pm, max_short_leverage=2.0)
+        snapshot = create_test_snapshot(2.35)
+
+        # Short $150 worth (1.5x of $100 equity)
+        signal = Signal(
+            action='short',
+            symbol='XRP/USD',
+            size=150.0,
+            price=2.35,
+            reason='Leveraged short'
+        )
+
+        fill = executor.execute(signal, 'test', snapshot)
+
+        assert fill is not None
+        assert fill.side == 'short'
+        portfolio = pm.get_portfolio('test')
+        # Should have negative XRP (borrowed and sold)
+        assert portfolio.assets.get('XRP', 0) < 0
+        # Should have more USDT (from short sale proceeds)
+        assert portfolio.usdt > STARTING_CAPITAL
+
+
 class TestMultipleStrategies:
     def test_isolated_portfolios(self):
         pm = PortfolioManager(['strategy_a', 'strategy_b'])

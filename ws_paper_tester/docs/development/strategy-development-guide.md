@@ -1,8 +1,8 @@
 # Strategy Development Guide
 
-**Version:** 1.0
-**Target Platform:** WebSocket Paper Tester v1.0.2+
-**Supported Pairs:** XRP/USDTT, BTC/USDTT (Kraken)
+**Version:** 2.0
+**Target Platform:** WebSocket Paper Tester v1.15.0+
+**Supported Pairs:** XRP/USDT, BTC/USDT, XRP/BTC (Kraken)
 
 This guide provides comprehensive instructions for developing trading strategies that integrate seamlessly with the WebSocket Paper Tester platform.
 
@@ -271,6 +271,41 @@ Signal(
     stop_loss=2.55,      # Stop ABOVE entry for shorts
     take_profit=2.45,    # TP BELOW entry for shorts
 )
+```
+
+### Leveraged Positions
+
+The executor supports leveraged positions for both longs (up to 1.5x default) and shorts (up to 2x default). Leverage is applied automatically based on configuration.
+
+**How Leverage Works:**
+
+| Position | No Leverage | With Leverage |
+|----------|-------------|---------------|
+| Long | Limited to available USDT | Can exceed USDT (borrowed funds) |
+| Short | Limited to equity * leverage | Same |
+
+**Margin Calls:**
+When equity drops below 25% of total position value, the executor automatically liquidates all positions. This applies to both leveraged longs and shorts.
+
+```python
+# The executor will cap your position to max leverage
+Signal(
+    action='buy',
+    symbol='XRP/USDT',
+    size=200.0,  # Requested $200 on $100 equity with 1.5x leverage
+    price=2.35,
+    reason="High conviction entry",
+)
+# Actual fill will be capped to ~$150 (1.5x of equity)
+```
+
+**Check for Margin Call Exits:**
+```python
+def on_fill(fill: dict, state: dict) -> None:
+    """Handle margin call liquidations."""
+    if fill.get('trigger') == 'margin_call':
+        # Position was force-liquidated
+        state['margin_calls'] = state.get('margin_calls', 0) + 1
 ```
 
 ### Reason Field Best Practices
@@ -1245,6 +1280,6 @@ data.get_trade_imbalance('XRP/USDT', 50)  # float: Buy-sell imbalance
 
 ---
 
-**Document Version:** 1.0
-**Last Updated:** 2024
-**Platform Version:** WebSocket Paper Tester v1.0.2+
+**Document Version:** 2.0
+**Last Updated:** 2025-12-15
+**Platform Version:** WebSocket Paper Tester v1.15.0+

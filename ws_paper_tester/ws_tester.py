@@ -173,6 +173,7 @@ class WebSocketPaperTester:
         self.executor = PaperExecutor(
             self.portfolio_manager,
             max_short_leverage=executor_config.get('max_short_leverage', 2.0),
+            max_long_leverage=executor_config.get('max_long_leverage', 1.5),
             slippage_rate=executor_config.get('slippage_rate', 0.0005),
             fee_rate=executor_config.get('fee_rate', 0.001),
         )

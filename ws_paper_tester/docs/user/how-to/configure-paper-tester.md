@@ -37,27 +37,51 @@ data:
 
 Use `simulated` for testing without network connectivity.
 
-### Executor Settings
+### Execution Settings
 
 ```yaml
-executor:
+execution:
   fee_rate: 0.001            # 0.1% per trade
   slippage_rate: 0.0005      # 0.05% slippage simulation
-  max_short_leverage: 2.0    # Maximum short exposure relative to equity
+  max_short_leverage: 2.0    # Maximum short exposure relative to equity (2x default)
+  max_long_leverage: 1.5     # Maximum long exposure relative to equity (1.5x default)
 ```
 
 These parameters directly affect P&L calculations.
+
+#### Leverage and Margin
+
+The executor supports leveraged positions for both longs and shorts:
+
+| Position Type | Default Leverage | Behavior |
+|---------------|------------------|----------|
+| Long | 1.5x | USDT can go negative (borrowed funds) |
+| Short | 2.0x | Asset holdings go negative (borrowed to sell) |
+
+**Margin Calls**: When equity drops below 25% of total position value (maintenance margin), all positions are automatically liquidated. This applies to both leveraged longs and shorts.
+
+```yaml
+# Conservative settings (no leverage on longs)
+execution:
+  max_long_leverage: 1.0     # Cash-only longs
+  max_short_leverage: 2.0    # 2x shorts allowed
+
+# Aggressive settings
+execution:
+  max_long_leverage: 2.0     # 2x longs
+  max_short_leverage: 2.0    # 2x shorts
+```
 
 ### Dashboard
 
 ```yaml
 dashboard:
   enabled: true
-  host: 0.0.0.0
-  port: 8080
+  host: 127.0.0.1            # Localhost only (default, secure)
+  port: 8787                 # Dashboard port
 ```
 
-Set `enabled: false` to run without the web dashboard.
+Set `enabled: false` to run without the web dashboard. For network access, change `host: 0.0.0.0`.
 
 ### Logging
 
@@ -178,10 +202,12 @@ data:
 dashboard:
   enabled: true
   host: 127.0.0.1  # Localhost only
-executor:
-  fee_rate: 0.0026  # Match your actual exchange fees
+execution:
+  fee_rate: 0.0026         # Match your actual exchange fees
+  max_long_leverage: 1.5   # Moderate leverage
+  max_short_leverage: 2.0
 ```
 
 ---
 
-*Last Updated: 2025-12-13*
+*Last Updated: 2025-12-15*

@@ -1,8 +1,8 @@
 # WebSocket Paper Tester - Code Review Issues & Fixes
 
-**Review Date:** 2025-12-13
+**Review Date:** 2025-12-13 (Updated: 2025-12-15)
 **Reviewer:** Architecture Review
-**Version Reviewed:** 1.0.1
+**Version Reviewed:** 1.0.1 → 1.15.1
 **Status:** ✅ ALL RESOLVED (2025-12-13)
 
 ---
@@ -30,6 +30,45 @@ All 33 issues have been implemented and verified with 81 passing tests.
 
 ### Low Priority Issues (9/9 Fixed)
 - LOW-001 to LOW-009: All cleanup, optimization, and edge case fixes applied
+
+---
+
+## New Features (Session 2025-12-15)
+
+### Leveraged Long Positions
+
+**Location:** `ws_tester/executor.py`
+
+Previously, only short positions supported leverage (2x default). Long positions were limited to available USDT (cash-only).
+
+**Changes Applied:**
+- Added `DEFAULT_MAX_LONG_LEVERAGE = 1.5` constant
+- Added `max_long_leverage` parameter to `PaperExecutor.__init__`
+- Modified `_execute_buy()` to calculate max buying power as `equity * max_long_leverage`
+- USDT can now go negative for leveraged longs (borrowed funds)
+- Config file support via `execution.max_long_leverage`
+
+### Margin Call Liquidation
+
+**Location:** `ws_tester/executor.py`
+
+Added automatic liquidation when equity drops below maintenance margin.
+
+**Implementation:**
+- Added `MAINTENANCE_MARGIN_RATIO = 0.25` (25% maintenance margin)
+- New `_calculate_portfolio_equity()` helper method
+- New `_check_margin_call()` method detects when equity < position_value * 25%
+- Enhanced `check_stops()` to check margin calls before regular stop-loss/take-profit
+- Margin call signals include reason: "MARGIN CALL: equity below maintenance margin"
+
+### Test Coverage
+
+New test class `TestLeveragedPositions` in `tests/test_executor.py`:
+- `test_leveraged_long_execution` - Verifies leveraged longs work
+- `test_leveraged_long_capped_at_max` - Verifies cap at max leverage
+- `test_no_leverage_when_set_to_one` - Verifies 1x disables leverage
+- `test_margin_call_liquidation` - Verifies margin call triggers
+- `test_short_leverage_unchanged` - Verifies shorts still work
 
 ---
 

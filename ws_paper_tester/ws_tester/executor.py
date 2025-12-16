@@ -20,24 +20,29 @@ class PaperExecutor:
     - Fee calculation (configurable, default 0.1%)
     - Per-strategy position tracking
     - Auto stop-loss / take-profit
-    - Configurable short selling leverage limit
+    - Configurable short selling leverage limit (default 2x)
+    - Configurable long buying leverage limit (default 1.5x)
+    - Margin call liquidation for leveraged positions
     - Configurable slippage rate
     """
 
     DEFAULT_FEE_RATE = 0.001  # 0.1%
     DEFAULT_SLIPPAGE_RATE = 0.0005  # 0.05% slippage
     DEFAULT_MAX_SHORT_LEVERAGE = 2.0  # 2x leverage for shorts
+    DEFAULT_MAX_LONG_LEVERAGE = 1.5  # 1.5x leverage for longs (conservative due to unlimited downside)
 
     def __init__(
         self,
         portfolio_manager: PortfolioManager,
         max_short_leverage: float = None,
+        max_long_leverage: float = None,
         slippage_rate: float = None,
         fee_rate: float = None,
     ):
         self.portfolio_manager = portfolio_manager
         # Configurable execution parameters
         self.max_short_leverage = max_short_leverage if max_short_leverage is not None else self.DEFAULT_MAX_SHORT_LEVERAGE
+        self.max_long_leverage = max_long_leverage if max_long_leverage is not None else self.DEFAULT_MAX_LONG_LEVERAGE
         self.slippage_rate = slippage_rate if slippage_rate is not None else self.DEFAULT_SLIPPAGE_RATE
         self.fee_rate = fee_rate if fee_rate is not None else self.DEFAULT_FEE_RATE
 
@@ -121,19 +126,37 @@ class PaperExecutor:
         execution_price: float,
         timestamp: datetime
     ) -> Optional[Fill]:
-        """Execute a buy order."""
+        """Execute a buy order with optional leverage.
+
+        Leverage allows buying beyond available USDT up to equity * max_long_leverage.
+        When leveraged, USDT can go negative (representing borrowed funds).
+        Margin calls are checked in check_stops() and will liquidate if equity drops too low.
+        """
         cost = base_size * execution_price * (1 + self.fee_rate)
 
-        if portfolio.usdt < cost:
-            # Reduce size to available balance
-            available_for_trade = portfolio.usdt / (1 + self.fee_rate)
-            base_size = available_for_trade / execution_price
-            cost = portfolio.usdt
+        # Calculate max buying power with leverage
+        # Equity = USDT + value of all assets (can be negative if leveraged)
+        equity = portfolio.usdt
+        for asset, amount in portfolio.assets.items():
+            if amount > 0:  # Only count positive holdings
+                # Try to get price from signal if it's the same asset
+                if asset == base_asset:
+                    equity += amount * execution_price
+
+        max_buy_value = equity * self.max_long_leverage
+        requested_value = base_size * execution_price
+
+        # Cap to max leverage if needed
+        if requested_value > max_buy_value:
+            base_size = max_buy_value / execution_price
             if base_size <= 0:
                 return None
 
+        # Recalculate cost after potential size adjustment
+        cost = base_size * execution_price * (1 + self.fee_rate)
         fee = base_size * execution_price * self.fee_rate
 
+        # Deduct cost (USDT can go negative for leveraged positions)
         portfolio.usdt -= cost
         portfolio.assets[base_asset] = portfolio.assets.get(base_asset, 0) + base_size
 
@@ -412,12 +435,96 @@ class PaperExecutor:
             strategy=portfolio.strategy_name
         )
 
+    # Maintenance margin ratio - liquidate if equity drops below this % of position value
+    MAINTENANCE_MARGIN_RATIO = 0.25  # 25% maintenance margin
+
+    def _calculate_portfolio_equity(
+        self,
+        portfolio: StrategyPortfolio,
+        prices: dict
+    ) -> float:
+        """Calculate total portfolio equity at current prices."""
+        equity = portfolio.usdt  # Can be negative if leveraged
+
+        for asset, amount in portfolio.assets.items():
+            # Find price for this asset
+            for symbol, price in prices.items():
+                if symbol.startswith(asset + '/'):
+                    equity += amount * price  # amount can be negative for shorts
+                    break
+
+        return equity
+
+    def _check_margin_call(
+        self,
+        portfolio: StrategyPortfolio,
+        prices: dict
+    ) -> List[Tuple[str, float]]:
+        """
+        Check if portfolio is under margin call.
+
+        Returns list of (symbol, price) tuples for positions to liquidate.
+        Margin call triggers when equity < position_value * maintenance_margin.
+        """
+        liquidations = []
+
+        # Only check if we have borrowed funds (negative USDT) or short positions
+        has_leverage = portfolio.usdt < 0 or any(
+            amt < 0 for amt in portfolio.assets.values()
+        )
+        if not has_leverage:
+            return liquidations
+
+        equity = self._calculate_portfolio_equity(portfolio, prices)
+
+        # Calculate total position value (absolute value of all positions)
+        total_position_value = 0.0
+        for symbol, pos in portfolio.positions.items():
+            price = prices.get(symbol, 0)
+            if price:
+                total_position_value += pos.size * price
+
+        # Check maintenance margin requirement
+        required_margin = total_position_value * self.MAINTENANCE_MARGIN_RATIO
+
+        if equity < required_margin:
+            # Margin call! Liquidate all positions
+            for symbol, pos in portfolio.positions.items():
+                price = prices.get(symbol, 0)
+                if price:
+                    liquidations.append((symbol, price))
+
+        return liquidations
+
     def check_stops(self, data: DataSnapshot) -> List[Tuple[str, Signal]]:
-        """Check all strategy positions for stop-loss / take-profit."""
+        """Check all strategy positions for stop-loss / take-profit / margin calls."""
         signals = []
 
         for strategy, portfolio in self.portfolio_manager.portfolios.items():
+            # First check for margin calls (highest priority)
+            margin_liquidations = self._check_margin_call(portfolio, data.prices)
+            for symbol, price in margin_liquidations:
+                pos = portfolio.positions.get(symbol)
+                if not pos:
+                    continue
+
+                trigger_action = 'sell' if pos.side == 'long' else 'cover'
+                signals.append((strategy, Signal(
+                    action=trigger_action,
+                    symbol=symbol,
+                    size=pos.size * price,  # Close full position
+                    price=price,
+                    reason=f"MARGIN CALL: equity below maintenance margin at {price:.6f}",
+                    metadata={'trigger': 'margin_call', 'position_side': pos.side}
+                )))
+
+            # Skip regular stop checks for margin-called positions
+            margin_called_symbols = {s for s, _ in margin_liquidations}
+
             for symbol, pos in list(portfolio.positions.items()):
+                if symbol in margin_called_symbols:
+                    continue
+
                 price = data.prices.get(symbol, 0)
                 if not price:
                     continue
