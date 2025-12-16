@@ -106,6 +106,16 @@ CONFIG = {
 
     # Signal Tracking
     'track_rejections': True,
+
+    # Circuit Breaker (v1.0.1)
+    'use_circuit_breaker': True,        # Enable circuit breaker
+    'max_consecutive_losses': 3,        # Losses before cooldown
+    'circuit_breaker_minutes': 30,      # Cooldown duration
+
+    # Database Warmup (v1.0.1)
+    'use_db_warmup': True,              # Use database for historical warmup
+    'warmup_candles_1h': 100,           # Number of 1H candles to fetch
+    'db_url': None,                     # Database URL (uses env var if None)
 }
 ```
 
@@ -218,6 +228,7 @@ The strategy logs the following indicators in `state['indicators']`:
 | `max_position` | Maximum position limit reached |
 | `time_cooldown` | Cooldown period active |
 | `buffer_not_met` | Price within buffer zone |
+| `circuit_breaker` | Circuit breaker active after consecutive losses (v1.0.1) |
 
 ## Test Coverage
 
@@ -240,6 +251,36 @@ The strategy includes comprehensive unit tests (26 tests):
 - Strategy Development Guide: `ws_paper_tester/docs/development/strategy-development-guide.md`
 
 ## Version History
+
+### v1.0.1 (2025-12-15)
+**Code Review Fixes** - Alignment with strategy-development-guide.md and production strategies
+
+- **Issue #1 (CRITICAL)**: Complete `on_fill()` handler with per-symbol tracking
+  - Proper fill side handling (buy/sell/short/cover)
+  - Per-symbol position tracking (`position_by_symbol`, `pnl_by_symbol`)
+  - Bounded fill history (100 fills max)
+- **Issue #2 (HIGH)**: Config validation in `on_start()`
+  - Validates required fields, ranges, R:R ratio
+  - Logs warnings for issues
+- **Issue #3 (MEDIUM)**: Structured logging via Python logging module
+  - Uses `logging.getLogger(STRATEGY_NAME)` pattern
+  - Extra dict for structured data
+- **Issue #4 (MEDIUM)**: Complete state initialization
+  - All fields matching production strategies
+  - Per-symbol tracking dicts
+- **Issue #5 (LOW)**: Consistent indicator logging on all code paths
+  - `build_indicators()` helper function
+- **Issue #6 (LOW)**: Circuit breaker integration
+  - Stops trading after N consecutive losses
+  - Configurable cooldown period
+- **Issue #7 (LOW)**: `on_stop()` summary logging
+  - Per-symbol P&L and trade counts
+  - Win rate calculation
+  - Rejection summary
+- **Issue #8 (INFO)**: Database warmup integration
+  - Historical candle fetch from TimescaleDB
+  - Pre-calculated EMA values for faster startup
+  - Merge logic for warmup + realtime candles
 
 ### v1.0.0 (2025-12-15)
 - Initial implementation based on EMA-9 Strategy Analysis (Option 3)

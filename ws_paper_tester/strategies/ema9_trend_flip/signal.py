@@ -2,13 +2,19 @@
 EMA-9 Trend Flip Strategy - Signal Generation
 
 Main signal generation logic.
+
+Code Review Fixes Applied:
+- Issue #5: Improved indicator logging consistency
+- Issue #6: Circuit breaker integration
+- Issue #8: Database warmup integration
 """
+import logging
 from datetime import datetime
 from typing import Dict, Any, Optional
 
 from ws_tester.types import DataSnapshot, Signal
 
-from .config import SYMBOLS, RejectionReason
+from .config import STRATEGY_NAME, SYMBOLS, RejectionReason
 from .indicators import (
     calculate_ema_series, build_hourly_candles, calculate_atr,
     get_candle_position, check_consecutive_positions
@@ -17,20 +23,83 @@ from .exits import check_exit_conditions
 from .risk import create_entry_signal, track_rejection
 from .lifecycle import initialize_state
 
+# Configure logger
+logger = logging.getLogger(STRATEGY_NAME)
+
+
+def check_circuit_breaker(
+    state: Dict[str, Any],
+    current_time: datetime,
+    config: Dict[str, Any]
+) -> bool:
+    """
+    Check if circuit breaker is active.
+
+    Args:
+        state: Strategy state
+        current_time: Current timestamp
+        config: Strategy configuration
+
+    Returns:
+        True if circuit breaker is active (should not trade), False otherwise
+    """
+    if not config.get('use_circuit_breaker', True):
+        return False
+
+    circuit_breaker_time = state.get('circuit_breaker_time')
+    if circuit_breaker_time is None:
+        return False
+
+    cooldown_min = config.get('circuit_breaker_minutes', 30)
+    elapsed_min = (current_time - circuit_breaker_time).total_seconds() / 60
+
+    if elapsed_min < cooldown_min:
+        return True
+
+    # Circuit breaker expired, reset
+    state['circuit_breaker_time'] = None
+    state['consecutive_losses'] = 0
+    return False
+
 
 def build_indicators(
     symbol: str,
     status: str,
     state: Dict[str, Any],
+    candle_count: int = 0,
     **extra
 ) -> Dict[str, Any]:
-    """Build indicators dict for logging."""
+    """
+    Build indicators dict for logging.
+
+    Provides consistent structure for all indicator logging paths.
+
+    Args:
+        symbol: Trading symbol
+        status: Current status string
+        state: Strategy state
+        candle_count: Number of candles available
+        **extra: Additional indicator values
+
+    Returns:
+        Dict with all indicator values for logging
+    """
     indicators = {
         'symbol': symbol,
         'status': status,
+        'candle_count': candle_count,
+        # Position tracking
         'position_side': state.get('position_side'),
         'position_size': round(state.get('position', 0), 2),
+        'entry_price': round(state.get('entry_price', 0), 2),
+        # Trade stats
         'trade_count': state.get('trade_count', 0),
+        'win_count': state.get('win_count', 0),
+        'loss_count': state.get('loss_count', 0),
+        'total_pnl': round(state.get('total_pnl', 0), 4),
+        # Circuit breaker
+        'consecutive_losses': state.get('consecutive_losses', 0),
+        'circuit_breaker_active': state.get('circuit_breaker_time') is not None,
     }
     indicators.update(extra)
     return indicators
@@ -59,6 +128,29 @@ def generate_signal(
         initialize_state(state)
 
     current_time = data.timestamp
+    track_rejections = config.get('track_rejections', True)
+
+    # ==========================================================================
+    # Circuit Breaker Check (Issue #6)
+    # ==========================================================================
+    if check_circuit_breaker(state, current_time, config):
+        cooldown_min = config.get('circuit_breaker_minutes', 30)
+        elapsed = 0
+        if state.get('circuit_breaker_time'):
+            elapsed = (current_time - state['circuit_breaker_time']).total_seconds() / 60
+        remaining = cooldown_min - elapsed
+
+        state['indicators'] = build_indicators(
+            symbol='N/A',
+            status='circuit_breaker',
+            state=state,
+            candle_count=0,
+            circuit_breaker_remaining_min=round(remaining, 1),
+            max_consecutive_losses=config.get('max_consecutive_losses', 3),
+        )
+        if track_rejections:
+            track_rejection(state, RejectionReason.TIME_COOLDOWN, None)
+        return None
 
     # Process each symbol
     for symbol in SYMBOLS:

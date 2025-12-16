@@ -5,6 +5,46 @@ All notable changes to the WebSocket Paper Tester will be documented in this fil
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.16.1] - 2025-12-15
+
+### Fixed
+- **EMA-9 Trend Flip Strategy v1.0.1** - Code review fixes for production alignment
+  - **Issue #1 (CRITICAL)**: Complete `on_fill()` handler with per-symbol tracking
+    - Proper fill side handling (buy/sell/short/cover)
+    - Per-symbol position tracking (`position_by_symbol`, `pnl_by_symbol`)
+    - Bounded fill history (100 fills max)
+    - Circuit breaker trigger on consecutive losses
+  - **Issue #2 (HIGH)**: Config validation in `on_start()`
+    - Validates required fields and ranges
+    - R:R ratio validation with warnings
+    - Timeframe validation
+  - **Issue #3 (MEDIUM)**: Structured logging via Python logging module
+    - Uses `logging.getLogger(STRATEGY_NAME)` pattern
+    - Extra dict for structured data
+  - **Issue #4 (MEDIUM)**: Complete state initialization
+    - All fields matching production strategies (momentum_scalping)
+    - Per-symbol tracking dicts
+  - **Issue #5 (LOW)**: Consistent indicator logging on all code paths
+    - `build_indicators()` helper function
+  - **Issue #6 (LOW)**: Circuit breaker integration
+    - Stops trading after N consecutive losses (default: 3)
+    - Configurable cooldown period (default: 30 minutes)
+  - **Issue #7 (LOW)**: `on_stop()` summary logging
+    - Per-symbol P&L and trade counts
+    - Win rate calculation
+    - Rejection summary
+
+### Added
+- **Database Warmup Integration** (Issue #8) for EMA-9 strategy
+  - New `warmup.py` module with `fetch_warmup_candles()`, `initialize_warmup_state()`
+  - Historical candle fetch from TimescaleDB via `data.historical_provider`
+  - Pre-calculated EMA values for faster strategy initialization
+  - `merge_warmup_with_realtime()` for combining historical + live data
+  - Configuration: `use_db_warmup`, `warmup_candles_1h`, `db_url`
+- **New exports** in `strategies/ema9_trend_flip/__init__.py`
+  - `validate_config`, `check_circuit_breaker`
+  - Warmup functions: `fetch_warmup_candles`, `warmup_from_db_sync`, etc.
+
 ## [1.16.0] - 2025-12-15
 
 ### Added

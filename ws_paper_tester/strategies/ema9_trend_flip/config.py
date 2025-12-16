@@ -36,6 +36,7 @@ class RejectionReason(Enum):
     MAX_POSITION = "max_position"
     TIME_COOLDOWN = "time_cooldown"
     BUFFER_NOT_MET = "buffer_not_met"
+    CIRCUIT_BREAKER = "circuit_breaker"  # Issue #6: Circuit breaker active
 
 
 # =============================================================================
@@ -88,6 +89,20 @@ CONFIG: Dict[str, Any] = {
     # Signal Tracking
     # ==========================================================================
     'track_rejections': True,
+
+    # ==========================================================================
+    # Circuit Breaker
+    # ==========================================================================
+    'use_circuit_breaker': True,
+    'max_consecutive_losses': 3,        # Max losses before cooldown
+    'circuit_breaker_minutes': 30,      # Cooldown after max losses
+
+    # ==========================================================================
+    # Database Warmup (Issue #8 - Historical Data Integration)
+    # ==========================================================================
+    'use_db_warmup': True,              # Use database for historical warmup
+    'warmup_candles_1h': 100,           # Number of 1H candles to fetch for warmup
+    'db_url': None,                     # Database URL (uses env var if None)
 }
 
 

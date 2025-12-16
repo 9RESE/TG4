@@ -46,7 +46,15 @@ from .config import (
 
 from .signal import generate_signal
 
-from .lifecycle import on_start, on_fill, on_stop, initialize_state
+from .lifecycle import on_start, on_fill, on_stop, initialize_state, validate_config
+
+from .warmup import (
+    fetch_warmup_candles,
+    warmup_from_db_sync,
+    initialize_warmup_state,
+    merge_warmup_with_realtime,
+    check_warmup_status,
+)
 
 # =============================================================================
 # Secondary exports (for advanced use / testing)
@@ -73,7 +81,7 @@ from .risk import (
     track_rejection,
 )
 
-from .signal import build_indicators
+from .signal import build_indicators, check_circuit_breaker
 
 
 __all__ = [
@@ -93,6 +101,13 @@ __all__ = [
     # Helpers
     'get_symbol_config',
     'initialize_state',
+    'validate_config',
+    # Warmup
+    'fetch_warmup_candles',
+    'warmup_from_db_sync',
+    'initialize_warmup_state',
+    'merge_warmup_with_realtime',
+    'check_warmup_status',
     # Indicators
     'calculate_ema',
     'calculate_ema_series',
@@ -111,4 +126,5 @@ __all__ = [
     'track_rejection',
     # Signal helpers
     'build_indicators',
+    'check_circuit_breaker',
 ]

@@ -2,8 +2,8 @@
 
 **Review Date:** 2025-12-13 (Updated: 2025-12-15)
 **Reviewer:** Architecture Review
-**Version Reviewed:** 1.0.1 → 1.15.1
-**Status:** ✅ ALL RESOLVED (2025-12-13)
+**Version Reviewed:** 1.0.1 → 1.16.1
+**Status:** ✅ ALL RESOLVED (includes EMA-9 code review fixes 2025-12-15)
 
 ---
 
@@ -69,6 +69,60 @@ New test class `TestLeveragedPositions` in `tests/test_executor.py`:
 - `test_no_leverage_when_set_to_one` - Verifies 1x disables leverage
 - `test_margin_call_liquidation` - Verifies margin call triggers
 - `test_short_leverage_unchanged` - Verifies shorts still work
+
+---
+
+## EMA-9 Strategy Code Review (Session 2025-12-15)
+
+A deep code review of the newly implemented EMA-9 Trend Flip strategy was conducted to ensure alignment with production strategies (momentum_scalping) and the strategy-development-guide.md v2.0.
+
+### Issues Identified and Fixed
+
+| Issue | Severity | Description | Status |
+|-------|----------|-------------|--------|
+| #1 | CRITICAL | Incomplete `on_fill()` - missing per-symbol tracking, circuit breaker | ✅ Fixed |
+| #2 | HIGH | No config validation in `on_start()` | ✅ Fixed |
+| #3 | MEDIUM | No structured logging (using print instead) | ✅ Fixed |
+| #4 | MEDIUM | State fields missing for multi-symbol support | ✅ Fixed |
+| #5 | LOW | Indicator logging inconsistent on all code paths | ✅ Fixed |
+| #6 | LOW | Circuit breaker not integrated | ✅ Fixed |
+| #7 | LOW | `on_stop()` doesn't log summary statistics | ✅ Fixed |
+| #8 | INFO | No database/historical data integration | ✅ Implemented |
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `strategies/ema9_trend_flip/lifecycle.py` | Complete rewrite with all lifecycle fixes |
+| `strategies/ema9_trend_flip/config.py` | Added circuit breaker and DB warmup config |
+| `strategies/ema9_trend_flip/signal.py` | Added circuit breaker check, `build_indicators()` |
+| `strategies/ema9_trend_flip/warmup.py` | **NEW** - Database warmup integration |
+| `strategies/ema9_trend_flip/__init__.py` | Updated exports for new functions |
+
+### New Functionality
+
+**Database Warmup** (`warmup.py`):
+- `fetch_warmup_candles()`: Async fetch from TimescaleDB
+- `warmup_from_db_sync()`: Sync wrapper for startup use
+- `initialize_warmup_state()`: Pre-calculate EMA values
+- `merge_warmup_with_realtime()`: Combine historical + live data
+- `check_warmup_status()`: Warmup status check
+
+**Circuit Breaker**:
+- Tracks consecutive losses per strategy
+- Triggers cooldown after N losses (default: 3)
+- Configurable cooldown duration (default: 30 minutes)
+- Reset on winning trade
+
+**Config Validation**:
+- Validates required fields and ranges
+- R:R ratio warnings
+- Timeframe validation
+
+### Version Updates
+
+- Strategy version: 1.0.0 → 1.0.1
+- ws_paper_tester version: 1.16.0 → 1.16.1
 
 ---
 
