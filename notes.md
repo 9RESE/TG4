@@ -1,8 +1,9 @@
 update the docs with the recent work and ALL the changes in git. Ensure documentation complies with the documentation standards and expectations outlined in the claude.md file. Then commit.
 
 
+- how can we use our historic data and ml to discover new strategies? ultrathink and deep research provide documentation on your findings and recommendations in ws_paper_tester/docs/development/plans/ml-discovery
 
-- i want to explore trading on the ema 9 it seems that on most time frames shorts and longs can be opened and closed if one candle opens on the opposite side of the ema trend(above or below the 9 ema) for example if the last several candles opened above the 9 ema and the next candle opens below it a short gets opened tell a candle opens above the 9 ema. The opposite for longs. there could be other variables like a certain percentage over/below the 9 ema or next candle opens opposite the 9 ems closes the position. Here are some charts showing these correlations. Research this idea and analyze the images to extract a strategy from. Provide a document with your findings, observations, and suggestions for a strategy. ultrathink
+
 
 
 # ai integration

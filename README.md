@@ -292,3 +292,104 @@ tail -f logs/equity_curve.csv
 - **Phase 12**: Paired bear mode (rip vs grind), real USDT yield, short precision rewards (-7.5%, defensive)
 - **Phase 13**: YieldManager (6.5% avg APY), opportunistic shorts (RSI >70), 8.0x precision rewards (-7.1%)
 - **Phase 14**: Live launch, dashboard, softened thresholds (RSI >68, ATR >4.2%, conf >0.78)
+- **Phase 21**: WebSocket Paper Tester + Historical Data System + Backtesting + Optimization
+
+## Backtesting & Optimization (Phase 21)
+
+### Historical Backtesting
+
+Run strategy backtests against 4+ years of historical data:
+
+```bash
+cd ws_paper_tester
+
+# Run all strategies for last 3 months
+python backtest_runner.py --period 3m
+
+# Specific strategy and symbol
+python backtest_runner.py --strategies ema9_trend_flip --symbols BTC/USDT --period 6m
+
+# All available data
+python backtest_runner.py --period all
+```
+
+### Strategy Parameter Optimization
+
+Automated parameter tuning with grid search:
+
+```bash
+cd ws_paper_tester/optimization
+
+# Quick optimization (reduced grid, ~10-30 min)
+python optimize_ema9.py --symbol BTC/USDT --period 3m --quick
+
+# Parallel execution (uses 8 cores)
+python optimize_ema9.py --symbol BTC/USDT --period 3m --quick --parallel --workers 8
+
+# Batch optimization (all 9 strategies)
+python run_optimization.py --quick --parallel
+python run_optimization.py --list  # Show available jobs
+```
+
+### ML Integration
+
+Machine learning models for signal prediction:
+
+```bash
+cd ws_paper_tester
+
+# Test GPU setup (ROCm/CUDA)
+python -m ml.scripts.test_gpu
+
+# Train signal classifier
+python -m ml.scripts.train_signal_classifier
+
+# Train LSTM model (GPU-accelerated)
+python -m ml.scripts.train_lstm_gpu
+```
+
+See [ML Integration Plans](ws_paper_tester/docs/development/plans/ml-v1/) for detailed architecture.
+
+## CLI Reference
+
+### Paper Tester with Historical Data
+
+```bash
+python main_with_historical.py [OPTIONS]
+```
+
+| Flag | Description |
+|------|-------------|
+| `--symbols XRP/USDT BTC/USDT` | Trading pairs |
+| `--duration 60` | Run for 60 minutes (0 = indefinite) |
+| `--skip-gap-fill` | Skip gap filling on startup |
+| `--simulated` | Use simulated data instead of live |
+| `--no-dashboard` | Disable web dashboard |
+| `--db-url URL` | Database URL (or use DATABASE_URL env var) |
+| `--config path` | Path to config.yaml |
+| `--log-level INFO` | Logging level |
+
+Example:
+```bash
+export $(grep -v '^#' .env | xargs) && python main_with_historical.py --symbols XRP/USDT BTC/USDT XRP/BTC
+```
+
+## Documentation
+
+Detailed documentation is available in `ws_paper_tester/docs/`:
+
+| Document | Description |
+|----------|-------------|
+| [Documentation Hub](ws_paper_tester/docs/README.md) | Main documentation entry point |
+| [Backtest Runner](ws_paper_tester/docs/development/features/backtesting/backtest-runner-v1.0.md) | Historical backtesting guide |
+| [Optimization System](ws_paper_tester/docs/development/features/optimization/optimization-system-v1.0.md) | Parameter tuning guide |
+| [ML Integration Plans](ws_paper_tester/docs/development/plans/ml-v1/) | Machine learning architecture |
+| [Strategy Development Guide](ws_paper_tester/docs/development/strategy-development-guide.md) | How to write strategies |
+| [CHANGELOG](ws_paper_tester/CHANGELOG.md) | Version history |
+
+## Version
+
+**Current Version:** v1.17.0 (2025-12-16)
+
+See [CHANGELOG](ws_paper_tester/CHANGELOG.md) for release notes.
+
