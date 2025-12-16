@@ -147,6 +147,7 @@ class KrakenTradesBackfill:
         symbol: str,
         start_since: int = 0,
         end_timestamp: Optional[datetime] = None,
+        auto_stop_realtime: bool = True,
     ) -> AsyncIterator[List[list]]:
         """
         Generator that fetches all trades for a symbol.
@@ -155,6 +156,7 @@ class KrakenTradesBackfill:
             symbol: Our symbol format (e.g., 'XRP/USDT')
             start_since: Starting timestamp (0 for beginning)
             end_timestamp: Optional end time to stop fetching
+            auto_stop_realtime: Auto-stop when caught up to real-time
 
         Yields:
             Batches of trade records
@@ -165,6 +167,7 @@ class KrakenTradesBackfill:
 
         since = start_since
         total_fetched = 0
+        consecutive_small_batches = 0  # Track small batches for auto-stop
 
         while True:
             try:
@@ -188,6 +191,33 @@ class KrakenTradesBackfill:
                         if trades:
                             yield trades
                         break
+
+                # ============================================================
+                # Auto-detect when caught up to real-time
+                # ============================================================
+                if auto_stop_realtime and trades:
+                    last_trade_time = datetime.fromtimestamp(float(trades[-1][2]), tz=timezone.utc)
+                    time_to_now = (datetime.now(timezone.utc) - last_trade_time).total_seconds()
+
+                    # If last trade is within 60 seconds of now and batch is small
+                    if time_to_now < 60 and len(trades) < 100:
+                        consecutive_small_batches += 1
+
+                        if consecutive_small_batches >= 3:
+                            logger.info(
+                                f"{symbol}: ✅ CAUGHT UP TO REAL-TIME! "
+                                f"Last trade: {last_trade_time.strftime('%Y-%m-%d %H:%M:%S')} UTC "
+                                f"(Total: {total_fetched:,} trades)"
+                            )
+                            logger.info(
+                                f"{symbol}: Stopping backfill. "
+                                f"Use WebSocket for real-time updates: "
+                                f"python -m ws_paper_tester.data.websocket_db_writer"
+                            )
+                            yield trades  # Yield final batch
+                            return  # Stop generator
+                    else:
+                        consecutive_small_batches = 0  # Reset counter
 
                 logger.info(
                     f"{symbol}: Fetched {len(trades)} trades "
@@ -337,6 +367,7 @@ class KrakenTradesBackfill:
         since: int = 0,
         end_timestamp: Optional[datetime] = None,
         build_candles: bool = True,
+        auto_stop_realtime: bool = True,
     ) -> int:
         """
         Backfill complete trade history for a symbol.
@@ -346,6 +377,7 @@ class KrakenTradesBackfill:
             since: Starting timestamp (0 for complete history)
             end_timestamp: Optional end time to stop
             build_candles: Whether to build candles from trades
+            auto_stop_realtime: Auto-stop when caught up to real-time
 
         Returns:
             Total trades imported
@@ -357,7 +389,7 @@ class KrakenTradesBackfill:
         first_timestamp = None
         last_timestamp = None
 
-        async for trades in self.fetch_all_trades(symbol, since, end_timestamp):
+        async for trades in self.fetch_all_trades(symbol, since, end_timestamp, auto_stop_realtime):
             await self.store_trades(symbol, trades)
             total_trades += len(trades)
             batch_count += 1
@@ -460,6 +492,8 @@ async def main():
                         help='Resume from last sync point')
     parser.add_argument('--no-candles', action='store_true',
                         help='Skip candle building (just import trades)')
+    parser.add_argument('--no-auto-stop', action='store_true',
+                        help='Disable auto-stop when caught up to real-time (continuous polling)')
 
     args = parser.parse_args()
 
@@ -491,7 +525,8 @@ async def main():
             await backfill.backfill_symbol(
                 symbol,
                 since=since,
-                build_candles=not args.no_candles
+                build_candles=not args.no_candles,
+                auto_stop_realtime=not args.no_auto_stop
             )
 
     finally:
