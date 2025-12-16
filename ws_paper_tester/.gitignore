@@ -1,1 +1,22 @@
+# Output artifacts
 *.jsonl
+*.csv
+
+# Backtest results
+backtest_results/
+results/
+
+# Optimization results
+optimization_results/
+optimization/optimization_results/
+
+# Trained models
+models/
+
+# Temporary/scratch files
+backtest_simple.py
+
+# Cache
+__pycache__/
+*.pyc
+.pytest_cache/
