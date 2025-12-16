@@ -37,6 +37,36 @@ from ws_tester.portfolio import StrategyPortfolio, STARTING_CAPITAL
 logger = logging.getLogger(__name__)
 
 
+# Timeframe constants (in minutes)
+TIMEFRAME_1M = 1
+TIMEFRAME_5M = 5
+TIMEFRAME_1H = 60
+TIMEFRAME_1D = 1440
+
+# Map timeframe minutes to human-readable names
+TIMEFRAME_NAMES = {
+    1: '1m',
+    5: '5m',
+    60: '1h',
+    1440: '1d',
+}
+
+
+def get_required_timeframes(primary_tf_minutes: int) -> list:
+    """
+    Determine which timeframes to load based on primary timeframe.
+
+    Returns list of timeframe minutes to load, including higher timeframes
+    for context but excluding lower (unnecessary) timeframes.
+    """
+    all_timeframes = [TIMEFRAME_1M, TIMEFRAME_5M, TIMEFRAME_1H, TIMEFRAME_1D]
+
+    # Only load primary timeframe and higher (for context)
+    required = [tf for tf in all_timeframes if tf >= primary_tf_minutes]
+
+    return required
+
+
 @dataclass
 class BacktestConfig:
     """Configuration for backtest run."""
@@ -137,11 +167,13 @@ class BacktestExecutor:
         candles_1h = candles_1h or {}
         candles_1d = candles_1d or {}
 
-        # Get current prices from latest candles
+        # Get current prices from available candles (prefer higher resolution)
+        # Try 1m -> 5m -> 1h -> 1d in order of preference
         prices = {}
-        for symbol, candles in candles_1m.items():
-            if candles:
-                prices[symbol] = float(candles[-1].close)
+        for candle_dict in [candles_1m, candles_5m, candles_1h, candles_1d]:
+            for symbol, candles in candle_dict.items():
+                if symbol not in prices and candles:
+                    prices[symbol] = float(candles[-1].close)
 
         # Helper to convert candle list to tuples
         def to_tuples(candle_dict):
@@ -358,62 +390,74 @@ class BacktestExecutor:
             logger.warning(f"  No matching symbols for {strategy.name}")
             trade_symbols = strategy.symbols[:1] if strategy.symbols else ['XRP/USDT']
 
-        # Load all candles for the period (using pre-aggregated tables)
-        logger.info(f"  Loading historical data from pre-aggregated tables...")
-        all_candles_1m = {}
-        all_candles_5m = {}
-        all_candles_1h = {}
-        all_candles_1d = {}
+        # Determine primary timeframe from strategy config (default to 1m for backward compatibility)
+        primary_tf_minutes = strategy.config.get('candle_timeframe_minutes', TIMEFRAME_1M)
+        required_timeframes = get_required_timeframes(primary_tf_minutes)
+        primary_tf_name = TIMEFRAME_NAMES.get(primary_tf_minutes, f'{primary_tf_minutes}m')
+
+        logger.info(f"  Primary timeframe: {primary_tf_name}")
+        logger.info(f"  Loading timeframes: {[TIMEFRAME_NAMES.get(tf, f'{tf}m') for tf in required_timeframes]}")
+
+        # Load only required timeframes (PERF: skip unnecessary data)
+        all_candles = {tf: {} for tf in required_timeframes}
 
         for symbol in trade_symbols:
-            candles_1m = await self.provider.get_candles(
-                symbol, 1, start_time, end_time
-            )
-            all_candles_1m[symbol] = candles_1m
+            loaded_info = []
+            for tf in required_timeframes:
+                candles = await self.provider.get_candles(symbol, tf, start_time, end_time)
+                all_candles[tf][symbol] = candles
+                loaded_info.append(f"{len(candles)} {TIMEFRAME_NAMES.get(tf, f'{tf}m')}")
 
-            candles_5m = await self.provider.get_candles(
-                symbol, 5, start_time, end_time
-            )
-            all_candles_5m[symbol] = candles_5m
+            logger.info(f"    {symbol}: {', '.join(loaded_info)} candles")
 
-            # Load pre-aggregated hourly candles directly (PERF: ~60x faster than building on-the-fly)
-            candles_1h = await self.provider.get_candles(
-                symbol, 60, start_time, end_time
-            )
-            all_candles_1h[symbol] = candles_1h
-
-            # Load pre-aggregated daily candles
-            candles_1d = await self.provider.get_candles(
-                symbol, 1440, start_time, end_time
-            )
-            all_candles_1d[symbol] = candles_1d
-
-            logger.info(f"    {symbol}: {len(candles_1m)} 1m, {len(candles_5m)} 5m, {len(candles_1h)} 1h, {len(candles_1d)} 1d candles")
-
-        # Determine the minimum candles across all symbols
-        if not all_candles_1m or not any(all_candles_1m.values()):
+        # Verify we have data for the primary timeframe
+        if primary_tf_minutes not in all_candles or not any(all_candles[primary_tf_minutes].values()):
             logger.warning(f"  No candle data found for {strategy.name}")
             return self._create_empty_result(strategy, start_time, end_time)
 
-        # Use the primary symbol for time iteration
+        # Use the primary symbol and timeframe for iteration
         primary_symbol = trade_symbols[0]
-        primary_candles = all_candles_1m[primary_symbol]
+        primary_candles = all_candles[primary_tf_minutes][primary_symbol]
 
-        if len(primary_candles) < self.config.warmup_periods:
-            logger.warning(f"  Insufficient data for warmup ({len(primary_candles)} < {self.config.warmup_periods})")
+        # Adjust warmup periods based on timeframe
+        # Higher timeframes need fewer candles but still need enough for EMA calculation
+        # 1m: use full warmup_periods (2000)
+        # 5m: ~400 candles
+        # 1h: ~33 candles (but min 20 for EMA-9 + buffer)
+        # 1d: ~1-2 candles from formula, but need min 15 for indicators
+        warmup_by_timeframe = {
+            TIMEFRAME_1M: self.config.warmup_periods,
+            TIMEFRAME_5M: max(100, self.config.warmup_periods // 5),
+            TIMEFRAME_1H: max(20, self.config.warmup_periods // 60),
+            TIMEFRAME_1D: 15,  # Minimum for EMA-9 + ATR-14
+        }
+        adjusted_warmup = warmup_by_timeframe.get(
+            primary_tf_minutes,
+            max(15, self.config.warmup_periods // max(1, primary_tf_minutes))
+        )
 
-        # Process candles
-        logger.info(f"  Processing {len(primary_candles)} candles...")
+        if len(primary_candles) < adjusted_warmup:
+            logger.warning(f"  Insufficient data for warmup ({len(primary_candles)} < {adjusted_warmup})")
 
-        window_1m = {sym: [] for sym in trade_symbols}
-        window_5m = {sym: [] for sym in trade_symbols}
-        window_1h = {sym: [] for sym in trade_symbols}
-        window_1d = {sym: [] for sym in trade_symbols}
+        # Process candles at primary timeframe (PERF: iterate at strategy's native timeframe)
+        logger.info(f"  Processing {len(primary_candles)} {primary_tf_name} candles...")
 
-        # Track candle indices for higher timeframes
-        idx_5m = {sym: 0 for sym in trade_symbols}
-        idx_1h = {sym: 0 for sym in trade_symbols}
-        idx_1d = {sym: 0 for sym in trade_symbols}
+        # Initialize windows for each loaded timeframe
+        windows = {tf: {sym: [] for sym in trade_symbols} for tf in required_timeframes}
+
+        # Track candle indices for higher timeframes (relative to primary)
+        higher_tf_idx = {}
+        for tf in required_timeframes:
+            if tf > primary_tf_minutes:
+                higher_tf_idx[tf] = {sym: 0 for sym in trade_symbols}
+
+        # Window size limits by timeframe
+        window_limits = {
+            TIMEFRAME_1M: self.config.warmup_periods,
+            TIMEFRAME_5M: self.config.warmup_periods,
+            TIMEFRAME_1H: 500,   # ~20 days
+            TIMEFRAME_1D: 365,   # ~1 year
+        }
 
         for i, candle in enumerate(primary_candles):
             candles_processed += 1
@@ -421,39 +465,33 @@ class BacktestExecutor:
 
             # Update windows for all symbols
             for symbol in trade_symbols:
-                # Add 1m candle
-                if i < len(all_candles_1m[symbol]):
-                    window_1m[symbol].append(all_candles_1m[symbol][i])
-                    # Keep window size manageable
-                    if len(window_1m[symbol]) > self.config.warmup_periods:
-                        window_1m[symbol] = window_1m[symbol][-self.config.warmup_periods:]
+                # Add primary timeframe candle
+                symbol_candles = all_candles[primary_tf_minutes].get(symbol, [])
+                if i < len(symbol_candles):
+                    windows[primary_tf_minutes][symbol].append(symbol_candles[i])
+                    limit = window_limits.get(primary_tf_minutes, self.config.warmup_periods)
+                    if len(windows[primary_tf_minutes][symbol]) > limit:
+                        windows[primary_tf_minutes][symbol] = windows[primary_tf_minutes][symbol][-limit:]
 
-                # Add 5m candles up to current time
-                while (idx_5m[symbol] < len(all_candles_5m[symbol]) and
-                       all_candles_5m[symbol][idx_5m[symbol]].timestamp <= timestamp):
-                    window_5m[symbol].append(all_candles_5m[symbol][idx_5m[symbol]])
-                    idx_5m[symbol] += 1
-                    if len(window_5m[symbol]) > self.config.warmup_periods:
-                        window_5m[symbol] = window_5m[symbol][-self.config.warmup_periods:]
+                # Add higher timeframe candles up to current time
+                for tf in higher_tf_idx:
+                    tf_candles = all_candles[tf].get(symbol, [])
+                    while (higher_tf_idx[tf][symbol] < len(tf_candles) and
+                           tf_candles[higher_tf_idx[tf][symbol]].timestamp <= timestamp):
+                        windows[tf][symbol].append(tf_candles[higher_tf_idx[tf][symbol]])
+                        higher_tf_idx[tf][symbol] += 1
+                        limit = window_limits.get(tf, 500)
+                        if len(windows[tf][symbol]) > limit:
+                            windows[tf][symbol] = windows[tf][symbol][-limit:]
 
-                # Add 1h candles up to current time (pre-aggregated from database)
-                while (idx_1h[symbol] < len(all_candles_1h[symbol]) and
-                       all_candles_1h[symbol][idx_1h[symbol]].timestamp <= timestamp):
-                    window_1h[symbol].append(all_candles_1h[symbol][idx_1h[symbol]])
-                    idx_1h[symbol] += 1
-                    if len(window_1h[symbol]) > 500:  # Keep last 500 hourly candles (~20 days)
-                        window_1h[symbol] = window_1h[symbol][-500:]
+            # Build window dicts for snapshot (backward compatible with existing code)
+            window_1m = windows.get(TIMEFRAME_1M, {sym: [] for sym in trade_symbols})
+            window_5m = windows.get(TIMEFRAME_5M, {sym: [] for sym in trade_symbols})
+            window_1h = windows.get(TIMEFRAME_1H, {sym: [] for sym in trade_symbols})
+            window_1d = windows.get(TIMEFRAME_1D, {sym: [] for sym in trade_symbols})
 
-                # Add 1d candles up to current time (pre-aggregated from database)
-                while (idx_1d[symbol] < len(all_candles_1d[symbol]) and
-                       all_candles_1d[symbol][idx_1d[symbol]].timestamp <= timestamp):
-                    window_1d[symbol].append(all_candles_1d[symbol][idx_1d[symbol]])
-                    idx_1d[symbol] += 1
-                    if len(window_1d[symbol]) > 365:  # Keep last 365 daily candles (~1 year)
-                        window_1d[symbol] = window_1d[symbol][-365:]
-
-            # Skip warmup period
-            if i < self.config.warmup_periods:
+            # Skip warmup period (adjusted for timeframe)
+            if i < adjusted_warmup:
                 continue
 
             # Create snapshot with all timeframes
@@ -491,8 +529,9 @@ class BacktestExecutor:
                             reason=fill.signal_reason,
                         ))
 
-            # Update equity curve every 60 candles (hourly)
-            if i % 60 == 0:
+            # Update equity curve (adjusted for timeframe: ~hourly equivalent)
+            equity_update_interval = max(1, 60 // primary_tf_minutes)
+            if i % equity_update_interval == 0:
                 current_equity = portfolio.usdt
                 for asset, amount in portfolio.assets.items():
                     # Find the price for this asset
@@ -515,9 +554,10 @@ class BacktestExecutor:
                     if current_dd > max_drawdown:
                         max_drawdown = current_dd
 
-            # Progress logging
-            if i % 10000 == 0 and i > 0:
-                logger.info(f"    Processed {i}/{len(primary_candles)} candles, {len(trades)} trades")
+            # Progress logging (adjusted for timeframe: ~10% intervals)
+            progress_interval = max(100, len(primary_candles) // 10)
+            if i % progress_interval == 0 and i > 0:
+                logger.info(f"    Processed {i}/{len(primary_candles)} {primary_tf_name} candles, {len(trades)} trades")
 
         # Stop strategy
         strategy.on_stop()

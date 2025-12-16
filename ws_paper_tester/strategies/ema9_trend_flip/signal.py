@@ -269,10 +269,12 @@ def _evaluate_symbol(
     # ==========================================================================
     # Check Current Candle Position
     # ==========================================================================
-    buffer_pct = config.get('buffer_pct', 0.1)
+    buffer_pct = config.get('buffer_pct', 0.0)
+    strict_candle_mode = config.get('strict_candle_mode', True)  # REQUIRED: Use whole candle check
+
     latest_candle = hourly_candles[-1]
     current_position = get_candle_position(
-        latest_candle, current_ema, buffer_pct, use_open
+        latest_candle, current_ema, buffer_pct, use_open, strict_candle_mode
     )
 
     # ==========================================================================
@@ -284,7 +286,8 @@ def _evaluate_symbol(
         ema_values[:-1],
         n_consecutive,
         buffer_pct,
-        use_open
+        use_open,
+        strict_candle_mode  # NEW: Use strict mode for previous candles too
     )
 
     # ==========================================================================
@@ -302,6 +305,7 @@ def _evaluate_symbol(
         'prev_position': prev_position,
         'prev_consecutive_count': prev_count,
         'buffer_pct': buffer_pct,
+        'strict_candle_mode': strict_candle_mode,
         'atr': round(atr, 4) if atr else None,
         # Position info
         'position_side': state.get('position_side'),
@@ -362,10 +366,22 @@ def _evaluate_symbol(
 
     signal = None
 
+    # Debug logging for flip detection (only log occasionally to avoid spam)
+    if config.get('debug_signals', False):
+        logger.debug(
+            f"Flip check: prev_pos={prev_position}({prev_count}/{n_consecutive}), "
+            f"curr_pos={current_position}, price={current_price:.2f}, ema={current_ema:.2f}"
+        )
+
     # Check for LONG entry (flip from below to above)
     if prev_position == 'below' and prev_count >= n_consecutive:
         if current_position == 'above':
             # FLIP DETECTED: Enter Long
+            # strict_candle_mode already ensures quality entry (whole candle above EMA)
+            logger.info(
+                f"LONG flip detected: {symbol} - {prev_count} candles below EMA, "
+                f"current above. Price={current_price:.2f}, EMA={current_ema:.2f}"
+            )
             signal = create_entry_signal(
                 symbol=symbol,
                 direction='long',
@@ -381,6 +397,11 @@ def _evaluate_symbol(
     elif prev_position == 'above' and prev_count >= n_consecutive:
         if current_position == 'below':
             # FLIP DETECTED: Enter Short
+            # strict_candle_mode already ensures quality entry (whole candle below EMA)
+            logger.info(
+                f"SHORT flip detected: {symbol} - {prev_count} candles above EMA, "
+                f"current below. Price={current_price:.2f}, EMA={current_ema:.2f}"
+            )
             signal = create_entry_signal(
                 symbol=symbol,
                 direction='short',

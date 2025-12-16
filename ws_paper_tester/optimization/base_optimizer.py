@@ -145,11 +145,14 @@ def _run_single_backtest(args: Tuple) -> Dict[str, Any]:
                 else:
                     start_time = end_time - timedelta(days=90)
 
-                # Load strategy and apply parameter overrides
+                # Load only the strategy we need (not all strategies)
                 strategies_path = project_root / "strategies"
-                all_strategies = discover_strategies(str(strategies_path))
-
                 strategy_name = config_dict['strategy_name']
+                strategy_file = f"{strategy_name}.py"
+                all_strategies = discover_strategies(
+                    str(strategies_path),
+                    whitelist={strategy_file}
+                )
                 if strategy_name not in all_strategies:
                     raise ValueError(f"Strategy {strategy_name} not found")
 

@@ -12,7 +12,7 @@ from typing import Dict, Any
 # Strategy Metadata
 # =============================================================================
 STRATEGY_NAME = "ema9_trend_flip"
-STRATEGY_VERSION = "1.0.0"
+STRATEGY_VERSION = "2.0.0"  # v2.0.0: Major improvements - strict candle mode, exit confirmation
 SYMBOLS = ["BTC/USDT"]  # 1H works best for BTC per analysis
 
 
@@ -47,9 +47,17 @@ CONFIG: Dict[str, Any] = {
     # EMA Settings
     # ==========================================================================
     'ema_period': 9,                    # EMA period (9 is optimal per analysis)
-    'consecutive_candles': 3,           # Min consecutive candles on one side before flip
-    'buffer_pct': 0.1,                  # Buffer % above/below EMA to reduce whipsaws
-    'use_open_price': True,             # Use candle open price (True) or close (False)
+    'consecutive_candles': 2,           # Min consecutive candles on one side before flip
+    'buffer_pct': 0.0,                  # Buffer % above/below EMA (0 = exact crossover)
+    'use_open_price': True,             # Use candle OPEN price (fixed from False)
+
+    # ==========================================================================
+    # v2.0: Strict Candle Mode (Whole Candle Check) - REQUIRED
+    # ==========================================================================
+    # Requires the ENTIRE candle (including wicks) to be above/below EMA
+    # This prevents false signals where candles cross the EMA during their timeframe
+    # Optimization results: 50% win rate vs 12.6%, 0.48% DD vs 50.44%
+    'strict_candle_mode': True,         # REQUIRED: Whole candle above/below EMA
 
     # ==========================================================================
     # Timeframe Settings
@@ -65,19 +73,20 @@ CONFIG: Dict[str, Any] = {
     'min_trade_size_usd': 10.0,         # Minimum trade size
 
     # ==========================================================================
-    # Risk Management - Targeting 2:1 R:R
+    # Risk Management - Stop Loss for Protection Only
     # ==========================================================================
-    'stop_loss_pct': 1.0,               # Stop loss percentage (larger for 1H)
-    'take_profit_pct': 2.0,             # Take profit percentage (2:1 R:R)
-    'use_atr_stops': False,             # Use ATR-based stops instead of fixed %
-    'atr_stop_mult': 1.5,               # ATR multiplier for stop loss
-    'atr_tp_mult': 3.0,                 # ATR multiplier for take profit
+    # NOTE: The EMA flip IS the profit exit. No take_profit_pct needed.
+    # Stop loss is for catastrophic protection only (violent moves before flip).
+    'stop_loss_pct': 2.5,               # Wide stop loss (protection only)
+    'use_atr_stops': True,              # Use ATR-based stops (recommended)
+    'atr_stop_mult': 2.0,               # ATR multiplier for stop loss (2x ATR)
 
     # ==========================================================================
     # Exit Conditions
     # ==========================================================================
-    'exit_on_flip': True,               # Exit when EMA flips to opposite side
-    'max_hold_hours': 72,               # Maximum hold time in hours (3 days)
+    # NOTE: Exit on EMA flip is ALWAYS enabled - it's the core strategy.
+    # The flip IS the exit signal. Hold until flip occurs - no time limit.
+    'exit_confirmation_candles': 1,     # Candles required to confirm exit (1 = immediate)
 
     # ==========================================================================
     # Cooldown Mechanisms
@@ -105,9 +114,9 @@ CONFIG: Dict[str, Any] = {
 SYMBOL_CONFIGS: Dict[str, Dict[str, Any]] = {
     'BTC/USDT': {
         'position_size_usd': 50.0,
-        'stop_loss_pct': 1.0,
-        'take_profit_pct': 2.0,
-        'consecutive_candles': 3,
+        'stop_loss_pct': 2.5,           # Wide stop for BTC volatility
+        'consecutive_candles': 2,
+        'buffer_pct': 0.0,              # No buffer - exact EMA crossover
     },
 }
 

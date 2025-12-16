@@ -168,7 +168,8 @@ def get_candle_position(
     candle: Dict[str, Any],
     ema: float,
     buffer_pct: float,
-    use_open: bool = True
+    use_open: bool = True,
+    strict_mode: bool = False
 ) -> str:
     """
     Determine if candle is above or below EMA with buffer.
@@ -177,20 +178,60 @@ def get_candle_position(
         candle: Candle dict
         ema: EMA value
         buffer_pct: Buffer percentage (e.g., 0.1 for 0.1%)
-        use_open: Use open price if True, close if False
+        use_open: Use open price if True, close if False (ignored if strict_mode=True)
+        strict_mode: If True, require ENTIRE candle (including wicks) to be above/below EMA
 
     Returns:
-        'above', 'below', or 'neutral' if within buffer
+        'above', 'below', or 'neutral' if within buffer or crossing EMA
     """
-    price = candle['open'] if use_open else candle['close']
     buffer = ema * (buffer_pct / 100)
 
-    if price > ema + buffer:
-        return 'above'
-    elif price < ema - buffer:
-        return 'below'
+    if strict_mode:
+        # STRICT MODE: Entire candle must be above/below EMA
+        # For 'above': candle low must be above EMA (whole candle above)
+        # For 'below': candle high must be below EMA (whole candle below)
+        if candle['low'] > ema + buffer:
+            return 'above'
+        elif candle['high'] < ema - buffer:
+            return 'below'
+        else:
+            return 'neutral'  # Candle crosses or touches EMA
     else:
-        return 'neutral'
+        # LEGACY MODE: Only check one price point
+        price = candle['open'] if use_open else candle['close']
+        if price > ema + buffer:
+            return 'above'
+        elif price < ema - buffer:
+            return 'below'
+        else:
+            return 'neutral'
+
+
+def get_candle_clearance(
+    candle: Dict[str, Any],
+    ema: float,
+    position: str
+) -> float:
+    """
+    Calculate how far the candle is from the EMA as a percentage.
+
+    For 'above' positions: returns (candle_low - ema) / ema * 100
+    For 'below' positions: returns (ema - candle_high) / ema * 100
+
+    Args:
+        candle: Candle dict with high, low
+        ema: EMA value
+        position: 'above' or 'below'
+
+    Returns:
+        Clearance percentage (positive = clear of EMA, negative = crossing EMA)
+    """
+    if position == 'above':
+        return (candle['low'] - ema) / ema * 100
+    elif position == 'below':
+        return (ema - candle['high']) / ema * 100
+    else:
+        return 0.0
 
 
 def check_consecutive_positions(
@@ -198,45 +239,62 @@ def check_consecutive_positions(
     ema_values: List[float],
     n_consecutive: int,
     buffer_pct: float,
-    use_open: bool = True
+    use_open: bool = True,
+    strict_mode: bool = False
 ) -> Tuple[str, int]:
     """
-    Check for consecutive candles opening on same side of EMA.
+    Check for consecutive candles on same side of EMA.
+
+    Checks the last N candles in the provided array for consistent positioning
+    relative to the EMA (all above or all below).
 
     Args:
-        candles: List of hourly candle dicts
-        ema_values: List of EMA values
+        candles: List of hourly candle dicts (should exclude current candle)
+        ema_values: List of EMA values (same length as candles)
         n_consecutive: Required consecutive candles
-        buffer_pct: Buffer percentage
-        use_open: Use open price
+        buffer_pct: Buffer percentage for above/below determination
+        use_open: Use open price if True, close if False (ignored if strict_mode=True)
+        strict_mode: If True, require entire candle to be above/below EMA
 
     Returns:
-        Tuple of (position: 'above'/'below'/'mixed', count: int)
+        Tuple of (position: 'above'/'below'/'mixed'/'neutral', count: int)
+        - 'above'/'below': All checked candles are consistently on one side
+        - 'mixed': Candles are on different sides or insufficient data
+        - 'neutral': Most recent candle is within the buffer zone or crosses EMA
     """
-    if len(candles) < n_consecutive or len(ema_values) < len(candles):
+    if len(candles) < n_consecutive:
         return ('mixed', 0)
 
-    # Check the last N candles before current (excluding current)
+    if len(ema_values) < len(candles):
+        return ('mixed', 0)
+
+    # Check the last N candles (the most recent ones in the array)
+    # range(-n_consecutive, 0) gives us [-3, -2, -1] for n=3
     positions = []
-    for i in range(-n_consecutive - 1, -1):
-        if i + len(candles) < 0:
-            continue
-        candle = candles[i]
-        ema = ema_values[i + len(ema_values) - len(candles)]
+    for i in range(-n_consecutive, 0):
+        candle_idx = i  # Negative index into candles array
+        # EMA values array should be same length as candles, so use same index
+        ema_idx = i
+
+        candle = candles[candle_idx]
+        ema = ema_values[ema_idx]
+
         if ema is None:
             return ('mixed', 0)
-        pos = get_candle_position(candle, ema, buffer_pct, use_open)
+
+        pos = get_candle_position(candle, ema, buffer_pct, use_open, strict_mode)
         positions.append(pos)
 
     # Check if all positions are the same (and not neutral)
     if not positions:
         return ('mixed', 0)
 
-    # Count consecutive same positions from most recent
+    # The most recent position determines the baseline
     last_pos = positions[-1]
     if last_pos == 'neutral':
         return ('neutral', 0)
 
+    # Count consecutive same positions from most recent going backwards
     count = 0
     for pos in reversed(positions):
         if pos == last_pos:

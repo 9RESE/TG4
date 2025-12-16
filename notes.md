@@ -4,8 +4,6 @@ update the docs with the recent work and ALL the changes in git. Ensure document
 - how can we use our historic data and ml to discover new strategies? ultrathink and deep research provide documentation on your findings and recommendations in ws_paper_tester/docs/development/plans/ml-discovery
 
 
-
-
 # ai integration
 ## timeframes
 - 5 min, 1 hour, 4 hour?, 1 day, 1 week, 1 month
@@ -24,3 +22,7 @@ update the docs with the recent work and ALL the changes in git. Ensure document
   - long term positions
   - margin calls
   - trading strategy input
+
+
+
+

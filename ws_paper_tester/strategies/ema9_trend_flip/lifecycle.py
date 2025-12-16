@@ -27,6 +27,9 @@ def validate_config(config: Dict[str, Any]) -> List[str]:
     """
     Validate strategy configuration.
 
+    NOTE: This strategy has no take_profit_pct - the EMA flip IS the profit exit.
+    Stop loss is for catastrophic protection only.
+
     Args:
         config: Strategy configuration dict
 
@@ -35,10 +38,10 @@ def validate_config(config: Dict[str, Any]) -> List[str]:
     """
     errors = []
 
-    # Required fields
+    # Required fields (no take_profit_pct - flip is the exit)
     required_fields = [
         'ema_period', 'consecutive_candles', 'position_size_usd',
-        'max_position_usd', 'stop_loss_pct', 'take_profit_pct'
+        'max_position_usd', 'stop_loss_pct'
     ]
 
     for field in required_fields:
@@ -61,17 +64,13 @@ def validate_config(config: Dict[str, Any]) -> List[str]:
     if config.get('stop_loss_pct', 0) <= 0:
         errors.append("stop_loss_pct must be > 0")
 
-    if config.get('take_profit_pct', 0) <= 0:
-        errors.append("take_profit_pct must be > 0")
-
-    # Validate R:R ratio warning
-    sl = config.get('stop_loss_pct', 1.0)
-    tp = config.get('take_profit_pct', 2.0)
-    if tp < sl:
-        errors.append(f"Warning: R:R ratio < 1:1 (TP={tp}%, SL={sl}%)")
+    # Validate stop loss is wide enough (protection only)
+    sl = config.get('stop_loss_pct', 2.5)
+    if sl < 1.5:
+        errors.append(f"Warning: stop_loss_pct={sl}% may be too tight. Recommend >= 2% for protection.")
 
     # Validate buffer percentage
-    buffer = config.get('buffer_pct', 0.1)
+    buffer = config.get('buffer_pct', 0.0)
     if buffer < 0 or buffer > 5:
         errors.append(f"buffer_pct should be between 0 and 5, got {buffer}")
 
@@ -128,6 +127,10 @@ def initialize_state(state: Dict[str, Any]) -> None:
     state['hourly_candles'] = []
     state['ema_values'] = []
 
+    # === v2.0: Exit Confirmation Tracking ===
+    state['exit_confirmation_count'] = 0
+    state['exit_confirmation_side'] = None
+
     # === Logging/Debugging ===
     state['indicators'] = {}
     state['rejection_counts'] = {}
@@ -168,23 +171,31 @@ def on_start(config: Dict[str, Any], state: Dict[str, Any]) -> None:
         'version': STRATEGY_VERSION,
         'config': {
             'ema_period': config.get('ema_period', 9),
-            'consecutive_candles': config.get('consecutive_candles', 3),
+            'consecutive_candles': config.get('consecutive_candles', 2),
             'timeframe_minutes': config.get('candle_timeframe_minutes', 60),
-            'buffer_pct': config.get('buffer_pct', 0.1),
+            'buffer_pct': config.get('buffer_pct', 0.0),
+            'use_open_price': config.get('use_open_price', True),
+            # v2.0 parameters
+            'strict_candle_mode': config.get('strict_candle_mode', True),
+            'exit_confirmation_candles': config.get('exit_confirmation_candles', 1),
+            # Position sizing
             'position_size_usd': config.get('position_size_usd', 50.0),
             'max_position_usd': config.get('max_position_usd', 100.0),
-            'stop_loss_pct': config.get('stop_loss_pct', 1.0),
-            'take_profit_pct': config.get('take_profit_pct', 2.0),
-            'use_atr_stops': config.get('use_atr_stops', False),
-            'exit_on_flip': config.get('exit_on_flip', True),
-            'max_hold_hours': config.get('max_hold_hours', 72),
+            'stop_loss_pct': config.get('stop_loss_pct', 2.5),
+            'use_atr_stops': config.get('use_atr_stops', True),
+            'atr_stop_mult': config.get('atr_stop_mult', 2.0),
+            'exit_strategy': 'ema_flip (hold until flip)',
         }
     })
 
     # Log feature status
-    logger.info("EMA-9 features", extra={
-        'exit_on_flip': config.get('exit_on_flip', True),
-        'use_atr_stops': config.get('use_atr_stops', False),
+    logger.info("EMA-9 v2.0 features", extra={
+        'exit_strategy': 'ema_flip (hold until flip)',
+        # v2.0 key features
+        'strict_candle_mode': config.get('strict_candle_mode', True),
+        'exit_confirmation_candles': config.get('exit_confirmation_candles', 1),
+        # Other settings
+        'use_atr_stops': config.get('use_atr_stops', True),
         'track_rejections': config.get('track_rejections', True),
         'cooldown_minutes': config.get('cooldown_minutes', 30),
         'cooldown_after_loss_minutes': config.get('cooldown_after_loss_minutes', 60),
@@ -350,13 +361,17 @@ def _close_position(state: Dict[str, Any], symbol: str, value: float, pnl: float
     state['position_by_symbol'][symbol] = max(0, state['position_by_symbol'].get(symbol, 0) - value)
 
     # Clear position if fully closed
-    if state['position'] < 0.01:
+    # Use 1.0 USD threshold to account for slippage-induced rounding differences
+    # (e.g., entry at $50 but exit value is $49.91 due to price movement/slippage)
+    close_threshold = 1.0  # USD
+
+    if state['position'] < close_threshold:
         state['position_side'] = None
         state['position'] = 0.0
         state['entry_price'] = 0.0
         state['entry_time'] = None
 
-    if state['position_by_symbol'].get(symbol, 0) < 0.01:
+    if state['position_by_symbol'].get(symbol, 0) < close_threshold:
         if symbol in state.get('position_entries', {}):
             del state['position_entries'][symbol]
         state['position_by_symbol'][symbol] = 0.0

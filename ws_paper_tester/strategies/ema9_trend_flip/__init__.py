@@ -1,31 +1,32 @@
 """
-EMA-9 Trend Flip Strategy v1.0.0
+EMA-9 Trend Flip Strategy v1.0.1
 
 A trend-following strategy based on the 9-period Exponential Moving Average (EMA).
-Entry signals are generated when price "flips" from consistently opening on one side
-of the EMA to opening on the opposite side, indicating a potential trend change.
+Entry signals are generated when price "flips" from consistently closing on one side
+of the EMA to closing on the opposite side, indicating a potential trend change.
 
-Strategy Logic (Option 3 - 1H Timeframe):
-- Build 1H candles from 1m candles
-- Calculate EMA-9 on hourly candle open prices
-- Track N consecutive candles opening above/below EMA
-- Entry: When candle opens on opposite side after N consecutive candles
-- Exit: Opposing EMA flip, stop loss, or take profit
+Strategy Philosophy:
+- The EMA flip IS the profit exit (no fixed take_profit_pct)
+- Stop loss is for PROTECTION ONLY (wide stop for catastrophic moves)
+- Exit on flip is ALWAYS enabled - it's the core strategy
+
+Strategy Logic (1H Timeframe):
+- Use 1H candles (pre-aggregated or built from 1m)
+- Calculate EMA-9 on hourly candle CLOSE prices (full candle confirmation)
+- Track N consecutive candles closing above/below EMA
+- Entry: When candle closes on opposite side after N consecutive candles
+- Exit: Opposing EMA flip (primary), stop loss (protection), max hold time (timeout)
 
 Based on research: ws_paper_tester/docs/development/plans/ema9/ema-9-strategy-analysis.md
 
 Version History:
+- 1.0.1: Conceptual alignment - flip IS the exit
+         - Removed take_profit_pct (flip is the profit exit)
+         - Removed exit_on_flip toggle (always exit on flip)
+         - Changed to CLOSE price (full candle confirmation)
+         - Widened stop loss to 2.5% or 2x ATR (protection only)
+         - Restructured exit priority: flip first, then stop loss
 - 1.0.0: Initial implementation based on EMA-9 Strategy Analysis
-         - Option 3 (1H timeframe) implementation
-         - Build hourly candles from 1-minute data
-         - EMA-9 calculation on hourly opens
-         - Flip detection with consecutive candle confirmation
-         - Buffer percentage to reduce whipsaws
-         - Exit on opposing EMA flip
-         - ATR-based or fixed percentage stops
-         - 2:1 risk-reward ratio targeting
-         - Time-based cooldown mechanisms
-         - Maximum hold time exit condition
 """
 
 # =============================================================================
@@ -63,12 +64,11 @@ from .indicators import (
 from .exits import (
     check_exit_conditions,
     check_ema_flip_exit,
-    check_max_hold_time_exit,
 )
 
 from .risk import (
     check_position_limits,
-    calculate_entry_stops,
+    calculate_stop_loss,
     create_entry_signal,
     track_rejection,
 )
@@ -104,10 +104,9 @@ __all__ = [
     # Exits
     'check_exit_conditions',
     'check_ema_flip_exit',
-    'check_max_hold_time_exit',
     # Risk
     'check_position_limits',
-    'calculate_entry_stops',
+    'calculate_stop_loss',
     'create_entry_signal',
     'track_rejection',
     # Signal helpers

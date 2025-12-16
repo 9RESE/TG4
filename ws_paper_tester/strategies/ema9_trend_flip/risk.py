@@ -2,6 +2,10 @@
 EMA-9 Trend Flip Strategy - Risk Management
 
 Position sizing and risk management functions.
+
+Strategy Philosophy:
+- The EMA flip IS the profit exit (no take_profit_pct)
+- Stop loss is for PROTECTION ONLY (wide stop for catastrophic moves)
 """
 from typing import Dict, Any, Tuple, Optional
 
@@ -34,14 +38,17 @@ def check_position_limits(
     return (True, available)
 
 
-def calculate_entry_stops(
+def calculate_stop_loss(
     price: float,
     direction: str,
     config: Dict[str, Any],
     atr: Optional[float] = None
-) -> Tuple[float, float]:
+) -> float:
     """
-    Calculate stop loss and take profit levels for an entry.
+    Calculate stop loss level for an entry (PROTECTION ONLY).
+
+    NOTE: There is no take_profit - the EMA flip IS the profit exit.
+    Stop loss is only for catastrophic protection.
 
     Args:
         price: Entry price
@@ -50,30 +57,24 @@ def calculate_entry_stops(
         atr: Average True Range value (optional, for ATR-based stops)
 
     Returns:
-        Tuple of (stop_loss, take_profit)
+        Stop loss price
     """
-    if config.get('use_atr_stops', False) and atr:
-        atr_sl_mult = config.get('atr_stop_mult', 1.5)
-        atr_tp_mult = config.get('atr_tp_mult', 3.0)
+    if config.get('use_atr_stops', True) and atr and atr > 0:
+        atr_sl_mult = config.get('atr_stop_mult', 2.0)
 
         if direction == 'long':
             stop_loss = price - (atr * atr_sl_mult)
-            take_profit = price + (atr * atr_tp_mult)
         else:  # short
             stop_loss = price + (atr * atr_sl_mult)
-            take_profit = price - (atr * atr_tp_mult)
     else:
-        sl_pct = config.get('stop_loss_pct', 1.0)
-        tp_pct = config.get('take_profit_pct', 2.0)
+        sl_pct = config.get('stop_loss_pct', 2.5)
 
         if direction == 'long':
             stop_loss = price * (1 - sl_pct / 100)
-            take_profit = price * (1 + tp_pct / 100)
         else:  # short
             stop_loss = price * (1 + sl_pct / 100)
-            take_profit = price * (1 - tp_pct / 100)
 
-    return (stop_loss, take_profit)
+    return stop_loss
 
 
 def create_entry_signal(
@@ -87,7 +88,10 @@ def create_entry_signal(
     prev_count: int
 ) -> Optional[Signal]:
     """
-    Create entry signal with appropriate stop loss and take profit.
+    Create entry signal with stop loss for protection.
+
+    NOTE: There is no take_profit - the EMA flip IS the profit exit.
+    The signal includes a wide stop_loss for catastrophic protection only.
 
     Args:
         symbol: Trading symbol
@@ -111,10 +115,10 @@ def create_entry_signal(
 
     actual_size = min(position_size, available)
 
-    # Calculate stops
-    stop_loss, take_profit = calculate_entry_stops(price, direction, config, atr)
+    # Calculate stop loss (protection only - EMA flip is the profit exit)
+    stop_loss = calculate_stop_loss(price, direction, config, atr)
 
-    # Create signal
+    # Create signal (no take_profit - flip is the exit)
     if direction == 'long':
         return Signal(
             action='buy',
@@ -123,11 +127,11 @@ def create_entry_signal(
             price=price,
             reason=f"EMA9: Long flip ({prev_count} candles below, now above EMA={ema:.2f})",
             stop_loss=stop_loss,
-            take_profit=take_profit,
             metadata={
                 'entry_type': 'ema_flip_long',
                 'ema_9': ema,
                 'consecutive_candles': prev_count,
+                'exit_strategy': 'ema_flip',  # Document the exit strategy
             }
         )
     else:  # short
@@ -138,11 +142,11 @@ def create_entry_signal(
             price=price,
             reason=f"EMA9: Short flip ({prev_count} candles above, now below EMA={ema:.2f})",
             stop_loss=stop_loss,
-            take_profit=take_profit,
             metadata={
                 'entry_type': 'ema_flip_short',
                 'ema_9': ema,
                 'consecutive_candles': prev_count,
+                'exit_strategy': 'ema_flip',  # Document the exit strategy
             }
         )
 

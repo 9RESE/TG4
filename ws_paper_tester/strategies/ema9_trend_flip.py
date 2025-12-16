@@ -41,10 +41,9 @@ from .ema9_trend_flip import (
     # Exits
     check_exit_conditions,
     check_ema_flip_exit,
-    check_max_hold_time_exit,
     # Risk
     check_position_limits,
-    calculate_entry_stops,
+    calculate_stop_loss,
     create_entry_signal,
     track_rejection,
     # Signal helpers
@@ -79,10 +78,9 @@ __all__ = [
     # Exits
     'check_exit_conditions',
     'check_ema_flip_exit',
-    'check_max_hold_time_exit',
     # Risk
     'check_position_limits',
-    'calculate_entry_stops',
+    'calculate_stop_loss',
     'create_entry_signal',
     'track_rejection',
     # Signal helpers

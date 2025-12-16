@@ -160,27 +160,38 @@ Results saved to `optimization_results/`:
 
 ## Parameter Grids
 
-### EMA-9 Trend Flip
+### EMA-9 Trend Flip (v2.0)
+
+**Note:** v2.0 uses `strict_candle_mode=True` (required) and removes `take_profit_pct` (flip IS the exit).
 
 ```python
-# Quick mode
+# Quick mode (24 combinations)
 {
-    'ema_period': [7, 9, 11],
-    'consecutive_candles': [2, 3, 4],
-    'buffer_pct': [0.05, 0.10, 0.15],
-    'stop_loss_pct': [0.8, 1.0, 1.2],
-    'take_profit_pct': [1.5, 2.0, 2.5],
+    'ema_period': [9],
+    'consecutive_candles': [1, 2, 3],      # 1=immediate flip
+    'strict_candle_mode': [True],          # REQUIRED
+    'exit_confirmation_candles': [1, 2],
+    'stop_loss_pct': [2.0, 3.0],           # Fallback only
+    'use_atr_stops': [True],               # ATR adapts to volatility
+    'candle_timeframe_minutes': [5, 60],   # Supported timeframes only
 }
 
 # Full mode
 {
-    'ema_period': [5, 7, 9, 11, 13, 15],
-    'consecutive_candles': [2, 3, 4, 5],
-    'buffer_pct': [0.0, 0.05, 0.10, 0.15, 0.20],
-    'stop_loss_pct': [0.5, 0.8, 1.0, 1.2, 1.5],
-    'take_profit_pct': [1.0, 1.5, 2.0, 2.5, 3.0],
+    'ema_period': [7, 9, 12, 21],
+    'consecutive_candles': [1, 2, 3, 4],
+    'strict_candle_mode': [True],          # REQUIRED
+    'exit_confirmation_candles': [1, 2, 3],
+    'stop_loss_pct': [2.0, 2.5, 3.0, 4.0],
+    'use_atr_stops': [True, False],
+    'atr_stop_mult': [2.0, 2.5],
+    'candle_timeframe_minutes': [5, 60, 1440],  # Supported only
+    'cooldown_minutes': [15, 30, 60],
 }
 ```
+
+**Supported Timeframes:** 5m, 60m (1h), 1440m (1d)
+**NOT Supported:** 15m, 30m, 240m (4h)
 
 ### Market Making
 
@@ -229,4 +240,10 @@ result = await executor.run_strategy(strategy, start, end)
 
 ## Version History
 
+- **v1.1.0** (2025-12-16): EMA-9 v2.0 integration
+  - Updated EMA-9 grids with strict_candle_mode=True (required)
+  - Removed unsupported timeframes (15m, 30m, 240m)
+  - Supported timeframes: 5m, 60m, 1440m only
+  - Removed take_profit_pct and entry_clearance_pct from grids
+  - Added consecutive_candles=1 option for immediate flip detection
 - **v1.0.0** (2025-12-16): Initial release with all 9 strategy optimizers
