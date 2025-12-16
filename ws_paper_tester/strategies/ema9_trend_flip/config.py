@@ -12,7 +12,7 @@ from typing import Dict, Any
 # Strategy Metadata
 # =============================================================================
 STRATEGY_NAME = "ema9_trend_flip"
-STRATEGY_VERSION = "2.0.0"  # v2.0.0: Major improvements - strict candle mode, exit confirmation
+STRATEGY_VERSION = "2.0.1"  # v2.0.1: EMA fix - use CLOSE prices, previous EMA for comparison
 SYMBOLS = ["BTC/USDT"]  # 1H works best for BTC per analysis
 
 
@@ -49,7 +49,7 @@ CONFIG: Dict[str, Any] = {
     'ema_period': 9,                    # EMA period (9 is optimal per analysis)
     'consecutive_candles': 2,           # Min consecutive candles on one side before flip
     'buffer_pct': 0.0,                  # Buffer % above/below EMA (0 = exact crossover)
-    'use_open_price': True,             # Use candle OPEN price (fixed from False)
+    # NOTE: EMA calculated on CLOSE prices (industry standard, matches TradingView/Binance)
 
     # ==========================================================================
     # v2.0: Strict Candle Mode (Whole Candle Check) - REQUIRED

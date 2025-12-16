@@ -318,6 +318,13 @@ python optimize_ema9.py --focus timeframes
 
 ## Version History
 
+### v2.0.1 (2025-12-16)
+**Bug Fixes** - EMA calculation improvements
+
+- **FIX**: Use CLOSE prices for EMA (industry standard, matches TradingView/Binance)
+- **FIX**: Use PREVIOUS candle's EMA for comparison (avoids look-ahead contamination)
+- Removed `use_open_price` config option (now always uses CLOSE)
+
 ### v2.0.0 (2025-12-16)
 **Major Release** - Optimization-driven improvements
 

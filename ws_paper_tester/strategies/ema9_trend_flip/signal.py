@@ -238,20 +238,18 @@ def _evaluate_symbol(
         return None
 
     # ==========================================================================
-    # Calculate EMA on Open Prices
+    # Calculate EMA on CLOSE Prices (Industry Standard)
     # ==========================================================================
     ema_period = config.get('ema_period', 9)
-    use_open = config.get('use_open_price', True)
 
-    if use_open:
-        prices = [c['open'] for c in hourly_candles]
-    else:
-        prices = [c['close'] for c in hourly_candles]
+    # Use CLOSE prices for EMA (matches TradingView, Binance, etc.)
+    prices = [c['close'] for c in hourly_candles]
 
     ema_values = calculate_ema_series(prices, ema_period)
-    current_ema = ema_values[-1] if ema_values and ema_values[-1] is not None else None
 
-    if current_ema is None:
+    # IMPORTANT: Use PREVIOUS candle's EMA to avoid look-ahead contamination
+    # Current candle should be compared against EMA calculated BEFORE it existed
+    if len(ema_values) < 2 or ema_values[-2] is None:
         state['indicators'] = build_indicators(
             symbol=symbol,
             status='insufficient_ema_data',
@@ -260,6 +258,9 @@ def _evaluate_symbol(
         if track_rejections:
             track_rejection(state, RejectionReason.INSUFFICIENT_CANDLES, symbol)
         return None
+
+    # Use PREVIOUS EMA for current candle comparison (avoids look-ahead bias)
+    current_ema = ema_values[-2]
 
     # ==========================================================================
     # Calculate ATR for Dynamic Stops
@@ -274,20 +275,23 @@ def _evaluate_symbol(
 
     latest_candle = hourly_candles[-1]
     current_position = get_candle_position(
-        latest_candle, current_ema, buffer_pct, use_open, strict_candle_mode
+        latest_candle, current_ema, buffer_pct, use_open=False, strict_mode=strict_candle_mode
     )
 
     # ==========================================================================
     # Check Previous Consecutive Positions
     # ==========================================================================
+    # For consecutive check, each candle should compare against its PREVIOUS EMA
+    # hourly_candles[:-1] = candles 0 to N-1 (excludes current)
+    # ema_values[:-2] = EMA 0 to N-2 (each candle compares against prior EMA)
     n_consecutive = config.get('consecutive_candles', 3)
     prev_position, prev_count = check_consecutive_positions(
-        hourly_candles[:-1],  # Exclude current candle
-        ema_values[:-1],
+        hourly_candles[1:-1],   # Candles 1 to N-1 (need prior EMA for each)
+        ema_values[:-2],        # EMA 0 to N-2 (shifted: candle[i] vs ema[i-1])
         n_consecutive,
         buffer_pct,
-        use_open,
-        strict_candle_mode  # NEW: Use strict mode for previous candles too
+        use_open=False,         # Use CLOSE prices (industry standard)
+        strict_mode=strict_candle_mode
     )
 
     # ==========================================================================
