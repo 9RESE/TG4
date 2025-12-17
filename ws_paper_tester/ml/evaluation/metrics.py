@@ -4,7 +4,7 @@ Evaluation Metrics for ML Trading Models
 Provides both ML metrics (accuracy, F1) and trading metrics (Sharpe, drawdown).
 """
 
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Union
 from dataclasses import dataclass
 import numpy as np
 from sklearn.metrics import (
@@ -143,15 +143,18 @@ def confusion_matrix_report(
 def calculate_trading_metrics(
     returns: np.ndarray,
     risk_free_rate: float = 0.0,
-    periods_per_year: int = 365 * 24 * 60  # 1-minute bars
+    trades_per_year: Optional[int] = None,
+    trading_days: int = 365
 ) -> TradingMetrics:
     """
     Calculate trading performance metrics from returns.
 
     Args:
         returns: Array of trade returns (percentage)
-        risk_free_rate: Risk-free rate for Sharpe calculation
-        periods_per_year: Number of periods in a year
+        risk_free_rate: Risk-free rate for Sharpe calculation (annual)
+        trades_per_year: Expected trades per year for annualization.
+            If None, calculated from len(returns) assuming data covers trading_days.
+        trading_days: Number of days the returns data covers (default 365)
 
     Returns:
         TradingMetrics dataclass
@@ -177,10 +180,19 @@ def calculate_trading_metrics(
     # Total return
     total_return = (1 + returns / 100).prod() - 1
 
-    # Sharpe ratio (annualized)
-    excess_returns = returns - risk_free_rate / periods_per_year
+    # Calculate annualization factor based on trade frequency
+    # For trade returns, we annualize based on trades per year, not bars per year
+    if trades_per_year is None:
+        # Estimate trades per year from the data
+        trades_per_year = max(1, int(len(returns) * 365 / trading_days))
+
+    # Sharpe ratio (annualized) - using trade frequency
+    # Risk-free rate per trade = annual rate / trades per year
+    rf_per_trade = risk_free_rate / trades_per_year if trades_per_year > 0 else 0
+    excess_returns = returns - rf_per_trade
     if excess_returns.std() > 0:
-        sharpe = excess_returns.mean() / excess_returns.std() * np.sqrt(periods_per_year)
+        # Annualize: multiply by sqrt(trades_per_year)
+        sharpe = excess_returns.mean() / excess_returns.std() * np.sqrt(trades_per_year)
     else:
         sharpe = 0.0
 
@@ -227,46 +239,54 @@ def calculate_trading_metrics(
 def calculate_sortino_ratio(
     returns: np.ndarray,
     risk_free_rate: float = 0.0,
-    periods_per_year: int = 365 * 24 * 60
+    trades_per_year: Optional[int] = None,
+    trading_days: int = 365
 ) -> float:
     """
     Calculate Sortino ratio (downside risk-adjusted return).
 
     Args:
-        returns: Array of returns
-        risk_free_rate: Risk-free rate
-        periods_per_year: Annualization factor
+        returns: Array of trade returns
+        risk_free_rate: Annual risk-free rate
+        trades_per_year: Expected trades per year for annualization
+        trading_days: Number of days the returns data covers
 
     Returns:
         Sortino ratio
     """
-    excess_returns = returns - risk_free_rate / periods_per_year
+    if trades_per_year is None:
+        trades_per_year = max(1, int(len(returns) * 365 / trading_days))
+
+    rf_per_trade = risk_free_rate / trades_per_year if trades_per_year > 0 else 0
+    excess_returns = returns - rf_per_trade
     downside_returns = returns[returns < 0]
 
     if len(downside_returns) == 0 or downside_returns.std() == 0:
         return 0.0
 
     downside_std = downside_returns.std()
-    return (excess_returns.mean() / downside_std) * np.sqrt(periods_per_year)
+    return (excess_returns.mean() / downside_std) * np.sqrt(trades_per_year)
 
 
 def calculate_calmar_ratio(
     returns: np.ndarray,
-    periods_per_year: int = 365 * 24 * 60
+    trading_days: int = 365
 ) -> float:
     """
     Calculate Calmar ratio (return / max drawdown).
 
     Args:
-        returns: Array of returns
-        periods_per_year: Annualization factor
+        returns: Array of trade returns
+        trading_days: Number of days the returns data covers
 
     Returns:
         Calmar ratio
     """
-    # Annualized return
+    # Total return
     total_return = (1 + returns / 100).prod() - 1
-    n_years = len(returns) / periods_per_year
+
+    # Annualize based on actual trading period
+    n_years = trading_days / 365
     annualized_return = (1 + total_return) ** (1 / n_years) - 1 if n_years > 0 else 0
 
     # Max drawdown

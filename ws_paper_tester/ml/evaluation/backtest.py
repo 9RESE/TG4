@@ -27,6 +27,7 @@ class BacktestConfig:
     take_profit_pct: float = 4.0  # 4% take profit
     confidence_threshold: float = 0.6  # Minimum confidence for signal
     max_holding_periods: int = 60  # Maximum bars to hold position
+    trading_days: int = 365  # Number of days in the backtest period
 
 
 @dataclass
@@ -306,8 +307,11 @@ def simulate_trading(
         trade_returns.append(trade_return)
         capital += net_pnl
 
-    # Calculate metrics
-    metrics = calculate_trading_metrics(np.array(trade_returns))
+    # Calculate metrics with correct annualization
+    metrics = calculate_trading_metrics(
+        np.array(trade_returns),
+        trading_days=config.trading_days
+    )
 
     return BacktestResult(
         metrics=metrics,
@@ -399,8 +403,11 @@ def walk_forward_backtest(
                   f"trades={fold_result.metrics.num_trades}, "
                   f"return={fold_result.metrics.total_return:.2f}%")
 
-    # Calculate overall metrics
-    overall_metrics = calculate_trading_metrics(np.array(all_trade_returns))
+    # Calculate overall metrics using total trading days from config
+    overall_metrics = calculate_trading_metrics(
+        np.array(all_trade_returns),
+        trading_days=config.trading_days
+    )
 
     return {
         'overall_metrics': overall_metrics,

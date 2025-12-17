@@ -3,6 +3,9 @@ Evaluation module for ML models.
 
 Provides metrics calculation, backtesting integration, and
 performance analysis tools.
+
+New in v2.0:
+- PerformanceTracker: Track model performance in TimescaleDB
 """
 
 from .metrics import (
@@ -23,6 +26,11 @@ from .backtest import (
     BacktestResult,
     Trade
 )
+from .performance_tracker import (
+    PerformanceTracker,
+    ModelPerformanceRecord,
+    save_training_performance,
+)
 
 __all__ = [
     # Metrics
@@ -41,4 +49,8 @@ __all__ = [
     "BacktestConfig",
     "BacktestResult",
     "Trade",
+    # Performance tracking
+    "PerformanceTracker",
+    "ModelPerformanceRecord",
+    "save_training_performance",
 ]

@@ -131,6 +131,7 @@ class XGBoostClassifier(SignalClassifier):
         gamma: float = 0.1,
         reg_alpha: float = 0.1,
         reg_lambda: float = 1.0,
+        early_stopping_rounds: int = 50,
         device: str = 'cuda',
         random_state: int = 42
     ):
@@ -147,6 +148,7 @@ class XGBoostClassifier(SignalClassifier):
             gamma: Minimum loss reduction for split
             reg_alpha: L1 regularization
             reg_lambda: L2 regularization
+            early_stopping_rounds: Rounds without improvement to stop
             device: 'cuda' or 'cpu'
             random_state: Random seed
         """
@@ -163,6 +165,7 @@ class XGBoostClassifier(SignalClassifier):
             'gamma': gamma,
             'reg_alpha': reg_alpha,
             'reg_lambda': reg_lambda,
+            'early_stopping_rounds': early_stopping_rounds,
             'objective': 'multi:softprob',
             'num_class': 3,
             'tree_method': 'hist',
@@ -181,7 +184,7 @@ class XGBoostClassifier(SignalClassifier):
         y_train: np.ndarray,
         X_val: Optional[np.ndarray] = None,
         y_val: Optional[np.ndarray] = None,
-        early_stopping_rounds: int = 50,
+        early_stopping_rounds: Optional[int] = None,
         verbose: bool = True
     ) -> Dict[str, Any]:
         """
@@ -192,14 +195,23 @@ class XGBoostClassifier(SignalClassifier):
             y_train: Training labels
             X_val: Validation features (optional)
             y_val: Validation labels (optional)
-            early_stopping_rounds: Rounds for early stopping
+            early_stopping_rounds: Override early stopping rounds (uses init value if None)
             verbose: Print training progress
 
         Returns:
             Dictionary with training metrics
         """
+        # Override early_stopping_rounds if provided
+        params = self.params.copy()
+        if early_stopping_rounds is not None:
+            params['early_stopping_rounds'] = early_stopping_rounds
+
+        # Disable early stopping if no validation set
+        if X_val is None:
+            params.pop('early_stopping_rounds', None)
+
         # Create model
-        self.model = xgb.XGBClassifier(**self.params)
+        self.model = xgb.XGBClassifier(**params)
 
         # Prepare eval set
         eval_set = [(X_train, y_train)]
