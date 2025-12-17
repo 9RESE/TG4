@@ -88,6 +88,11 @@ class RetrainingConfig:
     reg_lambda: float = 1.0  # L2 regularization
     early_stopping_rounds: int = 30  # Stop if no improvement
 
+    # v2.1 improvements
+    use_class_weights: bool = True  # Reduce HOLD bias
+    confidence_threshold: float = 0.4  # Lowered from 0.6 for more trades
+    enrich_regime: bool = True  # Add regime detection features
+
     # Deployment
     auto_deploy: bool = False
     min_improvement_pct: float = 5.0  # Min improvement to auto-deploy
@@ -116,12 +121,18 @@ class RetrainingResult:
     recall: float
     f1_score: float
 
+    # v2.1: Signal precision metrics
+    buy_precision: float = 0.0
+    sell_precision: float = 0.0
+    action_precision: float = 0.0
+    hold_bias: float = 0.0
+
     # Trading metrics
-    total_return: float
-    sharpe_ratio: float
-    max_drawdown: float
-    win_rate: float
-    num_trades: int
+    total_return: float = 0.0
+    sharpe_ratio: float = 0.0
+    max_drawdown: float = 0.0
+    win_rate: float = 0.0
+    num_trades: int = 0
 
     # Comparison
     previous_version: Optional[str] = None
@@ -267,6 +278,43 @@ class RetrainingPipeline:
             finally:
                 await provider.close()
 
+        # Enrich with regime detection features
+        if self.config.enrich_regime:
+            logger.info("Adding regime detection features")
+            from ml.features.regime_detection import RegimeDetector
+
+            detector = RegimeDetector()
+            prices = features_df['close'].values
+            highs = features_df['high'].values if 'high' in features_df.columns else None
+            lows = features_df['low'].values if 'low' in features_df.columns else None
+            volumes = features_df['volume'].values if 'volume' in features_df.columns else None
+
+            # Detect regimes for full series
+            regime_df = detector.detect_regime_series(
+                features_df,
+                close_col='close',
+                high_col='high',
+                low_col='low',
+                volume_col='volume'
+            )
+
+            # Add regime features
+            features_df['regime'] = regime_df['regime']
+            features_df['regime_confidence'] = regime_df['regime_confidence']
+            features_df['regime_volatility'] = regime_df['regime_volatility']
+            features_df['regime_trend_strength'] = regime_df['regime_trend_strength']
+
+            # One-hot encode regimes
+            for regime_type in ['trending_up', 'trending_down', 'ranging', 'volatile', 'breakout']:
+                features_df[f'regime_{regime_type}'] = (
+                    features_df['regime'] == regime_type
+                ).astype(float)
+
+            # Drop the string regime column (keep numerical features)
+            features_df = features_df.drop(columns=['regime'])
+
+            logger.info("Added 8 regime detection features")
+
         # Fill NaN values
         fill_defaults = {
             'trade_imbalance': 0.0,
@@ -281,7 +329,15 @@ class RetrainingPipeline:
             'tf_divergence_score': 0.0,
             'multi_resolution_volatility': 0.0,
             'dominant_trend': 0.0,
-            'momentum_confluence': 0.0
+            'momentum_confluence': 0.0,
+            'regime_confidence': 0.0,
+            'regime_volatility': 0.5,
+            'regime_trend_strength': 0.0,
+            'regime_trending_up': 0.0,
+            'regime_trending_down': 0.0,
+            'regime_ranging': 1.0,  # Default to ranging
+            'regime_volatile': 0.0,
+            'regime_breakout': 0.0,
         }
         features_df.fillna(fill_defaults, inplace=True)
 
@@ -373,6 +429,7 @@ class RetrainingPipeline:
         logger.info(f"  max_depth={self.config.max_depth}, "
                    f"learning_rate={self.config.learning_rate}, "
                    f"early_stopping={self.config.early_stopping_rounds}")
+        logger.info(f"  use_class_weights={self.config.use_class_weights}")
 
         model = XGBoostClassifier(
             n_estimators=self.config.n_estimators,
@@ -384,13 +441,20 @@ class RetrainingPipeline:
             reg_alpha=self.config.reg_alpha,
             reg_lambda=self.config.reg_lambda,
             early_stopping_rounds=self.config.early_stopping_rounds,
-            device='cpu'  # Fallback to CPU if CUDA not available
+            device='cpu',  # Fallback to CPU if CUDA not available
+            use_class_weights=self.config.use_class_weights  # v2.1: reduce HOLD bias
         )
 
         metrics = model.fit(X_train, y_train, X_val, y_val, verbose=True)
 
         logger.info(f"Train accuracy: {metrics['train_accuracy']*100:.1f}%")
         logger.info(f"Val accuracy: {metrics['val_accuracy']*100:.1f}%")
+
+        # Log class weight info if used
+        if self.config.use_class_weights and model.class_weights_ is not None:
+            logger.info(f"  Class weights: SELL={model.class_weights_[0]:.2f}, "
+                       f"HOLD={model.class_weights_[1]:.2f}, "
+                       f"BUY={model.class_weights_[2]:.2f}")
 
         # Check for overfitting
         overfit_gap = metrics['train_accuracy'] - metrics['val_accuracy']
@@ -406,16 +470,37 @@ class RetrainingPipeline:
         y_test: np.ndarray,
         prices_test: np.ndarray
     ) -> Dict[str, Any]:
-        """Evaluate model on test set."""
-        from ml.evaluation.metrics import calculate_metrics
+        """Evaluate model on test set with precision-focused metrics."""
+        from ml.evaluation.metrics import (
+            calculate_metrics,
+            calculate_signal_precision_metrics
+        )
         from ml.evaluation.backtest import backtest_model, BacktestConfig
 
         logger.info("Evaluating on test set")
+        logger.info(f"  Using confidence_threshold={self.config.confidence_threshold}")
 
+        # Get predictions and probabilities
         predictions = model.predict(X_test)
+        probs = model.predict_proba(X_test)
+        confidences = probs.max(axis=1)
+
+        # Standard classification metrics
         metrics = calculate_metrics(y_test, predictions)
 
-        # Run backtest with correct trading days for annualization
+        # v2.1: Add precision-focused metrics for buy/sell signals
+        signal_metrics = calculate_signal_precision_metrics(
+            y_test, predictions, confidences,
+            confidence_threshold=self.config.confidence_threshold
+        )
+
+        logger.info(f"  Buy precision: {signal_metrics.buy_precision*100:.1f}% "
+                   f"({signal_metrics.buy_count} signals)")
+        logger.info(f"  Sell precision: {signal_metrics.sell_precision*100:.1f}% "
+                   f"({signal_metrics.sell_count} signals)")
+        logger.info(f"  Hold bias: {signal_metrics.hold_bias*100:.1f}%")
+
+        # Run backtest with v2.1 settings
         # Test set is typically 20% of total days
         test_days = max(1, int(self.config.days * 0.2))
         backtest_result = backtest_model(
@@ -425,7 +510,7 @@ class RetrainingPipeline:
             config=BacktestConfig(
                 initial_capital=1000.0,
                 position_size_pct=0.1,
-                confidence_threshold=0.6,
+                confidence_threshold=self.config.confidence_threshold,  # v2.1: lowered
                 stop_loss_pct=2.0,
                 take_profit_pct=4.0,
                 trading_days=test_days
@@ -434,6 +519,7 @@ class RetrainingPipeline:
 
         return {
             'classification': metrics,
+            'signal_precision': signal_metrics,
             'backtest': backtest_result.metrics
         }
 
@@ -504,6 +590,9 @@ class RetrainingPipeline:
             registry = ModelRegistry(self.config.registry_path)
             previous_version = registry.get_deployed_version(self.config.model_name)
 
+            # Get signal precision for registration
+            signal_precision = eval_metrics.get('signal_precision')
+
             model_info = registry.register(
                 model=model,
                 name=self.config.model_name,
@@ -515,6 +604,12 @@ class RetrainingPipeline:
                     'precision': eval_metrics['classification']['precision'],
                     'recall': eval_metrics['classification']['recall'],
                     'f1_score': eval_metrics['classification']['f1_score'],
+                    # v2.1: Signal precision metrics
+                    'buy_precision': signal_precision.buy_precision if signal_precision else 0.0,
+                    'sell_precision': signal_precision.sell_precision if signal_precision else 0.0,
+                    'action_precision': signal_precision.action_precision if signal_precision else 0.0,
+                    'hold_bias': signal_precision.hold_bias if signal_precision else 0.0,
+                    # Trading metrics
                     'total_return': eval_metrics['backtest'].total_return,
                     'sharpe_ratio': eval_metrics['backtest'].sharpe_ratio,
                 },
@@ -523,14 +618,19 @@ class RetrainingPipeline:
                     'days': self.config.days,
                     'enrich_order_flow': self.config.enrich_order_flow,
                     'enrich_mtf': self.config.enrich_mtf,
+                    'enrich_regime': self.config.enrich_regime,
+                    'use_class_weights': self.config.use_class_weights,
+                    'confidence_threshold': self.config.confidence_threshold,
                     'n_estimators': self.config.n_estimators,
                     'max_depth': self.config.max_depth,
                 },
                 training_features=list(feature_cols),
-                description=f"Retrained on {self.config.days} days, "
+                description=f"v2.1: Retrained on {self.config.days} days, "
                            f"order_flow={self.config.enrich_order_flow}, "
-                           f"mtf={self.config.enrich_mtf}",
-                tags=['retrained', 'automated']
+                           f"mtf={self.config.enrich_mtf}, "
+                           f"regime={self.config.enrich_regime}, "
+                           f"class_weights={self.config.use_class_weights}",
+                tags=['retrained', 'automated', 'v2.1']
             )
 
             logger.info(f"Registered model version: {model_info.version}")
@@ -562,7 +662,8 @@ class RetrainingPipeline:
                     logger.info(f"Not deploying: improvement {improvement_pct:.1f}% "
                               f"< threshold {self.config.min_improvement_pct}%")
 
-            # Build result
+            # Build result with v2.1 precision metrics
+            signal_precision = eval_metrics.get('signal_precision')
             result = RetrainingResult(
                 model_version=model_info.version,
                 training_samples=len(X_train),
@@ -573,6 +674,12 @@ class RetrainingPipeline:
                 precision=eval_metrics['classification']['precision'],
                 recall=eval_metrics['classification']['recall'],
                 f1_score=eval_metrics['classification']['f1_score'],
+                # v2.1: Signal precision metrics
+                buy_precision=signal_precision.buy_precision if signal_precision else 0.0,
+                sell_precision=signal_precision.sell_precision if signal_precision else 0.0,
+                action_precision=signal_precision.action_precision if signal_precision else 0.0,
+                hold_bias=signal_precision.hold_bias if signal_precision else 0.0,
+                # Trading metrics
                 total_return=eval_metrics['backtest'].total_return,
                 sharpe_ratio=eval_metrics['backtest'].sharpe_ratio,
                 max_drawdown=eval_metrics['backtest'].max_drawdown,
@@ -638,6 +745,18 @@ async def main():
         help='Enrich with multi-timeframe features'
     )
     parser.add_argument(
+        '--enrich-regime', action='store_true', default=True,
+        help='Add regime detection features (default: True)'
+    )
+    parser.add_argument(
+        '--no-class-weights', action='store_true',
+        help='Disable class weights (not recommended)'
+    )
+    parser.add_argument(
+        '--confidence-threshold', type=float, default=0.4,
+        help='Confidence threshold for trading signals (default: 0.4)'
+    )
+    parser.add_argument(
         '--auto-deploy', action='store_true',
         help='Auto-deploy if performance improves'
     )
@@ -668,6 +787,9 @@ async def main():
         lookahead=args.lookahead,
         enrich_order_flow=args.enrich_order_flow,
         enrich_mtf=args.enrich_mtf,
+        enrich_regime=args.enrich_regime,
+        use_class_weights=not args.no_class_weights,  # v2.1: enabled by default
+        confidence_threshold=args.confidence_threshold,  # v2.1: lowered to 0.4
         auto_deploy=args.auto_deploy,
         min_improvement_pct=args.min_improvement,
         registry_path=args.registry_path,
@@ -677,21 +799,30 @@ async def main():
     pipeline = RetrainingPipeline(config)
     result = await pipeline.run()
 
-    # Print summary
+    # Print summary with v2.1 metrics
     print("\n" + "=" * 60)
-    print("RETRAINING SUMMARY")
+    print("RETRAINING SUMMARY (v2.1)")
     print("=" * 60)
     print(f"Model Version: {result.model_version}")
     print(f"Training Time: {result.training_time_seconds:.1f}s")
     print(f"Training Samples: {result.training_samples:,}")
-    print(f"Test Accuracy: {result.test_accuracy*100:.1f}%")
-    print(f"F1 Score: {result.f1_score*100:.1f}%")
-    print(f"Total Return: {result.total_return:.2f}%")
-    print(f"Sharpe Ratio: {result.sharpe_ratio:.2f}")
-    print(f"Win Rate: {result.win_rate:.1f}%")
-    print(f"Deployed: {result.deployed}")
+    print(f"\nClassification Metrics:")
+    print(f"  Test Accuracy: {result.test_accuracy*100:.1f}%")
+    print(f"  F1 Score: {result.f1_score*100:.1f}%")
+    print(f"\nSignal Precision (v2.1):")
+    print(f"  Buy Precision: {result.buy_precision*100:.1f}%")
+    print(f"  Sell Precision: {result.sell_precision*100:.1f}%")
+    print(f"  Action Precision: {result.action_precision*100:.1f}%")
+    print(f"  Hold Bias: {result.hold_bias*100:.1f}%")
+    print(f"\nTrading Metrics:")
+    print(f"  Total Return: {result.total_return:.2f}%")
+    print(f"  Sharpe Ratio: {result.sharpe_ratio:.2f}")
+    print(f"  Win Rate: {result.win_rate:.1f}%")
+    print(f"  Num Trades: {result.num_trades}")
+    print(f"\nDeployment:")
+    print(f"  Deployed: {result.deployed}")
     if result.improvement_pct is not None:
-        print(f"Improvement: {result.improvement_pct:.1f}%")
+        print(f"  Improvement: {result.improvement_pct:.1f}%")
     print("=" * 60)
 
 

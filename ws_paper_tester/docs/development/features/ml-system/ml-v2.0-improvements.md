@@ -1,7 +1,8 @@
-# ML Trading System v2.0 Improvements
+# ML Trading System v2.1 Improvements
 
-**Document Version**: 2.0
+**Document Version**: 2.1
 **Created**: 2025-12-17
+**Updated**: 2025-12-17
 **Status**: Implemented
 **Author**: Claude Code
 
@@ -9,7 +10,7 @@
 
 ## Overview
 
-This document describes the significant improvements made to the ML trading system in v2.0. These changes address critical issues with metrics calculation, data leakage, and add new feature engineering capabilities.
+This document describes the significant improvements made to the ML trading system in v2.0 and v2.1. These changes address critical issues with metrics calculation, data leakage, class imbalance, and add new feature engineering capabilities including regime detection.
 
 ## Summary of Changes
 
@@ -178,12 +179,116 @@ class BacktestConfig:
 2. **GPU Memory**: Large models may require reducing batch size for 12GB VRAM
 3. **Order Flow Data**: Requires trade-level data with buy/sell side information
 
+## v2.1 Improvements (2025-12-17)
+
+### 8. Class Weights for HOLD Bias Reduction
+
+**Problem**: The model was heavily biased towards predicting HOLD (68-84% of labels), leading to few actionable signals.
+
+**Solution**: Added `use_class_weights` parameter to `XGBoostClassifier`:
+```python
+class XGBoostClassifier:
+    def __init__(self, ..., use_class_weights: bool = False):
+        self.use_class_weights = use_class_weights
+
+    @staticmethod
+    def compute_class_weights(y: np.ndarray) -> np.ndarray:
+        """Inverse frequency weighting to reduce majority class bias."""
+        weights[cls] = total / (num_classes * counts[cls])
+```
+
+**Impact**:
+- BUY/SELL signals now properly weighted during training
+- Reduces over-prediction of HOLD class
+
+### 9. Lower Confidence Threshold
+
+**Problem**: Default confidence threshold of 0.6 was too high, resulting in 0 trades in many periods.
+
+**Solution**: Lowered default `confidence_threshold` from 0.6 to 0.4 in `BacktestConfig`.
+
+**Impact**:
+- More trades generated for backtesting
+- Better signal coverage while maintaining reasonable precision
+
+### 10. Signal Precision Metrics
+
+**New File**: `ws_paper_tester/ml/evaluation/metrics.py` (extended)
+
+New `SignalPrecisionMetrics` class and `calculate_signal_precision_metrics()` function:
+
+| Metric | Description |
+|--------|-------------|
+| `buy_precision` | When we predict BUY, how often is it correct? |
+| `sell_precision` | When we predict SELL, how often is it correct? |
+| `action_precision` | Precision for non-HOLD predictions |
+| `false_buy_rate` | Rate of incorrect BUY signals |
+| `false_sell_rate` | Rate of incorrect SELL signals |
+| `hold_bias` | Fraction of predictions that are HOLD |
+
+Also added `calculate_profit_by_signal()` for P&L breakdown by signal type.
+
+### 11. Regime Detection
+
+**New File**: `ws_paper_tester/ml/features/regime_detection.py`
+
+Identifies market regimes to understand model performance across conditions:
+
+| Regime | Description |
+|--------|-------------|
+| `TRENDING_UP` | Strong upward trend with momentum |
+| `TRENDING_DOWN` | Strong downward trend with momentum |
+| `RANGING` | Sideways price action with low volatility |
+| `VOLATILE` | High volatility with no clear direction |
+| `BREAKOUT` | Transitioning from ranging to trending |
+
+Key features:
+- ADX-based trend strength detection
+- ATR-based volatility percentile calculation
+- Support/resistance level tracking
+- One-hot encoded regime features for ML input
+
+**Usage**:
+```python
+from ml.features.regime_detection import RegimeDetector, analyze_performance_by_regime
+
+detector = RegimeDetector()
+state = detector.detect_regime(prices, highs, lows, volumes)
+print(f"Current regime: {state.regime.value}, confidence: {state.confidence:.2f}")
+```
+
+### 12. Updated RetrainingConfig Defaults (v2.1)
+
+```python
+@dataclass
+class RetrainingConfig:
+    # ... v2.0 fields ...
+
+    # v2.1 improvements
+    use_class_weights: bool = True  # Reduce HOLD bias
+    confidence_threshold: float = 0.4  # Lowered from 0.6
+    enrich_regime: bool = True  # Add regime detection features
+```
+
+## Files Modified in v2.1
+
+| File | Changes |
+|------|---------|
+| `ml/models/classifier.py` | Added `use_class_weights`, `compute_class_weights()`, `compute_sample_weights()` |
+| `ml/evaluation/metrics.py` | Added `SignalPrecisionMetrics`, `calculate_signal_precision_metrics()`, `calculate_profit_by_signal()` |
+| `ml/evaluation/backtest.py` | Updated default `confidence_threshold` to 0.4 |
+| `ml/evaluation/__init__.py` | Exported new precision metric classes and functions |
+| `ml/features/regime_detection.py` | NEW: Complete regime detection module |
+| `ml/features/__init__.py` | Exported regime detection classes |
+| `ml/scripts/retrain_pipeline.py` | Integrated all v2.1 improvements |
+
 ## Future Improvements
 
-1. Walk-forward validation for more realistic performance estimates
+1. ~~Walk-forward validation for more realistic performance estimates~~ (Implemented in v2.0)
 2. Online learning for continuous model updates
 3. Multi-asset portfolio optimization
 4. Attention-based models for longer-term dependencies
+5. Ensemble models combining multiple timeframes
 
 ---
 

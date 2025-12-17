@@ -25,7 +25,7 @@ class BacktestConfig:
     slippage_pct: float = 0.0005  # 0.05% slippage
     stop_loss_pct: float = 2.0  # 2% stop loss
     take_profit_pct: float = 4.0  # 4% take profit
-    confidence_threshold: float = 0.6  # Minimum confidence for signal
+    confidence_threshold: float = 0.4  # Lowered from 0.6 to get more trades
     max_holding_periods: int = 60  # Maximum bars to hold position
     trading_days: int = 365  # Number of days in the backtest period
 

@@ -133,7 +133,8 @@ class XGBoostClassifier(SignalClassifier):
         reg_lambda: float = 1.0,
         early_stopping_rounds: int = 50,
         device: str = 'cuda',
-        random_state: int = 42
+        random_state: int = 42,
+        use_class_weights: bool = False
     ):
         """
         Initialize XGBoost classifier.
@@ -151,6 +152,7 @@ class XGBoostClassifier(SignalClassifier):
             early_stopping_rounds: Rounds without improvement to stop
             device: 'cuda' or 'cpu'
             random_state: Random seed
+            use_class_weights: If True, compute and apply class weights to reduce bias
         """
         if xgb is None:
             raise ImportError("xgboost is required. Install with: pip install xgboost")
@@ -174,9 +176,43 @@ class XGBoostClassifier(SignalClassifier):
             'eval_metric': 'mlogloss'
         }
 
+        self.use_class_weights = use_class_weights
+        self.class_weights_: Optional[np.ndarray] = None
         self.model = None
         self.feature_names: Optional[List[str]] = None
         self.feature_importance_: Optional[np.ndarray] = None
+
+    @staticmethod
+    def compute_class_weights(y: np.ndarray, num_classes: int = 3) -> np.ndarray:
+        """
+        Compute class weights using inverse frequency.
+
+        Reduces bias towards majority class (HOLD) by upweighting
+        minority classes (BUY/SELL).
+
+        Args:
+            y: Label array
+            num_classes: Number of classes
+
+        Returns:
+            Array of class weights
+        """
+        from collections import Counter
+        counts = Counter(y)
+        total = len(y)
+
+        weights = np.ones(num_classes)
+        for cls in range(num_classes):
+            if counts[cls] > 0:
+                # Inverse frequency weighting
+                weights[cls] = total / (num_classes * counts[cls])
+
+        return weights
+
+    @staticmethod
+    def compute_sample_weights(y: np.ndarray, class_weights: np.ndarray) -> np.ndarray:
+        """Convert class weights to per-sample weights."""
+        return np.array([class_weights[int(label)] for label in y])
 
     def fit(
         self,
@@ -210,6 +246,12 @@ class XGBoostClassifier(SignalClassifier):
         if X_val is None:
             params.pop('early_stopping_rounds', None)
 
+        # Compute sample weights if enabled
+        sample_weight = None
+        if self.use_class_weights:
+            self.class_weights_ = self.compute_class_weights(y_train)
+            sample_weight = self.compute_sample_weights(y_train, self.class_weights_)
+
         # Create model
         self.model = xgb.XGBClassifier(**params)
 
@@ -218,9 +260,10 @@ class XGBoostClassifier(SignalClassifier):
         if X_val is not None and y_val is not None:
             eval_set.append((X_val, y_val))
 
-        # Train
+        # Train with sample weights
         self.model.fit(
             X_train, y_train,
+            sample_weight=sample_weight,
             eval_set=eval_set,
             verbose=verbose
         )

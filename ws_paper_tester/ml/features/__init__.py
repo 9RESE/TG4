@@ -24,6 +24,13 @@ from .multi_timeframe import (
     enrich_features_with_mtf,
     enrich_features_with_mtf_sync,
 )
+from .regime_detection import (
+    RegimeDetector,
+    RegimeConfig,
+    RegimeState,
+    MarketRegime,
+    analyze_performance_by_regime,
+)
 
 __all__ = [
     "FeatureExtractor",
@@ -40,4 +47,10 @@ __all__ = [
     "TimeframeFeatures",
     "enrich_features_with_mtf",
     "enrich_features_with_mtf_sync",
+    # Regime detection
+    "RegimeDetector",
+    "RegimeConfig",
+    "RegimeState",
+    "MarketRegime",
+    "analyze_performance_by_regime",
 ]

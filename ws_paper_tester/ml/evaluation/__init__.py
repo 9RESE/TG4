@@ -16,7 +16,10 @@ from .metrics import (
     TradingMetrics,
     calculate_sortino_ratio,
     calculate_calmar_ratio,
-    signal_accuracy_by_confidence
+    signal_accuracy_by_confidence,
+    SignalPrecisionMetrics,
+    calculate_signal_precision_metrics,
+    calculate_profit_by_signal
 )
 from .backtest import (
     backtest_model,
@@ -42,6 +45,9 @@ __all__ = [
     "calculate_sortino_ratio",
     "calculate_calmar_ratio",
     "signal_accuracy_by_confidence",
+    "SignalPrecisionMetrics",
+    "calculate_signal_precision_metrics",
+    "calculate_profit_by_signal",
     # Backtesting
     "backtest_model",
     "simulate_trading",
