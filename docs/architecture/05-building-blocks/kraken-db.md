@@ -344,23 +344,41 @@ PostgreSQL is tuned for time-series workloads:
 |--------|-------|
 | Database Size | 845 MB |
 | Symbols Tracked | 3 (XRP/USDT, BTC/USDT, XRP/BTC) |
-| Candle Coverage | 35 days (from 2024-12-12) |
+| Historical Coverage | **5-9 years** (via continuous aggregates) |
+| Base 1m Candle Retention | 365 days |
 | Trade Retention | 90 days |
-| Continuous Aggregates | 8 timeframes operational |
+| Continuous Aggregates | 8 timeframes with full history |
 
-### Coverage by Symbol
+### Historical Data in Aggregates
 
-| Symbol | 1m Candles | Trade Count | Oldest Trade |
-|--------|------------|-------------|--------------|
-| BTC/USDT | 343,519 | 538,692 | 2025-09-18 |
-| XRP/USDT | 219,965 | 247,116 | 2025-09-18 |
-| XRP/BTC | 219,739 | 138,604 | 2025-09-18 |
+| Symbol | Daily Candles | Coverage |
+|--------|---------------|----------|
+| XRP/BTC | 3,355 | 2016-07-19 → Present (9 years) |
+| BTC/USDT | 2,190 | 2019-12-19 → Present (5 years) |
+| XRP/USDT | 2,057 | 2020-04-30 → Present (5 years) |
+
+### Aggregate Holdings
+
+| Timeframe | Records |
+|-----------|---------|
+| 5-minute | 1,551,789 |
+| 1-hour | 178,494 |
+| 1-day | 7,602 |
+| 1-week | 1,090 |
+
+### Base Table Coverage (Subject to Retention)
+
+| Symbol | 1m Candles | Trade Count | Trade History |
+|--------|------------|-------------|---------------|
+| BTC/USDT | 343,519 | 538,692 | 90 days |
+| XRP/USDT | 219,965 | 247,116 | 90 days |
+| XRP/BTC | 219,739 | 138,604 | 90 days |
 
 ### Known Data Quality Issues
 
-1. **Candle Gaps**: ~65% gap rate in 1-minute candles (needs gap filler)
-2. **Limited History**: Only 35 days of candle data retained
-3. **Sync Status Mismatch**: `data_sync_status` reports historical data older than retention
+1. **1m Candle Gaps**: ~65% gap rate in recent data (needs gap filler)
+2. **Historical 1m Data**: Not available (use 5m+ aggregates for backtesting)
+3. **Trade Data Limited**: 90-day retention - tick-level analysis limited to recent data
 
 ### Data Not Currently Collected
 

@@ -7,11 +7,13 @@
 This analysis examines the current state of the Kraken historical database, identifies data gaps in existing holdings, and evaluates untapped Kraken API data offerings that could benefit trading operations.
 
 **Key Findings:**
-1. **Significant candle data gaps** - 65% of recent candles show gaps >1 minute
-2. **Sync status mismatch** - `data_sync_status` reports years of data, but actual tables contain only 3 months
+1. **Rich historical data preserved** - Continuous aggregates contain 5-9 years of data (2016-2025)
+2. **Base 1m candle gaps** - 65% gap rate in recent 1-minute candles needs gap filler
 3. **Limited symbol coverage** - Only 3 pairs tracked (XRP/USDT, BTC/USDT, XRP/BTC) vs 253+ available
 4. **No order book data** - Missing Level 2 depth data critical for spread analysis
 5. **No account data integration** - Ledger history, trade history not being collected
+
+**Positive Discovery:** The continuous aggregates (5m, 15m, 1h, 4h, 1d, 1w) preserve historical data even after base table retention. We have 1.5M+ 5-minute candles going back to 2016.
 
 ---
 
@@ -27,17 +29,42 @@ This analysis examines the current state of the Kraken historical database, iden
 | Symbols Tracked | 3 |
 | Continuous Aggregates | 8 timeframes |
 
-### Data Sync Status vs Reality
+### Historical Data in Continuous Aggregates
 
-The `data_sync_status` table reports historical coverage that does not match actual table contents:
+**Critical Discovery:** The continuous aggregates preserve historical data independently of base table retention. This is a significant asset for backtesting.
 
-| Symbol | Reported Oldest | Reported Newest | Actual Oldest (trades) | Actual Newest |
-|--------|-----------------|-----------------|------------------------|---------------|
-| XRP/BTC | 2016-07-19 | 2025-12-16 | 2025-09-18 | 2025-12-16 |
-| BTC/USDT | 2019-12-19 | 2025-12-16 | 2025-09-18 | 2025-12-16 |
-| XRP/USDT | 2020-04-30 | 2025-12-16 | 2025-09-18 | 2025-12-16 |
+| Symbol | Daily Candles | Coverage | Years |
+|--------|---------------|----------|-------|
+| XRP/BTC | 3,355 | 2016-07-19 → 2025-12-16 | **9 years** |
+| BTC/USDT | 2,190 | 2019-12-19 → 2025-12-16 | **5 years** |
+| XRP/USDT | 2,057 | 2020-04-30 → 2025-12-16 | **5 years** |
 
-**Finding:** The sync status table is tracking metadata correctly for backfill operations, but retention policies have deleted older data. The 90-day retention policy on trades means only ~3 months of tick data is preserved.
+### Continuous Aggregate Holdings
+
+| Timeframe | Total Records | Oldest | Newest |
+|-----------|--------------|--------|--------|
+| 5-minute | 1,551,789 | 2016-07-19 | 2025-12-16 |
+| 15-minute | 646,681 | 2016-07-19 | 2025-12-16 |
+| 30-minute | 346,074 | 2016-07-19 | 2025-12-16 |
+| 1-hour | 178,494 | 2016-07-19 | 2025-12-16 |
+| 4-hour | 45,467 | 2016-07-19 | 2025-12-16 |
+| 12-hour | 15,198 | 2016-07-19 | 2025-12-16 |
+| 1-day | 7,602 | 2016-07-19 | 2025-12-16 |
+| 1-week | 1,090 | 2016-07-18 | 2025-12-15 |
+
+**Note:** These aggregates are materialized views that persist data even after base table retention deletes older records.
+
+### Data Sync Status vs Base Tables
+
+The `data_sync_status` table tracks import history, but base tables are limited by retention:
+
+| Symbol | Sync Reports | Base Candles (1m) | Base Trades |
+|--------|--------------|-------------------|-------------|
+| XRP/BTC | Since 2016 | Dec 2024 only (365-day retention) | Sep 2025 only (90-day retention) |
+| BTC/USDT | Since 2019 | Dec 2024 only | Sep 2025 only |
+| XRP/USDT | Since 2020 | Dec 2024 only | Sep 2025 only |
+
+**Finding:** The sync status accurately reflects what was imported historically. The continuous aggregates preserve this data, but base 1-minute candles and trades are subject to retention policies.
 
 ### Candle Data Coverage
 
