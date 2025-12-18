@@ -1,48 +1,76 @@
 # TripleGain - LLM-Assisted Trading System
 
 ## Project Type
-Python trading system with TimescaleDB + multi-LLM agents
+Python trading system with TimescaleDB + 6-model LLM comparison
 
-## Commands
-- Test: `pytest`
-- Database: `docker-compose up -d timescaledb`
-- Gap Filler: `python -m data.kraken_db.gap_filler --db-url "$DATABASE_URL"`
+## Quick Commands
+```bash
+pytest                                              # Run tests
+docker-compose up -d timescaledb                    # Start database
+python -m data.kraken_db.gap_filler --db-url "$DB_URL"  # Fill data gaps
+```
+
+## Current Phase: Pre-Phase 1 (Infrastructure Ready)
+
+**Status**: Design complete, data infrastructure operational, agent code not started
+
+| Phase | Status | Description |
+|-------|--------|-------------|
+| 1. Foundation | Not Started | Data pipeline, indicators, snapshots, prompts |
+| 2. Core Agents | Not Started | TA, Regime, Risk, Trading Decision agents |
+| 3. Orchestration | Not Started | Communication, Coordinator, Execution |
+| 4. Extended | Not Started | Sentiment, Hodl Bag, A/B Testing, Dashboard |
+| 5. Production | Not Started | Testing, Paper Trading, Live Deployment |
 
 ## Key Facts (Memory)
 
-### Historical Database
-- **5-9 years of historical data** available via TimescaleDB continuous aggregates
-- Symbols: XRP/USDT, BTC/USDT, XRP/BTC
-- Coverage: XRP/BTC since 2016-07-19, BTC/USDT since 2019-12-19, XRP/USDT since 2020-04-30
-- 1.5M+ 5-minute candles, 178K+ hourly candles, 7.6K+ daily candles
-- Base tables have retention (90 days trades, 365 days 1m candles), but aggregates preserve full history
+### Data Available
+- **5-9 years historical** via TimescaleDB continuous aggregates
+- Symbols: XRP/USDT (2020), BTC/USDT (2019), XRP/BTC (2016)
+- Aggregates: 1m, 5m, 15m, 30m, 1h, 4h, 12h, 1d, 1w
+- Base retention: 90d trades, 365d 1m candles (aggregates preserve full history)
 
-### Infrastructure
-- Local LLM models stored at: `/media/rese/2tb_drive/ollama_config/`
-- Database: TimescaleDB with continuous aggregates for 8 timeframes
-- Data collectors ready: order book depth, private trade history
+### Infrastructure Ready
+- Ollama: `/media/rese/2tb_drive/ollama_config/` (Qwen 2.5 7B ready)
+- Collectors: WebSocket writer, gap filler, order book, private data
 
-### LLM Models for Comparison
-- Claude Sonnet 4.5 (Primary)
-- GPT-4o (Backup)
-- Grok 4 (Comparison)
-- Deepseek V3 (Cost-efficient)
-- Qwen 2.5 7B via Ollama (Local)
+### Critical Design Decisions
+| Decision | Rationale |
+|----------|-----------|
+| 6-Model A/B Testing | GPT, Grok, DeepSeek V3, Claude Sonnet/Opus, Qwen run parallel |
+| Rules-based Risk | Deterministic, no LLM dependency, <10ms execution |
+| Trend-following | Mean reversion does NOT work on crypto |
+| Conservative | Quality over quantity (3 trades beat 44 in Alpha Arena) |
+| 33/33/33 Allocation | BTC/XRP/USDT with Hodl Bag (10% of profits) |
 
-## Project Notes
-- Multi-agent architecture: Technical Analysis, Risk Management, Trading Decision, Portfolio Rebalancing
-- Trading constraints: 3x max leverage, 1% risk per trade, 2:1 min risk:reward
-- Strategy focus: Trend-following momentum, volatility breakout
+### LLM Model Roles
+| Role | Model | Frequency |
+|------|-------|-----------|
+| Technical Analysis | Qwen 2.5 7B (Local) | Per-minute |
+| Regime Detection | Qwen 2.5 7B (Local) | Every 5 min |
+| Sentiment | Grok + GPT (web search) | Every 30 min |
+| Trading Decision | 6-Model A/B | Hourly |
+| Coordinator | DeepSeek V3 / Claude | On conflict |
 
-## Architecture
-See `docs/architecture/` for detailed documentation.
-See `docs/development/master-plan/` for system design and implementation roadmap.
+### System Constraints
+- Max Leverage: 5x | Daily Loss Limit: 5% | Max Drawdown: 20%
+- Tier 1 Latency: <500ms | API Budget: ~$5/day
 
-## Key Documentation
-- [System Architecture](docs/development/master-plan/01-system-architecture.md)
-- [Kraken DB Building Block](docs/architecture/05-building-blocks/kraken-db.md)
-- [Kraken API Reference](docs/api/kraken-api-reference.md)
-- [Data Gap Analysis](docs/api/kraken-data-gap-analysis.md)
+### Target Metrics
+- Annual Return: >50% | Sharpe: >1.5 | Win Rate: >50% | Uptime: >99%
+
+## Project Structure
+```
+triplegain/src/     # Agent code (not yet created)
+data/kraken_db/     # Data collectors (operational)
+docs/development/   # Design + Implementation plans
+config/             # Configuration files (planned)
+```
+
+## Documentation
+- [Master Design](docs/development/TripleGain-master-design/README.md)
+- [Implementation Plan](docs/development/TripleGain-implementation-plan/README.md)
+- [Kraken API](docs/api/kraken/kraken-api-reference.md)
 
 ---
 *Uses global config from ~/.claude/CLAUDE.md*

@@ -106,23 +106,25 @@ technical_indicators = {
 | 2.2 | Implement `LLMClient` base class | 2.1 | `client.py` |
 | 2.3 | Implement Anthropic provider | 2.2 | `providers/anthropic.py` |
 | 2.4 | Implement OpenAI provider | 2.2 | `providers/openai.py` |
-| 2.5 | Implement Deepseek provider | 2.2 | `providers/deepseek.py` |
-| 2.6 | Implement Ollama provider (local) | 2.2 | `providers/ollama.py` |
-| 2.7 | Create prompt templates | None | `prompts/` directory |
-| 2.8 | Implement output parser | 2.7 | `prompts/output_parsers.py` |
-| 2.9 | Create LLM integration tests | 2.3-2.6, 2.8 | `tests/test_llm.py` |
+| 2.5 | Implement xAI provider (Grok) | 2.2 | `providers/xai.py` |
+| 2.6 | Implement Deepseek provider | 2.2 | `providers/deepseek.py` |
+| 2.7 | Implement Ollama provider (local) | 2.2 | `providers/ollama.py` |
+| 2.8 | Create prompt templates | None | `prompts/` directory |
+| 2.9 | Implement output parser | 2.8 | `prompts/output_parsers.py` |
+| 2.10 | Create LLM integration tests | 2.3-2.7, 2.9 | `tests/test_llm.py` |
 
 **LLM Provider Priority:**
 1. Anthropic (Claude) - Primary
-2. Deepseek - Best Alpha Arena performance, cost-efficient
-3. OpenAI (GPT-4o) - Backup
-4. Ollama (Qwen) - Local cost-free option
+2. xAI (Grok 4) - Comparison
+3. Deepseek - Best Alpha Arena performance, cost-efficient
+4. OpenAI (GPT-4o) - Backup
+5. Ollama (Qwen) - Local cost-free option
 
 #### Week 3: Trading Agent & Coordination
 
 | Task | Description | Dependencies | Deliverable |
 |------|-------------|--------------|-------------|
-| 3.1 | Implement `TradingAgent` | 2.7, 2.8 | `trading_agent.py` |
+| 3.1 | Implement `TradingAgent` | 2.8, 2.9 | `trading_agent.py` |
 | 3.2 | Implement `RebalancingAgent` | 1.2 | `rebalancing_agent.py` |
 | 3.3 | Implement `Coordinator` | 1.3, 1.4, 3.1, 3.2 | `coordinator.py` |
 | 3.4 | Implement `ModelSelector` | 2.2 | `model_selector.py` |
@@ -155,7 +157,7 @@ M1.1: Agent Framework Complete
 └── Documentation complete
 
 M1.2: LLM Integration Complete
-├── All 4 providers working
+├── All 5 providers working
 ├── Prompt templates defined
 ├── Output parsing validated
 └── Cost tracking implemented
@@ -234,6 +236,7 @@ models:
   active_models:
     - claude-sonnet-4-5
     - gpt-4o
+    - grok-4
     - deepseek-v3
     - qwen-2.5-7b
 
@@ -537,9 +540,9 @@ PHASE 1: FOUNDATION
     │         │            │         │
     │         │       ┌────┴────┐    │
     │         │       │    │    │    │
-    │         │       ▼    ▼    ▼    ▼
-    │         │    [2.3] [2.4] [2.5] [2.8 Parser]
-    │         │    Claude GPT  Deep      │
+    │         │       ▼    ▼    ▼    ▼    ▼
+    │         │    [2.3] [2.4] [2.5] [2.6] [2.9 Parser]
+    │         │   Claude GPT  Grok Deep       │
     │         │                          │
     │         └──────┬───────────────────┘
     │                │

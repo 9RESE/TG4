@@ -1,0 +1,44 @@
+# ============================================================================
+# Database Configuration
+# ============================================================================
+# TimescaleDB connection and maintenance settings.
+
+database:
+  # -------------------------------------------------------------------------
+  # Connection settings (use environment variables for secrets)
+  # -------------------------------------------------------------------------
+  connection:
+    host: ${DATABASE_HOST:-localhost}
+    port: ${DATABASE_PORT:-5432}
+    database: ${DATABASE_NAME:-triplegain}
+    user: ${DATABASE_USER:-postgres}
+    password: ${DATABASE_PASSWORD}
+    min_connections: 5
+    max_connections: 20
+    command_timeout: 60
+
+  # -------------------------------------------------------------------------
+  # Data retention policies
+  # -------------------------------------------------------------------------
+  retention:
+    agent_outputs_days: 90
+    trading_decisions_days: indefinite
+    trade_executions_days: indefinite
+    portfolio_snapshots_days: indefinite
+    indicator_cache_days: 7
+    external_data_cache_days: 30
+
+  # -------------------------------------------------------------------------
+  # Maintenance schedules (cron format)
+  # -------------------------------------------------------------------------
+  maintenance:
+    vacuum_schedule: "0 3 * * *"    # 3 AM daily
+    analyze_schedule: "0 4 * * 0"   # 4 AM Sunday
+    reorder_schedule: "0 5 * * 0"   # 5 AM Sunday
+
+  # -------------------------------------------------------------------------
+  # Performance settings
+  # -------------------------------------------------------------------------
+  performance:
+    chunk_time_interval: "1 day"
+    compression_after: "7 days"

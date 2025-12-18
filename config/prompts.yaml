@@ -1,0 +1,62 @@
+# ============================================================================
+# Prompt Configuration
+# ============================================================================
+# Configuration for the Prompt Template System.
+
+prompts:
+  # -------------------------------------------------------------------------
+  # Token budget by LLM tier
+  # -------------------------------------------------------------------------
+  token_budgets:
+    tier1_local:
+      total: 8192
+      system_prompt: 1500
+      context: 800
+      market_data: 3000
+      query: 400
+      buffer: 2492  # Reserved for response
+
+    tier2_api:
+      total: 128000
+      system_prompt: 3000
+      context: 2000
+      market_data: 6000
+      query: 1000
+      buffer: 116000
+
+  # -------------------------------------------------------------------------
+  # Template locations
+  # -------------------------------------------------------------------------
+  templates_dir: config/prompts/
+
+  # -------------------------------------------------------------------------
+  # Agent-specific settings
+  # -------------------------------------------------------------------------
+  agents:
+    technical_analysis:
+      template: technical_analysis.txt
+      tier: tier1_local
+      max_candles_per_tf: 10
+
+    regime_detection:
+      template: regime_detection.txt
+      tier: tier1_local
+      max_candles_per_tf: 5
+
+    sentiment_analysis:
+      template: sentiment_analysis.txt
+      tier: tier2_api
+      include_news: true
+
+    trading_decision:
+      template: trading_decision.txt
+      tier: tier2_api
+      include_agent_outputs: true
+
+    portfolio_rebalance:
+      template: portfolio_rebalance.txt
+      tier: tier2_api
+
+    coordinator:
+      template: coordinator.txt
+      tier: tier2_api

@@ -1,0 +1,102 @@
+# ============================================================================
+# Indicator Configuration
+# ============================================================================
+# Central configuration for all technical indicators used by TripleGain.
+# Indicators are pre-computed (not calculated by LLMs) to ensure accuracy.
+
+indicators:
+  # -------------------------------------------------------------------------
+  # Trend Indicators
+  # -------------------------------------------------------------------------
+  ema:
+    periods: [9, 21, 50, 200]
+    source: close
+
+  sma:
+    periods: [20, 50, 200]
+    source: close
+
+  adx:
+    period: 14
+
+  supertrend:
+    period: 10
+    multiplier: 3.0
+
+  # -------------------------------------------------------------------------
+  # Momentum Indicators
+  # -------------------------------------------------------------------------
+  rsi:
+    period: 14
+    source: close
+
+  stochastic_rsi:
+    rsi_period: 14
+    stoch_period: 14
+    k_period: 3
+    d_period: 3
+
+  macd:
+    fast_period: 12
+    slow_period: 26
+    signal_period: 9
+
+  roc:
+    period: 10
+
+  # -------------------------------------------------------------------------
+  # Volatility Indicators
+  # -------------------------------------------------------------------------
+  atr:
+    period: 14
+
+  bollinger_bands:
+    period: 20
+    std_dev: 2.0
+
+  keltner_channels:
+    ema_period: 20
+    atr_period: 10
+    multiplier: 2.0
+
+  # -------------------------------------------------------------------------
+  # Volume Indicators
+  # -------------------------------------------------------------------------
+  obv: {}
+
+  vwap:
+    anchor: session  # Reset daily
+
+  volume_sma:
+    period: 20
+
+  # -------------------------------------------------------------------------
+  # Pattern Detection
+  # -------------------------------------------------------------------------
+  choppiness:
+    period: 14
+
+  squeeze:
+    bb_period: 20
+    bb_std: 2.0
+    kc_period: 20
+    kc_mult: 1.5
+
+# -------------------------------------------------------------------------
+# Timeframes to calculate indicators for
+# -------------------------------------------------------------------------
+timeframes:
+  - 1m
+  - 5m
+  - 15m
+  - 1h
+  - 4h
+  - 1d
+
+# -------------------------------------------------------------------------
+# Symbols to track
+# -------------------------------------------------------------------------
+symbols:
+  - BTC/USDT
+  - XRP/USDT
+  - XRP/BTC
