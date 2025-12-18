@@ -76,24 +76,6 @@ ALTER TABLE candles SET (
 SELECT add_compression_policy('candles', INTERVAL '30 days', if_not_exists => TRUE);
 
 -- ============================================
--- EXTERNAL INDICATORS TABLE
--- ============================================
--- Stores external market indicators (Fear & Greed, BTC Dominance, etc.)
-
-CREATE TABLE IF NOT EXISTS external_indicators (
-    timestamp TIMESTAMPTZ NOT NULL,
-    indicator_name VARCHAR(50) NOT NULL,
-    value DECIMAL(20, 10) NOT NULL,
-    source VARCHAR(50),
-    PRIMARY KEY (timestamp, indicator_name)
-);
-
-SELECT create_hypertable('external_indicators', 'timestamp',
-    chunk_time_interval => INTERVAL '30 days',
-    if_not_exists => TRUE
-);
-
--- ============================================
 -- DATA SYNC STATUS TABLE (For gap detection)
 -- ============================================
 -- Tracks the sync state for each symbol/data_type combination
@@ -109,27 +91,6 @@ CREATE TABLE IF NOT EXISTS data_sync_status (
     total_records BIGINT DEFAULT 0,
     PRIMARY KEY (symbol, data_type)
 );
-
--- ============================================
--- BACKTEST RUNS TABLE (Results tracking)
--- ============================================
--- Stores results of backtest runs for analysis
-
-CREATE TABLE IF NOT EXISTS backtest_runs (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    strategy_name VARCHAR(100) NOT NULL,
-    symbols TEXT[] NOT NULL,
-    start_time TIMESTAMPTZ NOT NULL,
-    end_time TIMESTAMPTZ NOT NULL,
-    parameters JSONB NOT NULL,
-    metrics JSONB NOT NULL,
-    trades JSONB,
-    equity_curve JSONB,
-    created_at TIMESTAMPTZ DEFAULT NOW()
-);
-
-CREATE INDEX IF NOT EXISTS idx_backtest_strategy
-    ON backtest_runs (strategy_name, created_at DESC);
 
 -- ============================================
 -- INDEXES
@@ -165,9 +126,7 @@ GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO trading;
 
 COMMENT ON TABLE trades IS 'Individual trade ticks from Kraken exchange';
 COMMENT ON TABLE candles IS 'OHLCV candle data at various intervals';
-COMMENT ON TABLE external_indicators IS 'External market indicators (Fear & Greed, etc.)';
 COMMENT ON TABLE data_sync_status IS 'Sync state for gap detection and resumption';
-COMMENT ON TABLE backtest_runs IS 'Backtest results for strategy analysis';
 
 -- Note: Continuous aggregates should be created after initial data load
 -- Run the continuous-aggregates.sql script separately after schema creation

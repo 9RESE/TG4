@@ -138,19 +138,6 @@ class HistoricalCandle:
 
 
 @dataclass(frozen=True)
-class ExternalIndicator:
-    """
-    External market indicators.
-
-    Stores external data like Fear & Greed Index, BTC Dominance, etc.
-    """
-    timestamp: datetime
-    indicator_name: str        # 'fear_greed', 'btc_dominance', etc.
-    value: Decimal
-    source: str                # 'alternative.me', 'coingecko', etc.
-
-
-@dataclass(frozen=True)
 class DataGap:
     """
     Represents a gap in historical data.
@@ -242,23 +229,6 @@ class CandleRecord:
             self.trade_count,
             self.vwap,
         )
-
-
-@dataclass(frozen=True)
-class BacktestRun:
-    """
-    Record of a backtest run for results tracking.
-    """
-    id: str                    # UUID
-    strategy_name: str
-    symbols: tuple[str, ...]
-    start_time: datetime
-    end_time: datetime
-    parameters: dict
-    metrics: dict
-    trades: Optional[list] = None
-    equity_curve: Optional[list] = None
-    created_at: Optional[datetime] = None
 
 
 @dataclass(frozen=True)

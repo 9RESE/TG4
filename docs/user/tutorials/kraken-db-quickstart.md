@@ -55,7 +55,7 @@ docker compose logs -f timescaledb
 docker exec -it kraken_timescaledb psql -U trading -d kraken_data -c "\dt"
 ```
 
-You should see tables: `trades`, `candles`, `external_indicators`, `data_sync_status`, `backtest_runs`.
+You should see tables: `trades`, `candles`, `data_sync_status`.
 
 ## Step 2: Install Python Dependencies
 

@@ -5,7 +5,7 @@ This module provides persistent storage and retrieval of historical market data
 using TimescaleDB (PostgreSQL with time-series optimization).
 
 Components:
-- types: Data types for trades, candles, and external indicators
+- types: Data types for trades, candles, and gap detection
 - bulk_csv_importer: Import historical CSV files from Kraken
 - historical_backfill: Fetch complete trade history from Kraken API
 - gap_filler: Detect and fill data gaps on startup
@@ -24,7 +24,6 @@ Usage:
 from .types import (
     HistoricalTrade,
     HistoricalCandle,
-    ExternalIndicator,
     DataGap,
     TradeRecord,
     CandleRecord,
@@ -44,7 +43,6 @@ __all__ = [
     # Types
     'HistoricalTrade',
     'HistoricalCandle',
-    'ExternalIndicator',
     'DataGap',
     'TradeRecord',
     'CandleRecord',

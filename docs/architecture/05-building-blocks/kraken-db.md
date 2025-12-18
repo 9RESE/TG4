@@ -84,11 +84,9 @@ The Kraken Historical Data System (`data/kraken_db/`) is a comprehensive subsyst
 | `HistoricalTrade` | Individual trade tick | No (frozen) |
 | `HistoricalCandle` | Full domain candle with computed properties | No (frozen) |
 | `Candle` | Lightweight candle for database queries | No (frozen) |
-| `ExternalIndicator` | External market data (Fear & Greed, etc.) | No (frozen) |
 | `DataGap` | Represents missing data period | No (frozen) |
 | `TradeRecord` | Mutable buffer for trade inserts | Yes |
 | `CandleRecord` | Mutable buffer for candle inserts | Yes |
-| `BacktestRun` | Backtest results record | No (frozen) |
 | `DataSyncStatus` | Sync state for resumption | No (frozen) |
 
 **Centralized Pair Mappings** (REC-005):

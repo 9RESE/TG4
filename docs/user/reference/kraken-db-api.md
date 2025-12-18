@@ -11,7 +11,6 @@ from data.kraken_db import (
     # Types
     HistoricalTrade,
     HistoricalCandle,
-    ExternalIndicator,
     DataGap,
     TradeRecord,
     CandleRecord,
@@ -123,19 +122,6 @@ class Candle:
     def is_bullish(self) -> bool
 
     def to_dict(self) -> dict
-```
-
-### ExternalIndicator
-
-External market indicators. Immutable.
-
-```python
-@dataclass(frozen=True)
-class ExternalIndicator:
-    timestamp: datetime
-    indicator_name: str               # 'fear_greed', 'btc_dominance'
-    value: Decimal
-    source: str                       # 'alternative.me', 'coingecko'
 ```
 
 ### DataGap
@@ -712,44 +698,6 @@ python -m data.kraken_db.bulk_csv_importer \
 
 **Primary Key**: (symbol, data_type)
 
-### external_indicators table
-
-Stores external market indicators (Fear & Greed Index, BTC Dominance, etc.)
-
-| Column | Type | Nullable | Description |
-|--------|------|----------|-------------|
-| timestamp | TIMESTAMPTZ | No | Indicator timestamp |
-| indicator_name | VARCHAR(50) | No | Indicator identifier |
-| value | DECIMAL(20,10) | No | Indicator value |
-| source | VARCHAR(50) | Yes | Data source (e.g., 'alternative.me') |
-
-**Primary Key**: (timestamp, indicator_name)
-
-**TimescaleDB**: Hypertable with 30-day chunk interval
-
-**Current Status**: Schema ready, no data populated yet.
-
-### backtest_runs table
-
-Stores results from strategy backtests for analysis and comparison.
-
-| Column | Type | Nullable | Description |
-|--------|------|----------|-------------|
-| id | UUID | No | Unique run ID (auto-generated) |
-| strategy_name | VARCHAR(100) | No | Strategy identifier |
-| symbols | TEXT[] | No | Array of symbols tested |
-| start_time | TIMESTAMPTZ | No | Backtest start time |
-| end_time | TIMESTAMPTZ | No | Backtest end time |
-| parameters | JSONB | No | Strategy parameters used |
-| metrics | JSONB | No | Performance metrics |
-| trades | JSONB | Yes | Individual trade records |
-| equity_curve | JSONB | Yes | Equity curve data points |
-| created_at | TIMESTAMPTZ | No | Record creation time |
-
-**Primary Key**: id
-
-**Indexes**: `idx_backtest_strategy` on (strategy_name, created_at DESC)
-
 ---
 
 ## Continuous Aggregates
@@ -779,7 +727,6 @@ All aggregates have the same column structure as the base `candles` table.
 |-------|----------------|-------------------|
 | trades | 1 day | 7 days |
 | candles | 7 days | 30 days |
-| external_indicators | 30 days | - |
 
 ### Retention Policies
 
