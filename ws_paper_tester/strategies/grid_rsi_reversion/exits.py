@@ -60,6 +60,7 @@ def check_grid_stop_loss(
             reason=f"Grid SL: price={current_price:.6f} < stop={stop_price:.6f}, pnl={pnl_pct:.2f}%",
             metadata={
                 'exit_type': 'grid_stop_loss',
+                'size_unit': 'usd',  # position_size is stored in USD
                 'stop_price': stop_price,
                 'lower_grid': lower_price,
             },
@@ -104,6 +105,7 @@ def check_max_drawdown_exit(
             reason=f"Grid DD: pnl={pnl_pct:.2f}% <= -{max_drawdown_pct}%",
             metadata={
                 'exit_type': 'max_drawdown',
+                'size_unit': 'usd',  # position_size is stored in USD
                 'drawdown_pct': abs(pnl_pct),
             },
         )
@@ -165,6 +167,7 @@ def check_stale_position_exit(
             reason=f"Grid stale: no cycles in {elapsed/3600:.1f}h, pnl={pnl_pct:.2f}%",
             metadata={
                 'exit_type': 'stale_position',
+                'size_unit': 'usd',  # position_size is stored in USD
                 'elapsed_hours': elapsed / 3600,
             },
         )
@@ -237,6 +240,7 @@ def check_grid_cycle_sell(
                 metadata={
                     'exit_type': 'grid_cycle',
                     'grid_order_id': level['order_id'],
+                    'size_unit': 'usd',  # level['size'] is position_size_usd from config
                     'matched_buy_id': matched_id,
                     'buy_price': buy_price,
                     'sell_price': current_price,

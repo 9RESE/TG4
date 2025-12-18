@@ -136,11 +136,22 @@ def _run_single_backtest(args: Tuple) -> Dict[str, Any]:
                         '1w': timedelta(weeks=1),
                         '2w': timedelta(weeks=2),
                         '1m': timedelta(days=30),
+                        '2m': timedelta(days=60),
                         '3m': timedelta(days=90),
                         '6m': timedelta(days=180),
+                        '9m': timedelta(days=270),
+                        '12m': timedelta(days=365),  # Alias for 1y
                         '1y': timedelta(days=365),
+                        '2y': timedelta(days=730),
+                        '3y': timedelta(days=1095),
+                        '4y': timedelta(days=1460),
+                        '5y': timedelta(days=1825),
+                        'all': timedelta(days=3650),  # ~10 years (effectively all data)
                     }
-                    delta = periods.get(config_dict['period'], timedelta(days=90))
+                    period_key = config_dict['period'].lower()
+                    if period_key not in periods:
+                        raise ValueError(f"Unknown period: {period_key}. Valid: {list(periods.keys())}")
+                    delta = periods[period_key]
                     start_time = end_time - delta
                 else:
                     start_time = end_time - timedelta(days=90)

@@ -5,6 +5,51 @@ All notable changes to the WebSocket Paper Tester will be documented in this fil
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.17.1] - 2025-12-17
+
+### Added
+- **Grid RSI Reversion v1.3.0** - Configurable timeframe support
+  - New `candle_timeframe_minutes` config parameter (5, 60, 1440 supported)
+  - New `_get_candles_for_timeframe()` helper for dynamic timeframe selection
+  - Timeframe tracking in indicators dict
+  - Updated optimizer with `--timeframes` CLI flag
+
+- **Walk-Forward Validation Script** (`ml/scripts/walk_forward_validation.py`)
+  - Realistic out-of-sample validation using expanding window training
+  - Divides data into N chronological folds
+  - Trains on data BEFORE each fold, tests on the fold (no look-ahead bias)
+  - Aggregates results across all folds for realistic performance estimates
+
+- **AI Trading Research v3** (`docs/research/v3/`)
+  - Comprehensive research synthesis digest with strategic insights
+  - AI integration research and implementation roadmap
+  - Alpha Arena LLM agent trading deep dive (DeepSeek +25%, Grok +21%, Claude +10%)
+  - BTC/USDT algorithmic trading research (momentum > mean reversion)
+  - Freqtrade and TensorTrade platform comparisons
+  - V3 Master Plan: Multi-agent architecture, prompt templates, risk engine
+
+- **Grid RSI Optimizer Enhancements**
+  - `--timeframes` flag for specifying candle timeframes to test
+  - `--focus` modes: grid, rsi, risk, timeframes, adaptive
+  - Expanded parameter grids with adaptive features
+  - Period-based time estimation for accurate runtime predictions
+  - Detailed CLI help with examples (epilog)
+
+### Changed
+- **Grid RSI Signal Generation** - Now uses configurable timeframe candles
+  - Previously hardcoded to 5m candles
+  - Now reads `candle_timeframe_minutes` from config (default: 5)
+  - Supports 5m, 1h, and 1d timeframes
+
+- **EMA-9 Signal** - Minor improvements to candle handling
+
+- **Indicators** - RSI and volatility calculations improvements
+
+### Documentation
+- Updated `docs/index.md` with v3 research links and latest releases
+- Updated `README.md` with walk-forward validation and optimizer flags
+- Added Grid RSI v1.3.0 feature documentation
+
 ## [1.17.0] - 2025-12-16
 
 ### Added

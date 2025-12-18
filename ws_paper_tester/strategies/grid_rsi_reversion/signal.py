@@ -209,6 +209,38 @@ def generate_signal(
     return None
 
 
+def _get_candles_for_timeframe(
+    data: DataSnapshot,
+    symbol: str,
+    timeframe_minutes: int
+) -> tuple:
+    """
+    Get candles for the specified timeframe.
+
+    Args:
+        data: Market data snapshot
+        symbol: Trading symbol
+        timeframe_minutes: Candle timeframe in minutes
+
+    Returns:
+        Tuple of candles for the symbol and timeframe
+    """
+    # Map timeframe to DataSnapshot attribute
+    timeframe_map = {
+        1: data.candles_1m,
+        5: data.candles_5m,
+        60: data.candles_1h,
+        1440: data.candles_1d,
+    }
+
+    candle_dict = timeframe_map.get(timeframe_minutes)
+    if candle_dict is None:
+        # Fallback to 5m if unsupported timeframe
+        candle_dict = data.candles_5m
+
+    return candle_dict.get(symbol, ())
+
+
 def _evaluate_symbol(
     data: DataSnapshot,
     config: Dict[str, Any],
@@ -232,47 +264,49 @@ def _evaluate_symbol(
     track_rejections = config.get('track_rejections', True)
 
     # ==========================================================================
-    # Get Candle Data
+    # Get Candle Data (v1.3.0: Configurable timeframe)
     # ==========================================================================
-    # Use 5m candles as primary timeframe for grid strategy
-    candles_5m = data.candles_5m.get(symbol, ())
+    # Use configurable timeframe from config (default: 5m for crypto volatility)
+    timeframe_minutes = config.get('candle_timeframe_minutes', 5)
+    candles = _get_candles_for_timeframe(data, symbol, timeframe_minutes)
     candles_1m = data.candles_1m.get(symbol, ())
 
     # Minimum candles required for indicators
     rsi_period = config.get('rsi_period', 14)
     atr_period = config.get('atr_period', 14)
     adx_period = config.get('adx_period', 14)
-    min_candles = max(rsi_period, atr_period, adx_period) + 5
+    min_candles = max(rsi_period, atr_period, adx_period, config.get('min_candles_required', 25))
 
-    if len(candles_5m) < min_candles:
+    if len(candles) < min_candles:
         # REC-002: Log available price even during warmup
         price = data.prices.get(symbol)
         state['indicators'] = build_base_indicators(
-            symbol=symbol, candle_count=len(candles_5m), status='warming_up', state=state,
+            symbol=symbol, candle_count=len(candles), status='warming_up', state=state,
             price=price
         )
         state['indicators']['required_candles'] = min_candles
+        state['indicators']['timeframe_minutes'] = timeframe_minutes
         if track_rejections:
             track_rejection(state, RejectionReason.WARMING_UP, symbol)
         return None
 
     # ==========================================================================
-    # Calculate Indicators
+    # Calculate Indicators (v1.3.0: Using configurable timeframe candles)
     # ==========================================================================
-    closes_5m = [c.close for c in candles_5m]
-    current_price = data.prices.get(symbol, closes_5m[-1])
+    closes = [c.close for c in candles]
+    current_price = data.prices.get(symbol, closes[-1])
 
     # RSI
-    rsi = calculate_rsi(closes_5m, rsi_period)
+    rsi = calculate_rsi(closes, rsi_period)
 
     # ATR
-    atr = calculate_atr(candles_5m, atr_period)
+    atr = calculate_atr(candles, atr_period)
 
     # ADX for trend filter
-    adx = calculate_adx(candles_5m, adx_period)
+    adx = calculate_adx(candles, adx_period)
 
     # Volatility
-    volatility = calculate_volatility(candles_5m, lookback=20)
+    volatility = calculate_volatility(candles, lookback=20)
 
     # ==========================================================================
     # Initialize Grid if Not Done
@@ -298,7 +332,7 @@ def _evaluate_symbol(
 
         if not liquidity_ok:
             state['indicators'] = build_base_indicators(
-                symbol=symbol, candle_count=len(candles_5m), status='low_liquidity', state=state,
+                symbol=symbol, candle_count=len(candles), status='low_liquidity', state=state,
                 price=current_price, rsi=rsi, atr=atr, adx=adx, volatility=volatility
             )
             state['indicators']['liquidity_reason'] = liquidity_reason
@@ -309,7 +343,7 @@ def _evaluate_symbol(
     if not grid_levels:
         # REC-002: Include calculated indicators even when grid not initialized
         state['indicators'] = build_base_indicators(
-            symbol=symbol, candle_count=len(candles_5m), status='no_grid', state=state,
+            symbol=symbol, candle_count=len(candles), status='no_grid', state=state,
             price=current_price, rsi=rsi, atr=atr, adx=adx, volatility=volatility
         )
         if track_rejections:
@@ -329,7 +363,7 @@ def _evaluate_symbol(
         if regime_adjustments['pause_trading']:
             # REC-002: Include all available indicators on regime pause
             state['indicators'] = build_base_indicators(
-                symbol=symbol, candle_count=len(candles_5m), status='regime_pause', state=state,
+                symbol=symbol, candle_count=len(candles), status='regime_pause', state=state,
                 price=current_price, rsi=rsi, atr=atr, adx=adx, volatility=volatility,
                 regime=regime.name
             )
@@ -344,7 +378,7 @@ def _evaluate_symbol(
     if is_trending:
         # REC-002: Include all indicators on trend filter rejection
         state['indicators'] = build_base_indicators(
-            symbol=symbol, candle_count=len(candles_5m), status='trend_filter', state=state,
+            symbol=symbol, candle_count=len(candles), status='trend_filter', state=state,
             price=current_price, rsi=rsi, atr=atr, adx=adx_value, volatility=volatility,
             regime=regime.name
         )
@@ -373,7 +407,8 @@ def _evaluate_symbol(
     state['indicators'] = {
         'symbol': symbol,
         'status': 'active',
-        'candle_count': len(candles_5m),
+        'candle_count': len(candles),
+        'timeframe_minutes': timeframe_minutes,  # v1.3.0: Track timeframe used
         'price': round(current_price, 6),
         # RSI
         'rsi': round(rsi, 2) if rsi else None,
@@ -508,7 +543,7 @@ def _evaluate_symbol(
 
         # Calculate trade flow metrics
         buy_vol, sell_vol, flow_imbalance = calculate_trade_flow(trades, lookback=50)
-        volume_ratio = calculate_volume_ratio(candles_5m, lookback=20)
+        volume_ratio = calculate_volume_ratio(candles, lookback=20)
 
         # Log trade flow metrics in indicators
         state['indicators']['trade_flow_buy_vol'] = round(buy_vol, 2)
@@ -586,6 +621,7 @@ def _evaluate_symbol(
                 'entry_type': 'grid_buy',
                 'grid_order_id': buy_level['order_id'],
                 'grid_level_price': buy_level['price'],
+                'size_unit': 'usd',  # Explicit: size is in USD, not base asset units
                 'rsi': rsi,
                 'rsi_zone': 'oversold' if rsi < oversold else 'neutral',
                 'confidence': confidence,

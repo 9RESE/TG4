@@ -24,7 +24,7 @@ from typing import Dict, Any
 # Strategy Metadata
 # =============================================================================
 STRATEGY_NAME = "grid_rsi_reversion"
-STRATEGY_VERSION = "1.2.0"
+STRATEGY_VERSION = "1.3.0"  # v1.3.0: Added configurable timeframe support
 SYMBOLS = ["XRP/USDT", "BTC/USDT", "XRP/BTC"]
 
 
@@ -94,6 +94,15 @@ class RSIZone(Enum):
 # Default Configuration
 # =============================================================================
 CONFIG: Dict[str, Any] = {
+    # ==========================================================================
+    # Timeframe Settings (v1.3.0)
+    # ==========================================================================
+    # Primary candle timeframe for indicator calculation
+    # Supported: 5 (5m), 60 (1h), 1440 (1d)
+    # NOTE: Grid RSI performs best on 5m timeframe for crypto volatility
+    'candle_timeframe_minutes': 5,      # Primary candle timeframe
+    'min_candles_required': 25,         # Minimum candles for indicator calculation
+
     # ==========================================================================
     # Grid Settings
     # ==========================================================================

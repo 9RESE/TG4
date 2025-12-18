@@ -326,6 +326,12 @@ python optimize_ema9.py --symbol BTC/USDT --period 3m --quick
 # Parallel execution (uses 8 cores)
 python optimize_ema9.py --symbol BTC/USDT --period 3m --quick --parallel --workers 8
 
+# Grid RSI optimization with timeframes (v1.3.0)
+python optimize_grid_rsi.py --symbol XRP/USDT --period 3m --timeframes 5,60
+python optimize_grid_rsi.py --symbol BTC/USDT --focus grid     # Grid structure
+python optimize_grid_rsi.py --symbol BTC/USDT --focus rsi      # RSI parameters
+python optimize_grid_rsi.py --symbol BTC/USDT --focus adaptive # Adaptive features
+
 # Batch optimization (all 9 strategies)
 python run_optimization.py --quick --parallel
 python run_optimization.py --list  # Show available jobs
@@ -346,7 +352,20 @@ python -m ml.scripts.train_signal_classifier
 
 # Train LSTM model (GPU-accelerated)
 python -m ml.scripts.train_lstm_gpu
+
+# Walk-forward validation (realistic out-of-sample testing)
+python -m ml.scripts.walk_forward_validation \
+    --symbol XRP/USDT \
+    --days 365 \
+    --n-folds 5 \
+    --db-url "$DATABASE_URL"
 ```
+
+**Walk-Forward Validation:**
+- Divides data into N chronological folds
+- Trains on data BEFORE each fold, tests on the fold
+- Prevents look-ahead bias
+- Shows realistic production performance
 
 See [ML Integration Plans](ws_paper_tester/docs/development/plans/ml-v1/) for detailed architecture.
 
@@ -376,20 +395,28 @@ export $(grep -v '^#' .env | xargs) && python main_with_historical.py --symbols 
 
 ## Documentation
 
-Detailed documentation is available in `ws_paper_tester/docs/`:
+Detailed documentation is available in `docs/` and `ws_paper_tester/docs/`:
 
 | Document | Description |
 |----------|-------------|
-| [Documentation Hub](ws_paper_tester/docs/README.md) | Main documentation entry point |
+| [Documentation Hub](docs/index.md) | Main documentation entry point |
+| [Research Synthesis](docs/research/v3/research-synthesis-digest.md) | AI trading research insights |
 | [Backtest Runner](ws_paper_tester/docs/development/features/backtesting/backtest-runner-v1.0.md) | Historical backtesting guide |
 | [Optimization System](ws_paper_tester/docs/development/features/optimization/optimization-system-v1.0.md) | Parameter tuning guide |
+| [Grid RSI v1.3.0](ws_paper_tester/docs/development/features/grid_rsi_reversion/grid-rsi-reversion-v1.3.md) | Configurable timeframe grid trading |
 | [ML Integration Plans](ws_paper_tester/docs/development/plans/ml-v1/) | Machine learning architecture |
 | [Strategy Development Guide](ws_paper_tester/docs/development/strategy-development-guide.md) | How to write strategies |
 | [CHANGELOG](ws_paper_tester/CHANGELOG.md) | Version history |
 
 ## Version
 
-**Current Version:** v1.17.0 (2025-12-16)
+**Current Version:** v1.17.1 (2025-12-17)
+
+**New in v1.17.1:**
+- Grid RSI Reversion v1.3.0: Configurable timeframes (`candle_timeframe_minutes`)
+- Research v3: Comprehensive AI trading research synthesis
+- Walk-forward validation script for ML models
+- Optimizer enhancements with `--timeframes` and `--focus` flags
 
 See [CHANGELOG](ws_paper_tester/CHANGELOG.md) for release notes.
 

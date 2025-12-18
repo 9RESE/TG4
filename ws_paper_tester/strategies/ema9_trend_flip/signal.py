@@ -202,18 +202,27 @@ def _evaluate_symbol(
     # ==========================================================================
     timeframe_minutes = config.get('candle_timeframe_minutes', 60)
 
-    # Use pre-aggregated hourly candles if available (PERF: ~60x faster)
-    # Fall back to building from 1m candles for live trading or if not available
-    if timeframe_minutes == 60 and hasattr(data, 'candles_1h') and data.candles_1h.get(symbol):
-        # Use pre-aggregated hourly candles from database
+    # Use pre-aggregated candles if available (PERF: much faster than building from 1m)
+    # Supports: 5m, 60m (1h), 1440m (1d) pre-aggregated candles
+    # Falls back to building from 1m candles for live trading or unsupported timeframes
+    raw_candles = None
+
+    if timeframe_minutes == 5 and hasattr(data, 'candles_5m') and data.candles_5m.get(symbol):
+        raw_candles = data.candles_5m.get(symbol, ())
+    elif timeframe_minutes == 60 and hasattr(data, 'candles_1h') and data.candles_1h.get(symbol):
         raw_candles = data.candles_1h.get(symbol, ())
+    elif timeframe_minutes == 1440 and hasattr(data, 'candles_1d') and data.candles_1d.get(symbol):
+        raw_candles = data.candles_1d.get(symbol, ())
+
+    if raw_candles:
+        # Use pre-aggregated candles from database
         hourly_candles = [
             {'timestamp': c.timestamp, 'open': c.open, 'high': c.high,
              'low': c.low, 'close': c.close, 'volume': c.volume}
             for c in raw_candles
         ]
     else:
-        # Build hourly candles from 1m data (legacy path for live trading)
+        # Build candles from 1m data (legacy path for live trading)
         candles_1m = data.candles_1m.get(symbol, ())
         if not candles_1m:
             state['indicators'] = build_indicators(

@@ -70,7 +70,7 @@ Following Arc42 template:
 | Mean Reversion | v4.2.0 | Bollinger Band reversion with trailing stops |
 | Order Flow | v5.0.0 | Volume imbalance and VPIN-based signals |
 | Ratio Trading | v4.3.1 | XRP/BTC pair trading with correlation monitoring |
-| Grid RSI Reversion | v1.2.0 | Hybrid grid + RSI mean reversion |
+| Grid RSI Reversion | v1.3.0 | Hybrid grid + RSI mean reversion |
 | WaveTrend Oscillator | v1.1.0 | LazyBear WaveTrend crossover signals |
 | Whale Sentiment | v1.6.0 | Volume spike detection with contrarian mode |
 | Momentum Scalping | v2.1.1 | Short-term momentum capture |
@@ -85,14 +85,44 @@ Following Arc42 template:
 
 | Version | Date | Highlights |
 |---------|------|------------|
+| v1.17.1 | 2025-12-17 | Grid RSI v1.3.0 configurable timeframes, research v3 |
+| v1.17.0 | 2025-12-16 | ML v2.1 class weights, precision metrics, regime detection |
+| v1.16.0 | 2025-12-16 | EMA-9 v2.0 strict candle mode, simplified exits |
 | v1.15.1 | 2025-12-15 | Historical Data System code review fixes |
 | v1.15.0 | 2025-12-15 | TimescaleDB integration, gap filler, multi-timeframe aggregates |
 | v1.14.1 | 2025-12-15 | Regime Detection System code review fixes |
-| v1.14.0 | 2025-12-15 | Market Regime Detection System (Bull/Bear/Sideways) |
-| v1.13.1 | 2025-12-15 | Ratio Trading bugfixes + Strategy indicator shims |
-| v1.13.0 | 2025-12-15 | Centralized Indicator Library (45 functions) |
 
 See [CHANGELOG](../ws_paper_tester/CHANGELOG.md) for complete history.
+
+---
+
+## Research & Planning
+
+### AI Trading Research (v3)
+
+Comprehensive research on AI integration and trading strategies:
+
+| Document | Description |
+|----------|-------------|
+| [Research Synthesis Digest](research/v3/research-synthesis-digest.md) | Key findings and strategic insights |
+| [AI Integration Research](research/v3/ai-integration-research.md) | AI/ML integration opportunities |
+| [Alpha Arena Deep Dive](research/v3/alpha-arena-agent-trading-deep-dive.md) | LLM agent trading analysis |
+| [BTC/USDT Algo Trading](research/v3/btc-usdt-algo-trading-research.md) | Algorithm research and recommendations |
+| [Freqtrade Deep Dive](research/v3/freqtrade-deep-dive.md) | Platform comparison |
+| [TensorTrade Deep Dive](research/v3/tensortrade-deep-dive.md) | RL framework analysis |
+
+### V3 Master Plan
+
+Architecture and implementation plans for next-generation trading:
+
+| Document | Description |
+|----------|-------------|
+| [System Architecture](research/v3/master-plan/01-system-architecture.md) | Multi-agent system design |
+| [LLM Prompt Templates](research/v3/master-plan/02-llm-prompt-templates.md) | Trading prompt engineering |
+| [Multi-Agent Coordination](research/v3/master-plan/03-multi-agent-coordination.md) | Agent orchestration |
+| [Risk Management Rules](research/v3/master-plan/04-risk-management-rules-engine.md) | Risk engine design |
+| [Implementation Roadmap](research/v3/master-plan/05-implementation-roadmap.md) | Phased delivery plan |
+| [LLM Evaluation Framework](research/v3/master-plan/06-llm-evaluation-framework.md) | Model comparison |
 
 ---
 
@@ -122,4 +152,4 @@ See [CHANGELOG](../ws_paper_tester/CHANGELOG.md) for complete history.
 
 ---
 
-*Last updated: 2025-12-15*
+*Last updated: 2025-12-17*

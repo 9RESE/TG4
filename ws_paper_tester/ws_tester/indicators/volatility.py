@@ -39,6 +39,9 @@ def calculate_volatility(data: PriceInput, lookback: int = 20) -> float:
     if len(closes) < 2:
         return 0.0
 
+    # Convert to float to handle Decimal types from database
+    closes = [float(c) for c in closes]
+
     # Calculate returns
     returns = [(closes[i] - closes[i - 1]) / closes[i - 1]
                for i in range(1, len(closes)) if closes[i - 1] != 0]
@@ -82,6 +85,11 @@ def calculate_atr(
         if rich_output:
             return ATRResult(atr=None, atr_pct=None, tr_series=[])
         return None
+
+    # Convert to float to handle Decimal types from database
+    highs = [float(h) for h in highs]
+    lows = [float(l) for l in lows]
+    closes = [float(c) for c in closes]
 
     # Calculate True Range series
     tr_series = []
@@ -142,7 +150,8 @@ def calculate_bollinger_bands(
     if len(closes) < period:
         return BollingerResult(sma=None, upper=None, lower=None, std_dev=None)
 
-    recent = closes[-period:]
+    # Convert to float to handle Decimal types from database
+    recent = [float(c) for c in closes[-period:]]
 
     # Simple Moving Average
     sma = sum(recent) / len(recent)

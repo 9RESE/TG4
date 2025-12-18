@@ -235,16 +235,29 @@ class BacktestExecutor:
             exec_price = current_price * (1 - self.config.slippage_rate)
 
         # Determine if signal.size is in USD or base asset units
-        # Convention: if size <= 1000, assume it's USD value; otherwise base asset
+        # Check signal metadata for size_unit hint, otherwise use heuristics
         # Most strategies use position_size_usd which is typically 10-100 USD
-        if signal.size <= 1000 and exec_price > 100:
+        size_unit = None
+        if signal.metadata:
+            size_unit = signal.metadata.get('size_unit')
+
+        if size_unit == 'usd' or (size_unit is None and signal.size <= 1000):
             # Size is USD value - convert to base asset quantity
             base_size = signal.size / exec_price
             usd_value = signal.size
-        else:
+        elif size_unit == 'base':
             # Size is in base asset units
             base_size = signal.size
             usd_value = signal.size * exec_price
+        else:
+            # Heuristic: if size is small and price is small, assume USD
+            # This handles low-priced assets like XRP ($2) with position_size_usd ($10-20)
+            if signal.size <= 1000:
+                base_size = signal.size / exec_price
+                usd_value = signal.size
+            else:
+                base_size = signal.size
+                usd_value = signal.size * exec_price
 
         # Calculate fee based on USD value
         fee = usd_value * self.config.fee_rate
@@ -255,7 +268,7 @@ class BacktestExecutor:
             if cost > portfolio.usdt:
                 return None
 
-        # Create fill
+        # Create fill (including signal metadata for strategy callbacks like grid level marking)
         fill = Fill(
             fill_id=f"bt_{datetime.now().timestamp()}",
             timestamp=datetime.now(timezone.utc),
@@ -266,6 +279,7 @@ class BacktestExecutor:
             fee=fee,
             signal_reason=signal.reason,
             pnl=0.0,
+            metadata=signal.metadata.copy() if signal.metadata else {},
         )
 
         # Update portfolio (simplified for backtest)
@@ -849,19 +863,26 @@ async def main():
                 '1w': timedelta(weeks=1),
                 '2w': timedelta(weeks=2),
                 '1m': timedelta(days=30),
+                '2m': timedelta(days=60),
                 '3m': timedelta(days=90),
                 '6m': timedelta(days=180),
+                '9m': timedelta(days=270),
+                '12m': timedelta(days=365),  # Alias for 1y
                 '1y': timedelta(days=365),
                 '2y': timedelta(days=730),
                 '3y': timedelta(days=1095),
+                '4y': timedelta(days=1460),
+                '5y': timedelta(days=1825),
                 'all': None,
             }
-            if args.period in periods:
-                delta = periods[args.period]
+            period_key = args.period.lower()
+            if period_key in periods:
+                delta = periods[period_key]
                 if delta:
                     start_time = end_time - delta
             else:
                 print(f"Unknown period: {args.period}")
+                print(f"Valid periods: {list(periods.keys())}")
                 sys.exit(1)
 
         if start_time is None:

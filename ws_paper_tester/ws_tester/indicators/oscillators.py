@@ -40,6 +40,9 @@ def calculate_rsi(data: PriceInput, period: int = 14) -> Optional[float]:
     if len(closes) < period + 1:
         return None
 
+    # Convert to float to handle Decimal types from database
+    closes = [float(c) for c in closes]
+
     # Calculate price changes
     changes = [closes[i] - closes[i - 1] for i in range(1, len(closes))]
 
@@ -82,6 +85,9 @@ def calculate_rsi_series(data: PriceInput, period: int = 14) -> List[float]:
 
     if len(closes) < period + 1:
         return []
+
+    # Convert to float to handle Decimal types from database
+    closes = [float(c) for c in closes]
 
     # Calculate price changes
     changes = [closes[i] - closes[i - 1] for i in range(1, len(closes))]
@@ -142,6 +148,11 @@ def calculate_adx(data: PriceInput, period: int = 14) -> Optional[float]:
 
     if len(closes) < period * 2:
         return None
+
+    # Convert to float to handle Decimal types from database
+    highs = [float(h) for h in highs]
+    lows = [float(l) for l in lows]
+    closes = [float(c) for c in closes]
 
     # Calculate True Range, +DM, -DM
     true_ranges = []
@@ -260,6 +271,11 @@ def calculate_adx_with_di(data: PriceInput, period: int = 14) -> Optional[ADXRes
 
     if len(closes) < period * 2:
         return None
+
+    # Convert to float to handle Decimal types from database
+    highs = [float(h) for h in highs]
+    lows = [float(l) for l in lows]
+    closes = [float(c) for c in closes]
 
     # Calculate True Range, +DM, -DM
     true_ranges: List[float] = []

@@ -34,6 +34,11 @@ def calculate_grid_prices(
     Returns:
         Tuple of (buy_prices, sell_prices) sorted appropriately
     """
+    # Ensure float type for calculations (handles Decimal from database)
+    center_price = float(center_price)
+    spacing_pct = float(spacing_pct)
+    range_pct = float(range_pct)
+
     buy_prices = []
     sell_prices = []
 
@@ -90,8 +95,11 @@ def setup_grid_levels(
     position_size = get_symbol_config(symbol, config, 'position_size_usd')
 
     # ATR-based spacing adjustment (optional)
+    # Convert to float to handle Decimal types from database
     if config.get('use_atr_spacing', True) and atr is not None and atr > 0:
-        atr_spacing_pct = (atr / center_price) * 100 * config.get('atr_multiplier', 0.3)
+        atr_float = float(atr)
+        center_float = float(center_price)
+        atr_spacing_pct = (atr_float / center_float) * 100 * config.get('atr_multiplier', 0.3)
         # Use larger of configured spacing or ATR-based
         spacing_pct = max(spacing_pct, atr_spacing_pct)
 

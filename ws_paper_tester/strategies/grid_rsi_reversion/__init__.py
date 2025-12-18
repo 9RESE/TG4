@@ -1,5 +1,5 @@
 """
-Grid RSI Reversion Strategy v1.2.0
+Grid RSI Reversion Strategy v1.3.0
 
 Combines grid trading mechanics with RSI-based mean reversion signals.
 Grid levels provide primary entry signals, while RSI acts as a confidence
@@ -16,6 +16,16 @@ Based on research from master-plan-v1.0.md:
 Target Pairs: XRP/USDT, BTC/USDT, XRP/BTC
 
 Version History:
+- 1.3.0: Configurable Timeframe Support
+         - NEW: candle_timeframe_minutes config parameter (5, 60, 1440)
+         - NEW: _get_candles_for_timeframe() helper for dynamic selection
+         - NEW: Optimizer --timeframes CLI flag for timeframe override
+         - NEW: Optimizer --focus adaptive and --focus timeframes modes
+         - IMPROVED: Expanded parameter grids with adaptive features
+         - IMPROVED: Period-based time estimation in optimizer
+         - IMPROVED: Detailed CLI help with examples (epilog)
+         - IMPROVED: Timeframe tracking in indicators dict
+
 - 1.2.0: Deep Review v2.1 Implementation (REC-009 through REC-010)
          - REC-009: BTC/USDT grid_spacing_pct increased from 1.0% to 1.5%
            for improved R:R ratio (0.10:1 → 0.15:1)

@@ -278,6 +278,7 @@ class Fill:
     signal_reason: str
     pnl: float = 0.0  # Realized P&L for this fill
     strategy: str = ''  # Strategy that generated this fill
+    metadata: Optional[dict] = field(default_factory=dict)  # Signal metadata (e.g., grid_order_id)
 
     @property
     def value(self) -> float:
