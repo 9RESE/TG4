@@ -711,3 +711,84 @@ python -m data.kraken_db.bulk_csv_importer \
 | total_records | BIGINT | No | Total record count |
 
 **Primary Key**: (symbol, data_type)
+
+### external_indicators table
+
+Stores external market indicators (Fear & Greed Index, BTC Dominance, etc.)
+
+| Column | Type | Nullable | Description |
+|--------|------|----------|-------------|
+| timestamp | TIMESTAMPTZ | No | Indicator timestamp |
+| indicator_name | VARCHAR(50) | No | Indicator identifier |
+| value | DECIMAL(20,10) | No | Indicator value |
+| source | VARCHAR(50) | Yes | Data source (e.g., 'alternative.me') |
+
+**Primary Key**: (timestamp, indicator_name)
+
+**TimescaleDB**: Hypertable with 30-day chunk interval
+
+**Current Status**: Schema ready, no data populated yet.
+
+### backtest_runs table
+
+Stores results from strategy backtests for analysis and comparison.
+
+| Column | Type | Nullable | Description |
+|--------|------|----------|-------------|
+| id | UUID | No | Unique run ID (auto-generated) |
+| strategy_name | VARCHAR(100) | No | Strategy identifier |
+| symbols | TEXT[] | No | Array of symbols tested |
+| start_time | TIMESTAMPTZ | No | Backtest start time |
+| end_time | TIMESTAMPTZ | No | Backtest end time |
+| parameters | JSONB | No | Strategy parameters used |
+| metrics | JSONB | No | Performance metrics |
+| trades | JSONB | Yes | Individual trade records |
+| equity_curve | JSONB | Yes | Equity curve data points |
+| created_at | TIMESTAMPTZ | No | Record creation time |
+
+**Primary Key**: id
+
+**Indexes**: `idx_backtest_strategy` on (strategy_name, created_at DESC)
+
+---
+
+## Continuous Aggregates
+
+Higher timeframe candles are automatically computed from 1-minute base data.
+
+| View | Interval | Source | Refresh Schedule |
+|------|----------|--------|------------------|
+| candles_5m | 5 minutes | candles (1m) | Every 5 minutes |
+| candles_15m | 15 minutes | candles (1m) | Every 15 minutes |
+| candles_30m | 30 minutes | candles (1m) | Every 30 minutes |
+| candles_1h | 1 hour | candles (1m) | Every 1 hour |
+| candles_4h | 4 hours | candles_1h | Every 4 hours |
+| candles_12h | 12 hours | candles_1h | Every 12 hours |
+| candles_1d | 1 day | candles_1h | Daily |
+| candles_1w | 1 week | candles_1d | Weekly |
+
+All aggregates have the same column structure as the base `candles` table.
+
+---
+
+## TimescaleDB Features
+
+### Hypertables
+
+| Table | Chunk Interval | Compression After |
+|-------|----------------|-------------------|
+| trades | 1 day | 7 days |
+| candles | 7 days | 30 days |
+| external_indicators | 30 days | - |
+
+### Retention Policies
+
+| Table | Retention Period |
+|-------|-----------------|
+| trades | 90 days |
+| candles | 365 days |
+
+### Compression Settings
+
+Trades are compressed by `symbol`, ordered by `timestamp DESC`.
+Candles are compressed by `symbol, interval_minutes`, ordered by `timestamp DESC`.

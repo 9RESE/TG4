@@ -141,6 +141,50 @@ SELECT
 FROM timescaledb_information.hypertables;
 ```
 
+## Other Tables
+
+### external_indicators
+
+| Status | Description |
+|--------|-------------|
+| Records | 0 |
+| Schema | Ready for Fear & Greed, BTC Dominance, etc. |
+
+### backtest_runs
+
+| Metric | Value |
+|--------|-------|
+| Total Runs | 6 |
+| Strategy | ml_retrain_signal_classifier |
+| Symbol | XRP/USDT |
+| Date Range | 2025-12-17 |
+
+**Recent Backtest Results**:
+
+| Run Time | Test Period | Total Return | Sharpe Ratio |
+|----------|-------------|--------------|--------------|
+| 18:07:45 | 1 year | 3740.86% | 19.21 |
+| 16:46:24 | 1 month | -9.60% | -12.95 |
+| 16:02:56 | 1 year | 42.63% | 8.41 |
+| 14:53:15 | 3 months | 0.00% | 0.00 |
+| 14:26:41 | 1 year | 39.82% | 519.09 |
+| 04:22:38 | 1 month | -0.47% | -18.75 |
+
+---
+
+## Complete Table Summary
+
+| Table | Records | Size | Retention |
+|-------|---------|------|-----------|
+| trades | 924,412 | 34 MB | 90 days |
+| candles | 783,223 | 57 MB | 365 days |
+| data_sync_status | 6 | - | None |
+| external_indicators | 0 | 24 KB | None |
+| backtest_runs | 6 | - | None |
+| **Continuous Aggregates** | - | ~600 MB | Inherited |
+
+---
+
 ## Related Documentation
 
 - [API Reference](kraken-db-api.md) - Query methods for data access
