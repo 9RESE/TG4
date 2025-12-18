@@ -7,6 +7,7 @@ API reference documentation for TG4 trading system.
 | API | Description | Status |
 |-----|-------------|--------|
 | [Kraken API Reference](kraken-api-reference.md) | Complete Kraken REST/WebSocket API | Complete |
+| [Kraken Account Status](kraken-account-status.md) | Account capabilities, balances, permissions | Verified |
 
 ## Internal APIs
 
