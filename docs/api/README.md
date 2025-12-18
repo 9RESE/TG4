@@ -2,16 +2,13 @@
 
 API reference documentation for TG4 trading system.
 
-## Overview
+## Exchange APIs
 
-This section contains technical API documentation including:
+| API | Description | Status |
+|-----|-------------|--------|
+| [Kraken API Reference](kraken-api-reference.md) | Complete Kraken REST/WebSocket API | Complete |
 
-- Internal service APIs
-- WebSocket message formats
-- Data structures and schemas
-- Configuration schemas
-
-## APIs
+## Internal APIs
 
 | API | Description | Status |
 |-----|-------------|--------|
@@ -20,20 +17,39 @@ This section contains technical API documentation including:
 | LLM Interface | LLM query/response protocol | Planned |
 | Risk Manager | Risk check and validation API | Planned |
 
-## Message Formats
+## Kraken API Quick Reference
 
-### WebSocket Messages
+### REST API Base URL
+```
+https://api.kraken.com
+```
 
-Documentation for Kraken WebSocket message handling.
+### WebSocket URLs
+```
+Public:  wss://ws.kraken.com/v2
+Private: wss://ws-auth.kraken.com/v2
+```
 
-### Internal Events
+### Key Endpoints
 
-Event schemas for inter-component communication.
+| Category | Endpoints |
+|----------|-----------|
+| Market Data | Time, Assets, AssetPairs, Ticker, OHLC, Depth, Trades |
+| Account | Balance, TradeBalance, OpenOrders, ClosedOrders, OpenPositions |
+| Trading | AddOrder, EditOrder, CancelOrder, CancelAllOrders |
+| Funding | DepositMethods, DepositAddresses, Withdraw, WithdrawalStatus |
 
-## Schema Reference
+### Order Types
 
-Data structure definitions using JSON Schema or similar.
+- `market`, `limit`
+- `stop-loss`, `stop-loss-limit`
+- `take-profit`, `take-profit-limit`
+- `trailing-stop`, `trailing-stop-limit`
 
----
+### Margin Trading
 
-*API docs will be populated as components are developed.*
+- Up to 5x leverage on major pairs
+- Up to 10x on selected assets
+- Rollover fees every 4 hours
+
+See [Kraken API Reference](kraken-api-reference.md) for complete documentation.
