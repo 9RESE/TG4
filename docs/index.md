@@ -31,6 +31,12 @@ Technical architecture documentation following the Arc42 template.
 | [11 - Risks](architecture/11-risks/README.md) | Technical risks and debt |
 | [12 - Glossary](architecture/12-glossary/README.md) | Terms and definitions |
 
+#### Key Subsystem Documentation
+
+| Subsystem | Description |
+|-----------|-------------|
+| [Kraken Historical Data System](architecture/05-building-blocks/kraken-db.md) | TimescaleDB-backed historical data storage and retrieval |
+
 ### C4 Diagrams
 
 Visual architecture using the C4 model.
@@ -42,6 +48,12 @@ Visual architecture using the C4 model.
 | [Components](c4-diagrams/components/README.md) | Component diagrams |
 | [Code](c4-diagrams/code/README.md) | Code-level diagrams |
 
+#### Component Diagrams
+
+| Component | Description |
+|-----------|-------------|
+| [Kraken DB](c4-diagrams/components/kraken-db.md) | Historical data system component diagrams |
+
 ### User Documentation (Diataxis)
 
 End-user documentation following the Diataxis framework.
@@ -52,6 +64,15 @@ End-user documentation following the Diataxis framework.
 | [How-To Guides](user/how-to/README.md) | Problem-solving recipes |
 | [Reference](user/reference/README.md) | Technical reference information |
 | [Explanation](user/explanation/README.md) | Understanding-oriented discussion |
+
+#### Kraken Historical Data System
+
+| Type | Document | Description |
+|------|----------|-------------|
+| Tutorial | [Quickstart](user/tutorials/kraken-db-quickstart.md) | Getting started with the historical data system |
+| How-To | [Operations](user/how-to/kraken-db-operations.md) | Common database operations |
+| Reference | [API](user/reference/kraken-db-api.md) | Complete API reference |
+| Explanation | [Architecture](user/explanation/kraken-db-architecture.md) | Design decisions and trade-offs |
 
 ### Development
 
