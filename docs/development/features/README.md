@@ -1,6 +1,6 @@
 # Feature Documentation
 
-Implementation documentation for TG4 features.
+Implementation documentation for TripleGain features.
 
 ## Overview
 
@@ -11,15 +11,27 @@ This directory contains detailed documentation for each major feature, including
 - Testing approach
 - Integration points
 
-## Features
+## TripleGain Features
+
+| Feature | Phase | Status | Documentation |
+|---------|-------|--------|---------------|
+| Foundation Layer | 1 | **COMPLETE** | [phase-1-foundation.md](./phase-1-foundation.md) |
+| Indicator Library | 1 | **COMPLETE** | [phase-1-foundation.md](./phase-1-foundation.md#1-indicator-library) |
+| Market Snapshot Builder | 1 | **COMPLETE** | [phase-1-foundation.md](./phase-1-foundation.md#2-market-snapshot-builder) |
+| Prompt Builder | 1 | **COMPLETE** | [phase-1-foundation.md](./phase-1-foundation.md#3-prompt-builder) |
+| Core Agents | 2 | Planned | Pending |
+| Risk Management Engine | 2 | Planned | Pending |
+| Agent Orchestration | 3 | Planned | Pending |
+| Sentiment Analysis | 4 | Planned | Pending |
+| Multi-LLM A/B Testing | 4 | Planned | Pending |
+| Dashboard | 4 | Planned | Pending |
+
+## Archived Features (v2)
 
 | Feature | Status | Documentation |
 |---------|--------|---------------|
-| WebSocket Paper Tester | Phase 21 | Pending |
-| Historical Data System | Phase 21 | Pending |
-| Multi-LLM Comparison | Planned | Pending |
-| Risk Management Engine | Planned | Pending |
-| Portfolio Rebalancing | Planned | Pending |
+| WebSocket Paper Tester | Archived | See `archive/ws_paper_trader/` |
+| Historical Data System | Archived | See `archive/ws_paper_trader/` |
 
 ## Feature Documentation Template
 

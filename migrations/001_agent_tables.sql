@@ -30,6 +30,11 @@ CREATE TABLE IF NOT EXISTS agent_outputs (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- Convert to hypertable for efficient time-series queries and retention
+SELECT create_hypertable('agent_outputs', 'timestamp',
+    chunk_time_interval => INTERVAL '1 day',
+    if_not_exists => TRUE);
+
 -- Indexes for common query patterns
 CREATE INDEX IF NOT EXISTS idx_agent_outputs_agent_ts
     ON agent_outputs (agent_name, timestamp DESC);
@@ -218,6 +223,11 @@ CREATE TABLE IF NOT EXISTS external_data_cache (
     UNIQUE (source, data_type, timestamp)
 );
 
+-- Convert to hypertable for efficient time-series queries and retention
+SELECT create_hypertable('external_data_cache', 'timestamp',
+    chunk_time_interval => INTERVAL '1 day',
+    if_not_exists => TRUE);
+
 CREATE INDEX IF NOT EXISTS idx_external_data_source_ts
     ON external_data_cache (source, data_type, timestamp DESC);
 
@@ -269,12 +279,64 @@ CREATE TRIGGER update_trade_executions_updated_at
 
 
 -- ============================================================================
+-- RETENTION POLICIES
+-- Purpose: Automatically purge old data based on configuration
+-- ============================================================================
+
+-- Agent outputs: 90 days retention
+SELECT add_retention_policy('agent_outputs', INTERVAL '90 days',
+    if_not_exists => TRUE);
+
+-- Indicator cache: 7 days retention
+SELECT add_retention_policy('indicator_cache', INTERVAL '7 days',
+    if_not_exists => TRUE);
+
+-- External data cache: 30 days retention
+SELECT add_retention_policy('external_data_cache', INTERVAL '30 days',
+    if_not_exists => TRUE);
+
+-- Portfolio snapshots: no retention (keep indefinitely for performance analysis)
+-- trading_decisions: no retention (keep indefinitely for audit)
+-- trade_executions: no retention (keep indefinitely for audit)
+-- risk_state: no retention (keep indefinitely for audit)
+
+COMMENT ON COLUMN agent_outputs.timestamp IS 'Retention: 90 days';
+COMMENT ON COLUMN indicator_cache.timestamp IS 'Retention: 7 days';
+COMMENT ON COLUMN external_data_cache.timestamp IS 'Retention: 30 days';
+
+
+-- ============================================================================
+-- COMPRESSION POLICIES (TimescaleDB optimization)
+-- Purpose: Compress old chunks to save storage
+-- ============================================================================
+
+-- Enable compression on hypertables
+ALTER TABLE portfolio_snapshots SET (
+    timescaledb.compress,
+    timescaledb.compress_segmentby = ''
+);
+
+ALTER TABLE indicator_cache SET (
+    timescaledb.compress,
+    timescaledb.compress_segmentby = 'symbol,timeframe,indicator_name'
+);
+
+-- Add compression policies (compress data older than 7 days)
+SELECT add_compression_policy('portfolio_snapshots', INTERVAL '7 days',
+    if_not_exists => TRUE);
+
+SELECT add_compression_policy('indicator_cache', INTERVAL '1 day',
+    if_not_exists => TRUE);
+
+
+-- ============================================================================
 -- VERIFICATION
 -- ============================================================================
 
 DO $$
 DECLARE
     table_count INTEGER;
+    policy_count INTEGER;
 BEGIN
     SELECT COUNT(*) INTO table_count
     FROM information_schema.tables
@@ -289,8 +351,13 @@ BEGIN
         'indicator_cache'
     );
 
+    SELECT COUNT(*) INTO policy_count
+    FROM timescaledb_information.jobs
+    WHERE proc_name IN ('policy_retention', 'policy_compression');
+
     IF table_count = 7 THEN
         RAISE NOTICE 'Migration 001_agent_tables completed successfully. All 7 tables created.';
+        RAISE NOTICE 'Configured % TimescaleDB policies (retention + compression).', policy_count;
     ELSE
         RAISE EXCEPTION 'Migration failed. Expected 7 tables, found %', table_count;
     END IF;

@@ -1,12 +1,22 @@
-# TG4 Documentation
+# TripleGain Documentation
 
-**Multi-Asset LLM-Assisted Trading System (Codename: TripleGain)**
+**Multi-Asset LLM-Assisted Trading System**
 
 ## Overview
 
-TG4 is a local AI/ML crypto trading platform designed to accumulate BTC (45%), XRP (35%), and USDT (20%) through strategic trading. The system uses LLMs as decision-making agents with a multi-agent architecture.
+TripleGain is an LLM-assisted cryptocurrency trading platform designed to accumulate BTC (33%), XRP (33%), and USDT (34%) through strategic trading. The system uses a multi-agent architecture with 6-model LLM comparison (GPT, Grok, DeepSeek V3, Claude Sonnet, Claude Opus, Qwen 2.5 7B).
 
-**Current Phase**: Phase 21 - WebSocket Paper Tester + Historical Data System
+**Current Phase**: Phase 1 COMPLETE - Ready for Phase 2 (Core Agents)
+
+### Phase Status
+
+| Phase | Status | Description |
+|-------|--------|-------------|
+| **1. Foundation** | **COMPLETE** | Data pipeline, indicators, snapshots, prompts |
+| 2. Core Agents | Ready | TA, Regime, Risk, Trading Decision agents |
+| 3. Orchestration | Planned | Communication, Coordinator, Execution |
+| 4. Extended | Planned | Sentiment, Hodl Bag, A/B Testing, Dashboard |
+| 5. Production | Planned | Testing, Paper Trading, Live Deployment |
 
 ---
 
@@ -80,22 +90,32 @@ End-user documentation following the Diataxis framework.
 | Section | Description |
 |---------|-------------|
 | [Features](development/features/README.md) | Feature implementation docs |
-| [Master Plan](development/master-plan/) | V3 implementation planning |
+| [Master Design](development/TripleGain-master-design/README.md) | System design documents |
+| [Implementation Plan](development/TripleGain-implementation-plan/README.md) | Phase-by-phase implementation |
+| [Reviews](development/reviews/) | Code and design reviews |
 | [API](api/README.md) | API documentation |
+
+#### Phase 1 Documentation
+
+| Document | Description |
+|----------|-------------|
+| [Phase 1 Foundation](development/features/phase-1-foundation.md) | Feature documentation |
+| [Implementation Plan](development/TripleGain-implementation-plan/01-phase-1-foundation.md) | Detailed implementation spec |
+| [Comprehensive Review](development/reviews/phase-1/phase-1-comprehensive-review.md) | Post-completion review |
 
 ### Research
 
 | Section | Description |
 |---------|-------------|
-| [Master Plan Research](research/master_plan_research/) | Research and analysis |
+| [TripleGain Research](research/TripleGain-master-plan_research/) | AI trading research and analysis |
 
 ---
 
 ## Quick Links
 
 - [README](../README.md) - Project overview
-- [CHANGELOG](../CHANGELOG.md) - Version history
-- [V3 Vision](development/master-plan/v3_vision.md) - Project vision document
+- [CLAUDE.md](../CLAUDE.md) - Project context and commands
+- [Implementation Plan](development/TripleGain-implementation-plan/README.md) - Current implementation status
 
 ---
 

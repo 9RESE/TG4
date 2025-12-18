@@ -432,3 +432,189 @@ class TestPromptPerformance:
         elapsed = (time.time() - start) * 1000 / 100
 
         assert elapsed < 5, f"Build took {elapsed:.2f}ms, expected <5ms"
+
+
+# =============================================================================
+# Template Validation Tests
+# =============================================================================
+
+class TestTemplateValidation:
+    """Tests for template validation functionality."""
+
+    def test_validate_template_valid(self, prompt_config):
+        """Test validation passes for valid template."""
+        builder = PromptBuilder(prompt_config)
+
+        # Include all required keywords for technical_analysis
+        valid_template = """You are an expert technical analyst.
+        Your role is to analyze market data and provide trading signals.
+        Output your response in JSON format with the following fields.
+        You analyze trend direction, support levels, and resistance zones.
+        Use technical indicator analysis for signal generation.
+        """
+
+        result = builder._validate_template('technical_analysis', valid_template)
+
+        assert result['valid'] is True
+        assert len(result['errors']) == 0
+
+    def test_validate_template_too_short(self, prompt_config):
+        """Test validation fails for too short template."""
+        builder = PromptBuilder(prompt_config)
+
+        short_template = "Short text"
+
+        result = builder._validate_template('unknown_agent', short_template)
+
+        assert result['valid'] is False
+        assert any('too short' in err for err in result['errors'])
+
+    def test_validate_template_missing_role(self, prompt_config):
+        """Test validation fails when role definition is missing."""
+        builder = PromptBuilder(prompt_config)
+
+        # Template has no role/persona definition words
+        # but has enough content and output format
+        no_role_template = """This template has no role definition.
+        It just describes what needs to happen.
+        The output will be in JSON format.
+        Make sure to analyze the market carefully and
+        check all the data points that are available.
+        """
+
+        result = builder._validate_template('unknown_agent', no_role_template)
+
+        # Check that role/persona is indeed missing
+        assert result['valid'] is False
+        assert any('role' in err.lower() or 'persona' in err.lower() for err in result['errors'])
+
+    def test_validate_template_missing_output_format(self, prompt_config):
+        """Test validation fails when output format is missing."""
+        builder = PromptBuilder(prompt_config)
+
+        # Use unknown_agent to avoid agent-specific validation
+        no_format_template = """You are an expert analyst.
+        Your role is to analyze market data.
+        Analyze the following data carefully and give me your findings.
+        Think about trend and support.
+        """ * 2  # Make it long enough
+
+        result = builder._validate_template('unknown_agent', no_format_template)
+
+        assert result['valid'] is False
+        assert any('output' in err.lower() for err in result['errors'])
+
+    def test_validate_all_templates(self, prompt_config):
+        """Test validate_all_templates returns dict of results."""
+        builder = PromptBuilder(prompt_config)
+
+        results = builder.validate_all_templates()
+
+        assert isinstance(results, dict)
+        assert 'technical_analysis' in results
+        assert 'valid' in results['technical_analysis']
+
+
+# =============================================================================
+# Get Default Query Tests
+# =============================================================================
+
+class TestGetDefaultQuery:
+    """Tests for get_default_query method."""
+
+    def test_get_default_query_ta(self, prompt_config):
+        """Test default query for technical_analysis agent."""
+        builder = PromptBuilder(prompt_config)
+
+        query = builder.get_default_query('technical_analysis')
+
+        assert isinstance(query, str)
+        assert len(query) > 0
+        assert 'trend' in query.lower() or 'analyze' in query.lower()
+
+    def test_get_default_query_regime(self, prompt_config):
+        """Test default query for regime_detection agent."""
+        builder = PromptBuilder(prompt_config)
+
+        query = builder.get_default_query('regime_detection')
+
+        assert isinstance(query, str)
+        assert 'regime' in query.lower()
+
+    def test_get_default_query_unknown(self, prompt_config):
+        """Test default query for unknown agent returns generic."""
+        builder = PromptBuilder(prompt_config)
+
+        query = builder.get_default_query('unknown_agent')
+
+        assert isinstance(query, str)
+        assert len(query) > 0
+        assert 'analyze' in query.lower()
+
+    def test_get_default_query_sentiment(self, prompt_config):
+        """Test default query for sentiment_analysis agent."""
+        builder = PromptBuilder(prompt_config)
+
+        query = builder.get_default_query('sentiment_analysis')
+
+        assert isinstance(query, str)
+        assert 'sentiment' in query.lower()
+
+    def test_get_default_query_trading(self, prompt_config):
+        """Test default query for trading_decision agent."""
+        builder = PromptBuilder(prompt_config)
+
+        query = builder.get_default_query('trading_decision')
+
+        assert isinstance(query, str)
+        assert 'action' in query.lower() or 'trading' in query.lower()
+
+
+# =============================================================================
+# Edge Case Tests
+# =============================================================================
+
+class TestEdgeCases:
+    """Tests for edge cases and error handling."""
+
+    def test_empty_token_estimation(self, prompt_config):
+        """Test token estimation with empty string."""
+        builder = PromptBuilder(prompt_config)
+
+        estimated = builder.estimate_tokens("")
+
+        assert estimated == 0
+
+    def test_truncate_zero_budget(self, prompt_config):
+        """Test truncation with zero budget."""
+        builder = PromptBuilder(prompt_config)
+
+        result = builder.truncate_to_budget("Some content", max_tokens=0)
+
+        assert result == ""
+
+    def test_truncate_negative_budget(self, prompt_config):
+        """Test truncation with negative budget."""
+        builder = PromptBuilder(prompt_config)
+
+        result = builder.truncate_to_budget("Some content", max_tokens=-10)
+
+        assert result == ""
+
+    def test_build_prompt_with_empty_snapshot(self, prompt_config):
+        """Test building prompt with minimal snapshot."""
+        builder = PromptBuilder(prompt_config)
+
+        minimal_snapshot = MarketSnapshot(
+            timestamp=datetime.now(timezone.utc),
+            symbol='BTC/USDT',
+            current_price=Decimal('45000'),
+        )
+
+        prompt = builder.build_prompt(
+            agent_name='technical_analysis',
+            snapshot=minimal_snapshot,
+        )
+
+        assert prompt is not None
+        assert prompt.user_message != ""

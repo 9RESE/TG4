@@ -556,3 +556,499 @@ class TestSnapshotPerformance:
         elapsed = (time.time() - start) * 1000 / 100
 
         assert elapsed < 5, f"Compact format took {elapsed:.2f}ms, expected <5ms"
+
+
+# =============================================================================
+# Additional Coverage Tests
+# =============================================================================
+
+class TestMarketSnapshotExtended:
+    """Extended tests for MarketSnapshot to improve coverage."""
+
+    def test_snapshot_with_mtf_state(self):
+        """Test snapshot with multi-timeframe state."""
+        now = datetime.now(timezone.utc)
+        mtf_state = MultiTimeframeState(
+            trend_alignment_score=Decimal('0.75'),
+            aligned_bullish_count=3,
+            aligned_bearish_count=1,
+            total_timeframes=4,
+            rsi_by_timeframe={'1h': Decimal('55.5'), '4h': Decimal('60.2')},
+            atr_by_timeframe={'1h': Decimal('500.0'), '4h': Decimal('800.0')},
+        )
+
+        snapshot = MarketSnapshot(
+            timestamp=now,
+            symbol='BTC/USDT',
+            current_price=Decimal('45250.50'),
+            mtf_state=mtf_state,
+        )
+
+        prompt = snapshot.to_prompt_format()
+        data = json.loads(prompt)
+
+        assert 'mtf_state' in data
+        assert data['mtf_state']['trend_alignment_score'] == 0.75
+
+    def test_snapshot_with_order_book(self):
+        """Test snapshot with order book features."""
+        now = datetime.now(timezone.utc)
+        order_book = OrderBookFeatures(
+            bid_depth_usd=Decimal('100000'),
+            ask_depth_usd=Decimal('95000'),
+            imbalance=Decimal('0.026'),
+            spread_bps=Decimal('5.5'),
+            weighted_mid=Decimal('45005.0'),
+        )
+
+        snapshot = MarketSnapshot(
+            timestamp=now,
+            symbol='BTC/USDT',
+            current_price=Decimal('45250.50'),
+            order_book=order_book,
+        )
+
+        prompt = snapshot.to_prompt_format()
+        data = json.loads(prompt)
+
+        assert 'order_book' in data
+        assert data['order_book']['spread_bps'] == 5.5
+
+    def test_snapshot_with_regime_hint(self):
+        """Test snapshot with regime hint in compact format."""
+        now = datetime.now(timezone.utc)
+        snapshot = MarketSnapshot(
+            timestamp=now,
+            symbol='BTC/USDT',
+            current_price=Decimal('45250.50'),
+            regime_hint='trending_bull',
+            regime_confidence=Decimal('0.85'),
+            indicators={'rsi_14': 65.0},
+        )
+
+        compact = snapshot.to_compact_format()
+        data = json.loads(compact)
+
+        assert 'regime' in data
+        assert data['regime'] == 'bull'
+
+    def test_snapshot_regime_hint_mapping(self):
+        """Test all regime hint mappings in compact format."""
+        now = datetime.now(timezone.utc)
+
+        regimes = [
+            ('trending_bull', 'bull'),
+            ('trending_bear', 'bear'),
+            ('ranging', 'range'),
+            ('high_volatility', 'hvol'),
+            ('low_volatility', 'lvol'),
+            ('unknown_regime', 'unkn'),  # Should truncate to 4 chars
+        ]
+
+        for full_regime, expected_short in regimes:
+            snapshot = MarketSnapshot(
+                timestamp=now,
+                symbol='BTC/USDT',
+                current_price=Decimal('45250.50'),
+                regime_hint=full_regime,
+            )
+            compact = snapshot.to_compact_format()
+            data = json.loads(compact)
+            assert data['regime'] == expected_short
+
+    def test_snapshot_with_volume_vs_avg(self):
+        """Test snapshot with volume vs average ratio."""
+        now = datetime.now(timezone.utc)
+        snapshot = MarketSnapshot(
+            timestamp=now,
+            symbol='BTC/USDT',
+            current_price=Decimal('45250.50'),
+            volume_vs_avg=Decimal('1.5'),
+        )
+
+        prompt = snapshot.to_prompt_format()
+        data = json.loads(prompt)
+
+        assert 'volume_vs_avg' in data
+        assert data['volume_vs_avg'] == 1.5
+
+    def test_snapshot_with_candles(self):
+        """Test snapshot with candle data in prompt format."""
+        now = datetime.now(timezone.utc)
+        candles = [
+            CandleSummary(
+                timestamp=now - timedelta(hours=i),
+                open=Decimal('45000'),
+                high=Decimal('45500'),
+                low=Decimal('44500'),
+                close=Decimal('45200'),
+                volume=Decimal('1000'),
+            )
+            for i in range(15)
+        ]
+
+        snapshot = MarketSnapshot(
+            timestamp=now,
+            symbol='BTC/USDT',
+            current_price=Decimal('45250.50'),
+            candles={'1h': candles},
+        )
+
+        prompt = snapshot.to_prompt_format()
+        data = json.loads(prompt)
+
+        # Should limit to 10 candles per timeframe
+        assert 'candles' in data
+        assert len(data['candles']['1h']) == 10
+
+    def test_snapshot_truncates_candles_when_over_budget(self):
+        """Test that candles are truncated further when over token budget."""
+        now = datetime.now(timezone.utc)
+        # Create lots of candles and indicators to exceed budget
+        candles = [
+            CandleSummary(
+                timestamp=now - timedelta(hours=i),
+                open=Decimal('45000.12345'),
+                high=Decimal('45500.12345'),
+                low=Decimal('44500.12345'),
+                close=Decimal('45200.12345'),
+                volume=Decimal('1000.12345'),
+            )
+            for i in range(10)
+        ]
+
+        snapshot = MarketSnapshot(
+            timestamp=now,
+            symbol='BTC/USDT',
+            current_price=Decimal('45250.50'),
+            candles={
+                '1h': candles,
+                '4h': candles,
+                '1d': candles,
+            },
+            indicators={f'indicator_{i}': 123.456 for i in range(50)},
+        )
+
+        # With a very small token budget, candles should be truncated
+        prompt = snapshot.to_prompt_format(token_budget=100)
+        data = json.loads(prompt)
+
+        # Should have truncated to 5 candles per timeframe
+        for tf in data.get('candles', {}).values():
+            assert len(tf) <= 5
+
+    def test_candle_summary_to_dict(self):
+        """Test CandleSummary to_dict method."""
+        now = datetime.now(timezone.utc)
+        candle = CandleSummary(
+            timestamp=now,
+            open=Decimal('100.5'),
+            high=Decimal('105.0'),
+            low=Decimal('98.0'),
+            close=Decimal('103.0'),
+            volume=Decimal('1000.0'),
+        )
+
+        d = candle.to_dict()
+
+        assert 'timestamp' in d
+        assert 'open' in d
+        assert d['open'] == 100.5
+        assert d['close'] == 103.0
+
+    def test_order_book_features_to_dict(self):
+        """Test OrderBookFeatures to_dict method."""
+        features = OrderBookFeatures(
+            bid_depth_usd=Decimal('100000'),
+            ask_depth_usd=Decimal('95000'),
+            imbalance=Decimal('0.026'),
+            spread_bps=Decimal('5.5'),
+            weighted_mid=Decimal('45005.0'),
+        )
+
+        d = features.to_dict()
+
+        assert d['bid_depth_usd'] == 100000.0
+        assert d['imbalance'] == 0.026
+
+    def test_mtf_state_to_dict(self):
+        """Test MultiTimeframeState to_dict method."""
+        state = MultiTimeframeState(
+            trend_alignment_score=Decimal('0.75'),
+            aligned_bullish_count=3,
+            aligned_bearish_count=1,
+            total_timeframes=4,
+            rsi_by_timeframe={'1h': Decimal('55.5')},
+            atr_by_timeframe={'1h': Decimal('500.0')},
+        )
+
+        d = state.to_dict()
+
+        assert d['trend_alignment_score'] == 0.75
+        assert d['aligned_bullish'] == 3
+        assert d['rsi_by_tf']['1h'] == 55.5
+
+
+class TestMarketSnapshotBuilderExtended:
+    """Extended tests for MarketSnapshotBuilder."""
+
+    def test_build_snapshot_with_order_book(self, indicator_library, snapshot_config, sample_candles, sample_order_book):
+        """Test building snapshot with order book data."""
+        builder = MarketSnapshotBuilder(
+            db_pool=None,
+            indicator_library=indicator_library,
+            config=snapshot_config,
+        )
+
+        snapshot = builder.build_snapshot_from_candles(
+            symbol='BTC/USDT',
+            candles_by_tf={'1h': sample_candles},
+            order_book=sample_order_book,
+        )
+
+        assert snapshot.order_book is not None
+        assert snapshot.order_book.bid_depth_usd > 0
+        assert snapshot.order_book.spread_bps > 0
+
+    def test_process_order_book_empty(self, indicator_library, snapshot_config):
+        """Test order book processing with empty data."""
+        builder = MarketSnapshotBuilder(
+            db_pool=None,
+            indicator_library=indicator_library,
+            config=snapshot_config,
+        )
+
+        features = builder._process_order_book({'bids': [], 'asks': []})
+
+        assert features.bid_depth_usd == Decimal('0')
+        assert features.ask_depth_usd == Decimal('0')
+        assert features.imbalance == Decimal('0')
+
+    def test_process_order_book_imbalance_calculation(self, indicator_library, snapshot_config):
+        """Test order book imbalance calculation."""
+        builder = MarketSnapshotBuilder(
+            db_pool=None,
+            indicator_library=indicator_library,
+            config=snapshot_config,
+        )
+
+        # More bids than asks = positive imbalance
+        order_book = {
+            'bids': [{'price': 100.0, 'size': 200}],  # 20000 USD
+            'asks': [{'price': 101.0, 'size': 100}],  # 10100 USD
+        }
+
+        features = builder._process_order_book(order_book)
+
+        # imbalance = (20000 - 10100) / (20000 + 10100) ≈ 0.329
+        assert float(features.imbalance) > 0.3
+
+    def test_calculate_mtf_state_empty_candles(self, indicator_library, snapshot_config):
+        """Test MTF state calculation with empty candle data."""
+        builder = MarketSnapshotBuilder(
+            db_pool=None,
+            indicator_library=indicator_library,
+            config=snapshot_config,
+        )
+
+        mtf_state = builder._calculate_mtf_state({})
+
+        assert mtf_state.trend_alignment_score == Decimal('0')
+        assert mtf_state.total_timeframes == 0
+
+    def test_calculate_mtf_state_insufficient_candles(self, indicator_library, snapshot_config):
+        """Test MTF state calculation with insufficient candles."""
+        builder = MarketSnapshotBuilder(
+            db_pool=None,
+            indicator_library=indicator_library,
+            config=snapshot_config,
+        )
+
+        # Less than 20 candles should be skipped
+        short_candles = [
+            {'open': 100, 'high': 105, 'low': 98, 'close': 103, 'volume': 1000}
+            for _ in range(10)
+        ]
+
+        mtf_state = builder._calculate_mtf_state({'1h': short_candles})
+
+        assert mtf_state.total_timeframes == 0
+
+    def test_validate_data_quality_no_indicators(self, indicator_library, snapshot_config):
+        """Test data quality validation when no indicators."""
+        builder = MarketSnapshotBuilder(
+            db_pool=None,
+            indicator_library=indicator_library,
+            config=snapshot_config,
+        )
+
+        snapshot = MarketSnapshot(
+            timestamp=datetime.now(timezone.utc),
+            symbol='BTC/USDT',
+            current_price=Decimal('45250.50'),
+            indicators={},  # No indicators
+        )
+
+        issues = builder._validate_data_quality(snapshot)
+
+        assert 'no_indicators' in issues
+
+    def test_validate_data_quality_insufficient_candles(self, indicator_library, snapshot_config):
+        """Test data quality validation with insufficient candles."""
+        builder = MarketSnapshotBuilder(
+            db_pool=None,
+            indicator_library=indicator_library,
+            config=snapshot_config,
+        )
+
+        # Create snapshot with only 10 candles (min required is 20)
+        candles = [
+            CandleSummary(
+                timestamp=datetime.now(timezone.utc) - timedelta(hours=i),
+                open=Decimal('100'), high=Decimal('105'),
+                low=Decimal('98'), close=Decimal('103'), volume=Decimal('1000')
+            )
+            for i in range(10)
+        ]
+
+        snapshot = MarketSnapshot(
+            timestamp=datetime.now(timezone.utc),
+            symbol='BTC/USDT',
+            current_price=Decimal('45250.50'),
+            candles={'1h': candles},
+            indicators={'rsi_14': 55.0},
+        )
+
+        issues = builder._validate_data_quality(snapshot)
+
+        assert 'insufficient_1h_candles' in issues
+
+    def test_build_snapshot_fallback_to_first_available_timeframe(self, indicator_library, sample_candles):
+        """Test snapshot builder falls back to first available timeframe when primary missing."""
+        config = {
+            'primary_timeframe': '1d',  # Not available in our data
+            'data_quality': {'max_age_seconds': 60, 'min_candles_required': 20},
+        }
+
+        builder = MarketSnapshotBuilder(
+            db_pool=None,
+            indicator_library=indicator_library,
+            config=config,
+        )
+
+        snapshot = builder.build_snapshot_from_candles(
+            symbol='BTC/USDT',
+            candles_by_tf={'1h': sample_candles},  # Only 1h available
+            order_book=None,
+        )
+
+        assert snapshot.current_price > 0
+
+    def test_build_snapshot_24h_calculation_different_timeframes(self, indicator_library, snapshot_config):
+        """Test 24h calculation works for different timeframes."""
+        builder = MarketSnapshotBuilder(
+            db_pool=None,
+            indicator_library=indicator_library,
+            config=snapshot_config,
+        )
+
+        now = datetime.now(timezone.utc)
+
+        # Test with 4h candles (need 6 candles for 24h)
+        candles_4h = [
+            {
+                'timestamp': now - timedelta(hours=4 * i),
+                'open': 100.0 + i,
+                'high': 105.0 + i,
+                'low': 98.0,
+                'close': 103.0 + i * 0.5,
+                'volume': 1000.0,
+            }
+            for i in range(10)
+        ]
+
+        config_4h = {**snapshot_config, 'primary_timeframe': '4h'}
+        builder_4h = MarketSnapshotBuilder(
+            db_pool=None,
+            indicator_library=indicator_library,
+            config=config_4h,
+        )
+
+        snapshot = builder_4h.build_snapshot_from_candles(
+            symbol='BTC/USDT',
+            candles_by_tf={'4h': candles_4h},
+            order_book=None,
+        )
+
+        # With 4h candles and 10 candles available (>6 needed for 24h)
+        # 24h price change should be calculated
+        assert snapshot.price_24h_ago is not None or len(candles_4h) < 6
+
+    def test_compact_format_with_adx(self):
+        """Test compact format includes ADX when available."""
+        snapshot = MarketSnapshot(
+            timestamp=datetime.now(timezone.utc),
+            symbol='BTC/USDT',
+            current_price=Decimal('45250.50'),
+            indicators={'adx_14': 28.5},
+        )
+
+        compact = snapshot.to_compact_format()
+        data = json.loads(compact)
+
+        assert 'adx' in data
+        assert data['adx'] == 28.5
+
+    def test_compact_format_with_bb_position(self):
+        """Test compact format includes Bollinger Band position."""
+        snapshot = MarketSnapshot(
+            timestamp=datetime.now(timezone.utc),
+            symbol='BTC/USDT',
+            current_price=Decimal('45250.50'),
+            indicators={'bollinger_bands': {'position': 0.75}},
+        )
+
+        compact = snapshot.to_compact_format()
+        data = json.loads(compact)
+
+        assert 'bb_pos' in data
+        assert data['bb_pos'] == 0.75
+
+    def test_compact_format_with_atr(self):
+        """Test compact format includes ATR."""
+        snapshot = MarketSnapshot(
+            timestamp=datetime.now(timezone.utc),
+            symbol='BTC/USDT',
+            current_price=Decimal('45250.50'),
+            indicators={'atr_14': 523.5},
+        )
+
+        compact = snapshot.to_compact_format()
+        data = json.loads(compact)
+
+        assert 'atr' in data
+        assert data['atr'] == 523.5
+
+    def test_compact_format_with_trend_alignment(self):
+        """Test compact format includes trend alignment."""
+        mtf_state = MultiTimeframeState(
+            trend_alignment_score=Decimal('0.8'),
+            aligned_bullish_count=4,
+            aligned_bearish_count=1,
+            total_timeframes=5,
+            rsi_by_timeframe={},
+            atr_by_timeframe={},
+        )
+
+        snapshot = MarketSnapshot(
+            timestamp=datetime.now(timezone.utc),
+            symbol='BTC/USDT',
+            current_price=Decimal('45250.50'),
+            mtf_state=mtf_state,
+        )
+
+        compact = snapshot.to_compact_format()
+        data = json.loads(compact)
+
+        assert 'trend' in data
+        assert data['trend'] == 0.8

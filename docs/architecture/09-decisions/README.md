@@ -6,7 +6,7 @@ This directory contains Architecture Decision Records (ADRs) documenting signifi
 
 | ADR | Title | Status | Date |
 |-----|-------|--------|------|
-| - | No ADRs recorded yet | - | - |
+| [ADR-001](./ADR-001-phase1-foundation-architecture.md) | Phase 1 Foundation Architecture | Accepted | 2025-12-18 |
 
 ## ADR Template
 
