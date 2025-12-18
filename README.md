@@ -57,7 +57,8 @@ Persistent storage for historical market data with automatic multi-timeframe agg
 #### Quick Start
 
 ```bash
-cd ws_paper_tester
+# Database infrastructure is now in data/kraken_db/
+cd data/kraken_db
 
 # 1. Set up environment
 cp .env.example .env
@@ -71,26 +72,33 @@ docker-compose ps  # Should show "healthy"
 
 # 4. Set up continuous aggregates (after first data import)
 docker exec -i kraken_timescaledb psql -U trading -d kraken_data < scripts/continuous-aggregates.sql
+
+# Go back to ws_paper_tester for running scripts
+cd ../../ws_paper_tester
 ```
 
 #### Data Collection Options
 
 **Option A: Bulk CSV Import (Fastest for Initial Load)**
 ```bash
+cd ws_paper_tester
+
 # Download Kraken historical CSV files from:
 # https://support.kraken.com/hc/en-us/articles/360047124832
 
 # Import 1-minute candles (higher timeframes computed automatically)
-python -m data.bulk_csv_importer --dir ./data/kraken_csv --db-url "$DATABASE_URL"
+python -m data.kraken_db.bulk_csv_importer --dir ./kraken_csv --db-url "$DATABASE_URL"
 ```
 
 **Option B: REST API Backfill**
 ```bash
+cd ws_paper_tester
+
 # Fetch complete trade history from Kraken API
-python -m data.historical_backfill --symbols XRP/USDT BTC/USDT --db-url "$DATABASE_URL"
+python -m data.kraken_db.historical_backfill --symbols XRP/USDT BTC/USDT --db-url "$DATABASE_URL"
 
 # Resume interrupted backfill
-python -m data.historical_backfill --resume --db-url "$DATABASE_URL"
+python -m data.kraken_db.historical_backfill --resume --db-url "$DATABASE_URL"
 ```
 
 **Option C: Live WebSocket Collection**
@@ -124,8 +132,9 @@ python main_with_historical.py --simulated --db-url "$DATABASE_URL"
 Automatically detects and fills data gaps on startup:
 
 ```bash
+cd ws_paper_tester
 # Run standalone gap filler
-python -m data.gap_filler --symbols XRP/USDT BTC/USDT --db-url "$DATABASE_URL"
+python -m data.kraken_db.gap_filler --symbols XRP/USDT BTC/USDT --db-url "$DATABASE_URL"
 ```
 
 **Strategy:**
@@ -135,7 +144,7 @@ python -m data.gap_filler --symbols XRP/USDT BTC/USDT --db-url "$DATABASE_URL"
 #### Querying Historical Data
 
 ```python
-from ws_paper_tester.data import HistoricalDataProvider
+from data.kraken_db import HistoricalDataProvider
 from datetime import datetime, timezone, timedelta
 
 provider = HistoricalDataProvider(db_url)
@@ -168,6 +177,8 @@ await provider.close()
 #### Database Management
 
 ```bash
+cd data/kraken_db
+
 # Start TimescaleDB + PgAdmin (web UI at http://localhost:5050)
 docker-compose --profile tools up -d
 

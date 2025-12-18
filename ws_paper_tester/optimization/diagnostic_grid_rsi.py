@@ -22,9 +22,12 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Dict, List, Any, Optional, Tuple
 
+# Add project root and ws_paper_tester to path
+PROJECT_ROOT = Path(__file__).parent.parent.parent
+sys.path.insert(0, str(PROJECT_ROOT))
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from data import HistoricalDataProvider
+from data.kraken_db import HistoricalDataProvider
 from ws_tester.types import DataSnapshot, Candle, Signal, Fill, OrderbookSnapshot
 
 # Configure detailed logging

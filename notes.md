@@ -1,8 +1,10 @@
 update the docs with the recent work and ALL the changes in git. Ensure documentation complies with the documentation standards and expectations outlined in the claude.md file. Then commit.
 
 
-- how can we use our historic data and ml to discover new strategies? ultrathink and deep research provide documentation on your findings and recommendations in ws_paper_tester/docs/development/plans/ml-discovery
+- i want to move all the kraken database related files from ws_paper_tester and sub folder to the root data folder /home/rese/Documents/rese/trading-bots/grok-4_1/data/kraken_db/
 
+
+lets do a deep dive on Freqtrade, its features,  and how we can use it. make a document of your findings and recommendations. no code in your documentation ultrathink
 
 # ai integration
 ## timeframes

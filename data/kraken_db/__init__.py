@@ -1,12 +1,11 @@
 """
-Historical Data System for ws_paper_tester.
+Kraken Historical Data System.
 
 This module provides persistent storage and retrieval of historical market data
 using TimescaleDB (PostgreSQL with time-series optimization).
 
 Components:
 - types: Data types for trades, candles, and external indicators
-- database: Database connection and session management
 - bulk_csv_importer: Import historical CSV files from Kraken
 - historical_backfill: Fetch complete trade history from Kraken API
 - gap_filler: Detect and fill data gaps on startup
@@ -14,7 +13,7 @@ Components:
 - historical_provider: Query historical data for backtesting
 
 Usage:
-    from ws_paper_tester.data import (
+    from data.kraken_db import (
         HistoricalDataProvider,
         DatabaseWriter,
         GapFiller,
@@ -38,6 +37,8 @@ from .types import (
 from .historical_provider import HistoricalDataProvider, Candle
 from .websocket_db_writer import DatabaseWriter, WebSocketDBIntegration, integrate_db_writer
 from .gap_filler import GapFiller, run_gap_filler
+from .historical_backfill import KrakenTradesBackfill
+from .bulk_csv_importer import BulkCSVImporter
 
 __all__ = [
     # Types
@@ -58,6 +59,8 @@ __all__ = [
     'DatabaseWriter',
     'WebSocketDBIntegration',
     'GapFiller',
+    'KrakenTradesBackfill',
+    'BulkCSVImporter',
     # Utility functions
     'integrate_db_writer',
     'run_gap_filler',

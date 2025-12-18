@@ -19,9 +19,11 @@ from unittest.mock import Mock, AsyncMock, patch
 # Import data module types
 import sys
 from pathlib import Path
+PROJECT_ROOT = Path(__file__).parent.parent.parent
+sys.path.insert(0, str(PROJECT_ROOT))
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from data.types import (
+from data.kraken_db.types import (
     HistoricalTrade,
     HistoricalCandle,
     ExternalIndicator,
@@ -313,7 +315,7 @@ class TestHistoricalProviderUnit:
 
     def test_interval_view_mapping(self):
         """Test interval to view mapping."""
-        from data.historical_provider import HistoricalDataProvider
+        from data.kraken_db.historical_provider import HistoricalDataProvider
 
         # Check known mappings
         assert HistoricalDataProvider.INTERVAL_VIEWS[1] == 'candles'
@@ -324,7 +326,7 @@ class TestHistoricalProviderUnit:
 
     def test_get_view_for_interval(self):
         """Test view selection for different intervals."""
-        from data.historical_provider import HistoricalDataProvider
+        from data.kraken_db.historical_provider import HistoricalDataProvider
 
         provider = HistoricalDataProvider.__new__(HistoricalDataProvider)
         provider.pool = None  # Skip init
@@ -338,7 +340,7 @@ class TestHistoricalProviderUnit:
 
     def test_get_view_for_interval_invalid(self):
         """REC-007: Test invalid interval validation."""
-        from data.historical_provider import HistoricalDataProvider
+        from data.kraken_db.historical_provider import HistoricalDataProvider
 
         provider = HistoricalDataProvider.__new__(HistoricalDataProvider)
         provider.pool = None
@@ -353,7 +355,7 @@ class TestHistoricalProviderUnit:
 
     def test_ensure_connected_raises_when_not_connected(self):
         """REC-007: Test connection check raises error when not connected."""
-        from data.historical_provider import HistoricalDataProvider
+        from data.kraken_db.historical_provider import HistoricalDataProvider
 
         provider = HistoricalDataProvider.__new__(HistoricalDataProvider)
         provider.pool = None
@@ -364,7 +366,7 @@ class TestHistoricalProviderUnit:
     @pytest.mark.asyncio
     async def test_get_candles_raises_when_not_connected(self):
         """REC-007: Test get_candles raises when provider not connected."""
-        from data.historical_provider import HistoricalDataProvider
+        from data.kraken_db.historical_provider import HistoricalDataProvider
 
         provider = HistoricalDataProvider.__new__(HistoricalDataProvider)
         provider.pool = None
@@ -382,7 +384,7 @@ class TestGapFillerUnit:
 
     def test_pair_mapping(self):
         """Test symbol to Kraken pair mapping."""
-        from data.gap_filler import GapFiller
+        from data.kraken_db.gap_filler import GapFiller
 
         assert GapFiller.PAIR_MAP['XRP/USDT'] == 'XRPUSDT'
         assert GapFiller.PAIR_MAP['BTC/USDT'] == 'XBTUSDT'
@@ -394,7 +396,7 @@ class TestDatabaseWriterBufferOverflow:
 
     def test_max_buffer_size_constants(self):
         """Test that buffer size limits are properly defined."""
-        from data.websocket_db_writer import DatabaseWriter
+        from data.kraken_db.websocket_db_writer import DatabaseWriter
 
         assert hasattr(DatabaseWriter, 'MAX_TRADE_BUFFER_SIZE')
         assert hasattr(DatabaseWriter, 'MAX_CANDLE_BUFFER_SIZE')
@@ -403,7 +405,7 @@ class TestDatabaseWriterBufferOverflow:
 
     def test_overflow_count_tracking(self):
         """Test that overflow count is tracked in stats."""
-        from data.websocket_db_writer import DatabaseWriter
+        from data.kraken_db.websocket_db_writer import DatabaseWriter
         from unittest.mock import patch
 
         with patch('data.websocket_db_writer.asyncpg', None):
@@ -419,7 +421,7 @@ class TestTradeValidation:
     @pytest.mark.asyncio
     async def test_store_trades_validates_price(self):
         """Test that invalid prices are rejected."""
-        from data.historical_backfill import KrakenTradesBackfill
+        from data.kraken_db.historical_backfill import KrakenTradesBackfill
         from unittest.mock import AsyncMock, MagicMock
 
         # Create backfill instance with mocked pool
@@ -450,7 +452,7 @@ class TestTradeValidation:
     @pytest.mark.asyncio
     async def test_store_trades_validates_volume(self):
         """Test that invalid volumes are rejected."""
-        from data.historical_backfill import KrakenTradesBackfill
+        from data.kraken_db.historical_backfill import KrakenTradesBackfill
         from unittest.mock import AsyncMock, MagicMock
 
         backfill = KrakenTradesBackfill.__new__(KrakenTradesBackfill)
@@ -478,7 +480,7 @@ class TestTradeValidation:
     @pytest.mark.asyncio
     async def test_store_trades_handles_malformed_data(self):
         """Test that malformed trades don't crash the system."""
-        from data.historical_backfill import KrakenTradesBackfill
+        from data.kraken_db.historical_backfill import KrakenTradesBackfill
         from unittest.mock import AsyncMock, MagicMock
 
         backfill = KrakenTradesBackfill.__new__(KrakenTradesBackfill)
@@ -505,7 +507,7 @@ class TestCentralizedPairMappings:
 
     def test_pair_map_consistency(self):
         """Test that all files use centralized PAIR_MAP."""
-        from data.types import PAIR_MAP, REVERSE_PAIR_MAP
+        from data.kraken_db.types import PAIR_MAP, REVERSE_PAIR_MAP
 
         # Verify bidirectional mapping
         for our_format, kraken_format in PAIR_MAP.items():
@@ -513,14 +515,14 @@ class TestCentralizedPairMappings:
 
     def test_default_symbols_in_pair_map(self):
         """Test that default symbols are all in PAIR_MAP."""
-        from data.types import PAIR_MAP, DEFAULT_SYMBOLS
+        from data.kraken_db.types import PAIR_MAP, DEFAULT_SYMBOLS
 
         for symbol in DEFAULT_SYMBOLS:
             assert symbol in PAIR_MAP, f"Default symbol {symbol} not in PAIR_MAP"
 
     def test_csv_symbol_map_coverage(self):
         """Test that CSV symbol map covers PAIR_MAP."""
-        from data.types import PAIR_MAP, CSV_SYMBOL_MAP
+        from data.kraken_db.types import PAIR_MAP, CSV_SYMBOL_MAP
 
         # Every Kraken format should map back to our format
         for our_format, kraken_format in PAIR_MAP.items():
@@ -550,7 +552,7 @@ class TestHistoricalProviderIntegration:
     @pytest.mark.asyncio
     async def test_connect_and_health_check(self, db_url):
         """Test database connection and health check."""
-        from data.historical_provider import HistoricalDataProvider
+        from data.kraken_db.historical_provider import HistoricalDataProvider
 
         provider = HistoricalDataProvider(db_url)
 
@@ -567,7 +569,7 @@ class TestHistoricalProviderIntegration:
     @pytest.mark.asyncio
     async def test_get_symbols(self, db_url):
         """Test getting available symbols."""
-        from data.historical_provider import HistoricalDataProvider
+        from data.kraken_db.historical_provider import HistoricalDataProvider
 
         provider = HistoricalDataProvider(db_url)
 

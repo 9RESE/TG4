@@ -99,9 +99,10 @@ def _run_single_backtest(args: Tuple) -> Dict[str, Any]:
     import sys
     from pathlib import Path
 
-    # Add project root to path
-    project_root = Path(__file__).parent.parent
+    # Add project root and ws_paper_tester to path
+    project_root = Path(__file__).parent.parent.parent  # Goes up to grok-4_1/
     sys.path.insert(0, str(project_root))
+    sys.path.insert(0, str(Path(__file__).parent.parent))  # ws_paper_tester/
 
     result = {
         'run_id': run_id,
@@ -112,7 +113,7 @@ def _run_single_backtest(args: Tuple) -> Dict[str, Any]:
     }
 
     try:
-        from data import HistoricalDataProvider
+        from data.kraken_db import HistoricalDataProvider
         from ws_tester.strategy_loader import discover_strategies
         from backtest_runner import BacktestExecutor, BacktestConfig
         from datetime import datetime, timezone, timedelta

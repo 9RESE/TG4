@@ -22,8 +22,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-# Add project root to path
+# Add project root and ws_paper_tester to path
 import sys
+PROJECT_ROOT = Path(__file__).parent.parent
+sys.path.insert(0, str(PROJECT_ROOT))
 sys.path.insert(0, str(Path(__file__).parent))
 
 # Import main tester (defer to avoid import errors if not fully set up)
@@ -36,7 +38,7 @@ except ImportError as e:
 
 # Import historical data components
 try:
-    from data import (
+    from data.kraken_db import (
         HistoricalDataProvider,
         DatabaseWriter,
         run_gap_filler,

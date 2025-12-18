@@ -26,10 +26,12 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Any
 
-# Add project root to path
+# Add project root and ws_paper_tester to path
+PROJECT_ROOT = Path(__file__).parent.parent
+sys.path.insert(0, str(PROJECT_ROOT))
 sys.path.insert(0, str(Path(__file__).parent))
 
-from data import HistoricalDataProvider
+from data.kraken_db import HistoricalDataProvider
 from ws_tester.strategy_loader import discover_strategies, StrategyWrapper
 from ws_tester.types import DataSnapshot, Candle, Signal, Fill, Position, Trade, OrderbookSnapshot
 from ws_tester.portfolio import StrategyPortfolio, STARTING_CAPITAL
