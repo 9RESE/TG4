@@ -398,6 +398,27 @@ Detailed class diagram for key components.
 | Container | Docker | Deployment |
 | Orchestration | Docker Compose | Multi-container setup |
 
+## Data Coverage Status (2025-12-17)
+
+### Currently Collected
+
+| Data Type | Source | Status |
+|-----------|--------|--------|
+| Trade Ticks | REST + WebSocket | Active |
+| 1m Candles | Built from trades | Active |
+| 5m-1w Candles | Continuous Aggregates | Active |
+
+### Not Currently Collected
+
+| Data Type | Source | Priority | Impact |
+|-----------|--------|----------|--------|
+| Order Book | `/0/public/Depth` | **High** | No spread analysis |
+| Ticker Data | `/0/public/Ticker` | Medium | Manual aggregation |
+| Spread History | `/0/public/Spread` | Medium | No slippage data |
+| Own Trades | `/0/private/TradesHistory` | **High** | No P&L tracking |
+
+See [Data Gap Analysis](../../api/kraken-data-gap-analysis.md) for detailed recommendations.
+
 ## Deployment View
 
 ```

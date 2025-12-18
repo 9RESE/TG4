@@ -336,6 +336,44 @@ PostgreSQL is tuned for time-series workloads:
 | **Maintainability** | Frozen dataclasses, centralized configuration |
 | **Security** | No default credentials, explicit configuration required |
 
+## Current Data Holdings (As of 2025-12-17)
+
+### Summary
+
+| Metric | Value |
+|--------|-------|
+| Database Size | 845 MB |
+| Symbols Tracked | 3 (XRP/USDT, BTC/USDT, XRP/BTC) |
+| Candle Coverage | 35 days (from 2024-12-12) |
+| Trade Retention | 90 days |
+| Continuous Aggregates | 8 timeframes operational |
+
+### Coverage by Symbol
+
+| Symbol | 1m Candles | Trade Count | Oldest Trade |
+|--------|------------|-------------|--------------|
+| BTC/USDT | 343,519 | 538,692 | 2025-09-18 |
+| XRP/USDT | 219,965 | 247,116 | 2025-09-18 |
+| XRP/BTC | 219,739 | 138,604 | 2025-09-18 |
+
+### Known Data Quality Issues
+
+1. **Candle Gaps**: ~65% gap rate in 1-minute candles (needs gap filler)
+2. **Limited History**: Only 35 days of candle data retained
+3. **Sync Status Mismatch**: `data_sync_status` reports historical data older than retention
+
+### Data Not Currently Collected
+
+| Data Type | API Endpoint | Priority |
+|-----------|-------------|----------|
+| Order Book Depth | `/0/public/Depth` | High |
+| Ticker Snapshots | `/0/public/Ticker` | Medium |
+| Spread History | `/0/public/Spread` | Medium |
+| Trade History (own) | `/0/private/TradesHistory` | High |
+| Ledger Entries | `/0/private/Ledgers` | Medium |
+
+See [Kraken Data Gap Analysis](../../api/kraken-data-gap-analysis.md) for detailed recommendations.
+
 ## Related Components
 
 - **ws_paper_tester**: WebSocket client that produces trade data
