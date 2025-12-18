@@ -72,6 +72,7 @@ End-user documentation following the Diataxis framework.
 | Tutorial | [Quickstart](user/tutorials/kraken-db-quickstart.md) | Getting started with the historical data system |
 | How-To | [Operations](user/how-to/kraken-db-operations.md) | Common database operations |
 | Reference | [API](user/reference/kraken-db-api.md) | Complete API reference |
+| Reference | [Data Holdings](user/reference/kraken-db-data-holdings.md) | Current database contents and statistics |
 | Explanation | [Architecture](user/explanation/kraken-db-architecture.md) | Design decisions and trade-offs |
 
 ### Development
