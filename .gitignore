@@ -1,8 +1,12 @@
 venv/
 __pycache__/
 *.pyc
+# Ignore downloaded/cache data but keep database code
 data/
-!ws_paper_tester/data/
+!data/__init__.py
+!data/kraken_db/
+data/kraken_db/.env
+data/kraken_db/candles/
 config/api_keys.yaml
 *.pkl
 *.h5
@@ -17,3 +21,25 @@ logs/
 
 # Archived/old source (deprecated)
 src/
+# Output artifacts
+*.jsonl
+*.csv
+
+# Backtest results
+backtest_results/
+results/
+
+# Optimization results
+optimization_results/
+optimization/optimization_results/
+
+# Trained models
+models/
+
+# Temporary/scratch files
+backtest_simple.py
+
+# Cache
+__pycache__/
+*.pyc
+.pytest_cache/
