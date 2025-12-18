@@ -380,15 +380,28 @@ PostgreSQL is tuned for time-series workloads:
 2. **Historical 1m Data**: Not available (use 5m+ aggregates for backtesting)
 3. **Trade Data Limited**: 90-day retention - tick-level analysis limited to recent data
 
-### Data Not Currently Collected
+### Additional Data Collection (Now Available)
 
-| Data Type | API Endpoint | Priority |
-|-----------|-------------|----------|
-| Order Book Depth | `/0/public/Depth` | High |
-| Ticker Snapshots | `/0/public/Ticker` | Medium |
-| Spread History | `/0/public/Spread` | Medium |
-| Trade History (own) | `/0/private/TradesHistory` | High |
-| Ledger Entries | `/0/private/Ledgers` | Medium |
+| Data Type | Module | Status |
+|-----------|--------|--------|
+| Order Book Depth | `order_book_collector.py` | Implemented |
+| Private Trade History | `private_data_collector.py` | Implemented |
+| Ledger Entries | `private_data_collector.py` | Implemented |
+| Balance History | `private_data_collector.py` | Implemented |
+
+### Running the Collectors
+
+```bash
+# Order book collection (runs continuously, 60s intervals)
+python -m data.kraken_db.order_book_collector --db-url "$DATABASE_URL"
+
+# Private data sync (one-time or periodic)
+python -m data.kraken_db.private_data_collector --db-url "$DATABASE_URL" \
+    --api-key "$KRAKEN_API_KEY" --api-secret "$KRAKEN_API_SECRET"
+
+# Gap filler (run on startup)
+python -m data.kraken_db.gap_filler --db-url "$DATABASE_URL"
+```
 
 See [Kraken Data Gap Analysis](../../api/kraken-data-gap-analysis.md) for detailed recommendations.
 
