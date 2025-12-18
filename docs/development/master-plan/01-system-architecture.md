@@ -659,7 +659,20 @@ pytest-asyncio>=0.21
 
 ## 6. Infrastructure Design
 
-### 6.1 Docker Compose Architecture
+### 6.1 Storage Infrastructure
+
+The local LLM (Ollama) models are stored on a dedicated 2TB drive for persistent storage:
+
+| Directory | Purpose | Size |
+|-----------|---------|------|
+| `/media/rese/2tb_drive/ollama_config/` | Local LLM models (Qwen 2.5 7B, etc.) | ~10-50 GB |
+
+**Benefits:**
+- Separates large model files from OS drive
+- Sufficient space for multiple LLM models
+- GPU-accessible for Ollama inference
+
+### 6.2 Docker Compose Architecture
 
 ```yaml
 # docker-compose.yml
@@ -705,7 +718,8 @@ services:
   ollama:
     image: ollama/ollama:latest
     volumes:
-      - ollama_models:/root/.ollama
+      # Local LLM models stored on 2TB drive for persistent storage
+      - /media/rese/2tb_drive/ollama_config:/root/.ollama
     ports:
       - "11434:11434"
     deploy:
@@ -739,16 +753,60 @@ services:
 volumes:
   timescaledb_data:
   redis_data:
-  ollama_models:
+  # Note: ollama uses host path /media/rese/2tb_drive/ollama_config
   prometheus_data:
   grafana_data:
 ```
 
-### 6.2 Database Schema
+### 6.3 Database Architecture
+
+The system uses an existing Kraken Historical Data System (`data/kraken_db/`) built on TimescaleDB.
+
+#### Current Data Holdings (as of December 2025)
+
+| Metric | Value |
+|--------|-------|
+| **Database Size** | ~845 MB |
+| **Symbols Tracked** | 3 (XRP/USDT, BTC/USDT, XRP/BTC) |
+| **Historical Coverage** | **5-9 years** via continuous aggregates (2016-2025) |
+| **Continuous Aggregates** | 8 timeframes (5m, 15m, 30m, 1h, 4h, 12h, 1d, 1w) |
+
+**Key Discovery:** The continuous aggregates preserve historical data independently of base table retention, providing multi-year backtesting capability.
+
+| Symbol | Daily Candles | Coverage |
+|--------|---------------|----------|
+| XRP/BTC | 3,355 | 2016-07-19 → Present (9 years) |
+| BTC/USDT | 2,190 | 2019-12-19 → Present (5 years) |
+| XRP/USDT | 2,057 | 2020-04-30 → Present (5 years) |
+
+#### Components
+
+| Component | Purpose |
+|-----------|---------|
+| `DatabaseWriter` | Real-time WebSocket data persistence with buffering |
+| `HistoricalDataProvider` | Query interface for backtesting and strategy warmup |
+| `GapFiller` | Detect and fill data gaps on startup |
+| `KrakenTradesBackfill` | Fetch historical trade data from REST API |
+| `BulkCSVImporter` | Initial data load from Kraken CSV files |
+
+#### Data Collectors (Implemented)
+
+| Collector | Data Type | Status |
+|-----------|-----------|--------|
+| `order_book_collector.py` | Order book depth snapshots | Ready |
+| `private_data_collector.py` | Trade history, ledger entries, balances | Ready |
+
+#### Detailed Documentation
+
+- **Building Block**: [Kraken DB Architecture](/docs/architecture/05-building-blocks/kraken-db.md)
+- **C4 Diagrams**: [Kraken DB Components](/docs/c4-diagrams/components/kraken-db.md)
+- **API Reference**: [Kraken API Reference](/docs/api/kraken-api-reference.md)
+- **Data Gap Analysis**: [Kraken Data Gap Analysis](/docs/api/kraken-data-gap-analysis.md)
+- **Data Holdings**: [Current Data Holdings](/docs/user/reference/kraken-db-data-holdings.md)
+
+#### TripleGain-Specific Tables (To Be Added)
 
 ```sql
--- TimescaleDB Schema
-
 -- Trade decisions and reasoning
 CREATE TABLE trade_decisions (
     id SERIAL,
@@ -794,14 +852,9 @@ CREATE TABLE portfolio_snapshots (
     PRIMARY KEY (id, timestamp)
 );
 SELECT create_hypertable('portfolio_snapshots', 'timestamp');
-
--- Indexes
-CREATE INDEX idx_decisions_symbol ON trade_decisions (symbol, timestamp DESC);
-CREATE INDEX idx_decisions_model ON trade_decisions (model, timestamp DESC);
-CREATE INDEX idx_performance_model ON model_performance (model, timestamp DESC);
 ```
 
-### 6.3 Monitoring Dashboard
+### 6.4 Monitoring Dashboard
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
