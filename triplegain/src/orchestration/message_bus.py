@@ -182,12 +182,16 @@ class MessageBus:
         """
         Publish a message to all subscribers of the topic.
 
+        Thread-safe: Handlers are called OUTSIDE the lock to prevent deadlock
+        if a handler tries to publish a message.
+
         Args:
             message: Message to publish
 
         Returns:
             Number of subscribers notified
         """
+        # Phase 1: Under lock - update history and get subscribers snapshot
         async with self._lock:
             # Store in history
             self._message_history.append(message)
@@ -197,25 +201,29 @@ class MessageBus:
             if len(self._message_history) > self._max_history_size:
                 self._message_history = self._message_history[-self._max_history_size:]
 
-            # Get subscriptions for topic
-            subscriptions = self._subscriptions.get(message.topic, [])
+            # Get COPY of subscriptions to avoid holding lock during callbacks
+            # This prevents deadlock if handler tries to publish/subscribe
+            subscriptions = list(self._subscriptions.get(message.topic, []))
 
-            # Sort by priority (notify urgent subscribers first)
-            # Note: This could be enhanced with subscriber priorities
-
-            delivered = 0
-            for sub in subscriptions:
-                if sub.matches(message):
-                    try:
-                        await sub.handler(message)
-                        delivered += 1
+        # Phase 2: Outside lock - call handlers
+        # CRITICAL: Handlers are called without holding the lock
+        # This allows handlers to publish messages without deadlock
+        delivered = 0
+        for sub in subscriptions:
+            if sub.matches(message):
+                try:
+                    await sub.handler(message)
+                    delivered += 1
+                    # Update stats under lock
+                    async with self._lock:
                         self._total_delivered += 1
-                    except Exception as e:
+                except Exception as e:
+                    async with self._lock:
                         self._delivery_errors += 1
-                        logger.error(
-                            f"Error delivering message to {sub.subscriber_id}: {e}",
-                            exc_info=True
-                        )
+                    logger.error(
+                        f"Error delivering message to {sub.subscriber_id}: {e}",
+                        exc_info=True
+                    )
 
         logger.debug(
             f"Published message {message.id[:8]} to {message.topic.value}: "

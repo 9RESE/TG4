@@ -15,13 +15,121 @@ Includes:
 """
 
 import asyncio
+import json
 import logging
+import re
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Any
 
 logger = logging.getLogger(__name__)
+
+
+def parse_json_response(response_text: str) -> tuple[Optional[dict], Optional[str]]:
+    """
+    Parse JSON from LLM response, handling common response formats.
+
+    Handles:
+    - Plain JSON
+    - Markdown-wrapped JSON (```json\\n{...}\\n```)
+    - JSON embedded in text
+    - Triple backtick without language specifier
+
+    Args:
+        response_text: Raw response text from LLM
+
+    Returns:
+        Tuple of (parsed_dict or None, error_message or None)
+    """
+    if not response_text or not response_text.strip():
+        return None, "Empty response"
+
+    text = response_text.strip()
+
+    # Strategy 1: Try to extract from markdown code block
+    # Matches ```json\n{...}\n``` or ```\n{...}\n```
+    markdown_patterns = [
+        r'```json\s*\n?([\s\S]*?)\n?```',  # ```json ... ```
+        r'```\s*\n?([\s\S]*?)\n?```',       # ``` ... ```
+    ]
+
+    for pattern in markdown_patterns:
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match:
+            try:
+                extracted = match.group(1).strip()
+                return json.loads(extracted), None
+            except json.JSONDecodeError as e:
+                logger.debug(f"Markdown JSON extraction failed: {e}")
+                continue
+
+    # Strategy 2: Find JSON object in text (handles { ... } anywhere)
+    # Use a simple bracket matching approach
+    json_match = re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', text)
+    if json_match:
+        try:
+            return json.loads(json_match.group()), None
+        except json.JSONDecodeError as e:
+            logger.debug(f"JSON object extraction failed: {e}")
+
+    # Strategy 3: Try full text as JSON
+    try:
+        return json.loads(text), None
+    except json.JSONDecodeError as e:
+        logger.debug(f"Full text JSON parsing failed: {e}")
+
+    # Strategy 4: More aggressive search for nested JSON
+    start_idx = text.find('{')
+    if start_idx >= 0:
+        depth = 0
+        end_idx = start_idx
+        for i, char in enumerate(text[start_idx:], start_idx):
+            if char == '{':
+                depth += 1
+            elif char == '}':
+                depth -= 1
+                if depth == 0:
+                    end_idx = i + 1
+                    break
+
+        if end_idx > start_idx:
+            try:
+                return json.loads(text[start_idx:end_idx]), None
+            except json.JSONDecodeError:
+                pass
+
+    return None, f"Failed to extract valid JSON from response: {text[:100]}..."
+
+
+def validate_json_schema(data: dict, required_fields: list[str], field_types: Optional[dict] = None) -> tuple[bool, list[str]]:
+    """
+    Validate JSON data against expected schema.
+
+    Args:
+        data: Parsed JSON dictionary
+        required_fields: List of required field names
+        field_types: Optional dict of field_name -> expected type
+
+    Returns:
+        Tuple of (is_valid, list of errors)
+    """
+    errors = []
+
+    for field in required_fields:
+        if field not in data:
+            errors.append(f"Missing required field: {field}")
+
+    if field_types:
+        for field, expected_type in field_types.items():
+            if field in data:
+                if not isinstance(data[field], expected_type):
+                    errors.append(
+                        f"Field '{field}' expected {expected_type.__name__}, "
+                        f"got {type(data[field]).__name__}"
+                    )
+
+    return len(errors) == 0, errors
 
 
 # Default rate limits per provider (requests per minute)
@@ -34,6 +142,9 @@ DEFAULT_RATE_LIMITS = {
 }
 
 # Model cost per 1K tokens (input, output)
+# Note: These are converted from standard per-1M pricing
+# e.g., OpenAI $10/1M = $0.01/1K, Anthropic $3/1M = $0.003/1K
+# Calculation: (tokens / 1000) * cost_per_1k
 MODEL_COSTS = {
     # OpenAI
     'gpt-4-turbo': {'input': 0.01, 'output': 0.03},

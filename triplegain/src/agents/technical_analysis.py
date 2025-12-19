@@ -440,7 +440,7 @@ Return ONLY the JSON object, no additional text."""
                 'warnings': ['LLM parsing failed, using indicator heuristics'],
             },
             'bias': bias,
-            'confidence': 0.4,  # Lower confidence for fallback
+            'confidence': 0.25,  # Conservative confidence for heuristic fallback
             'reasoning': 'Generated from indicator values due to LLM parse failure',
         }
 

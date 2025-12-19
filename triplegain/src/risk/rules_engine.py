@@ -19,6 +19,7 @@ Implements all risk layers from the design:
 import asyncio
 import json
 import logging
+import threading
 import time
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone, timedelta
@@ -45,6 +46,11 @@ class ValidationStatus(Enum):
     HALTED = "halted"  # Trading is halted
 
 
+class TradeProposalValidationError(ValueError):
+    """Raised when TradeProposal validation fails."""
+    pass
+
+
 @dataclass
 class TradeProposal:
     """
@@ -64,6 +70,66 @@ class TradeProposal:
     # Context for validation
     regime: str = "ranging"
     agent_confidences: dict = field(default_factory=dict)
+
+    def __post_init__(self):
+        """Validate inputs after initialization."""
+        self.validate()
+
+    def validate(self) -> None:
+        """
+        Validate trade proposal inputs.
+
+        Raises:
+            TradeProposalValidationError: If any validation fails
+        """
+        errors = []
+
+        # Symbol validation
+        if not self.symbol or not isinstance(self.symbol, str):
+            errors.append("Symbol must be a non-empty string")
+
+        # Side validation
+        if self.side not in ("buy", "sell"):
+            errors.append(f"Side must be 'buy' or 'sell', got '{self.side}'")
+
+        # Size validation - CRITICAL: Must be positive
+        if not isinstance(self.size_usd, (int, float)) or self.size_usd <= 0:
+            errors.append(f"Size must be positive, got {self.size_usd}")
+
+        # Entry price validation - CRITICAL: Must be positive
+        if not isinstance(self.entry_price, (int, float)) or self.entry_price <= 0:
+            errors.append(f"Entry price must be positive, got {self.entry_price}")
+
+        # Stop loss validation
+        if self.stop_loss is not None:
+            if not isinstance(self.stop_loss, (int, float)) or self.stop_loss <= 0:
+                errors.append(f"Stop loss must be positive, got {self.stop_loss}")
+            elif self.side == "buy" and self.stop_loss >= self.entry_price:
+                errors.append(f"Stop loss ({self.stop_loss}) must be below entry ({self.entry_price}) for buy")
+            elif self.side == "sell" and self.stop_loss <= self.entry_price:
+                errors.append(f"Stop loss ({self.stop_loss}) must be above entry ({self.entry_price}) for sell")
+
+        # Take profit validation
+        if self.take_profit is not None:
+            if not isinstance(self.take_profit, (int, float)) or self.take_profit <= 0:
+                errors.append(f"Take profit must be positive, got {self.take_profit}")
+            elif self.side == "buy" and self.take_profit <= self.entry_price:
+                errors.append(f"Take profit ({self.take_profit}) must be above entry ({self.entry_price}) for buy")
+            elif self.side == "sell" and self.take_profit >= self.entry_price:
+                errors.append(f"Take profit ({self.take_profit}) must be below entry ({self.entry_price}) for sell")
+
+        # Leverage validation - CRITICAL: Must be positive integer
+        if not isinstance(self.leverage, int) or self.leverage < 1:
+            errors.append(f"Leverage must be positive integer >= 1, got {self.leverage}")
+
+        # Confidence validation
+        if not isinstance(self.confidence, (int, float)) or not (0.0 <= self.confidence <= 1.0):
+            errors.append(f"Confidence must be between 0 and 1, got {self.confidence}")
+
+        if errors:
+            error_msg = "Trade proposal validation failed: " + "; ".join(errors)
+            logger.warning(error_msg)
+            raise TradeProposalValidationError(error_msg)
 
     def calculate_risk_reward(self) -> Optional[float]:
         """Calculate risk/reward ratio."""
@@ -371,8 +437,9 @@ class RiskManagementEngine:
             'very_strict': 0.10, # Much higher required confidence
         }
 
-        # Track state
+        # Track state with thread-safe lock
         self._risk_state = RiskState()
+        self._state_lock = threading.Lock()  # Thread safety for concurrent validation
 
     def validate_trade(
         self,
@@ -383,9 +450,12 @@ class RiskManagementEngine:
         """
         Validate a trade proposal against all risk rules.
 
+        Thread-safe: Uses internal lock to prevent race conditions.
+        CRITICAL: Circuit breaker checks ALWAYS use internal state to prevent bypass.
+
         Args:
             proposal: Trade proposal to validate
-            risk_state: Current risk state (uses internal state if None)
+            risk_state: Current risk state for non-circuit-breaker checks (uses internal if None)
             entry_strictness: Entry strictness from regime detection
 
         Returns:
@@ -393,17 +463,48 @@ class RiskManagementEngine:
         """
         start_time = time.perf_counter()
 
-        state = risk_state or self._risk_state
+        # Use lock for circuit breaker checks to ensure thread safety
+        # CRITICAL: This prevents race condition where circuit breaker could be bypassed
+        with self._state_lock:
+            # Auto-reset daily/weekly if needed
+            self._check_and_reset_periods(self._risk_state)
 
-        # Auto-reset daily/weekly if needed
-        self._check_and_reset_periods(state)
+            # CRITICAL: Circuit breaker checks ALWAYS use internal state
+            # This prevents bypass via stale external state
+            internal_state = self._risk_state
+
+            # Check circuit breakers first - use INTERNAL state (halt trading)
+            if internal_state.trading_halted:
+                result = RiskValidation(
+                    status=ValidationStatus.HALTED,
+                    proposal=proposal,
+                    rejections=[f"TRADING_HALTED: {internal_state.halt_reason}"],
+                    validation_time_ms=int((time.perf_counter() - start_time) * 1000),
+                )
+                return result
+
+            # Check cooldown - use INTERNAL state
+            if internal_state.in_cooldown and internal_state.cooldown_until:
+                if datetime.now(timezone.utc) < internal_state.cooldown_until:
+                    result = RiskValidation(
+                        status=ValidationStatus.REJECTED,
+                        proposal=proposal,
+                        rejections=[f"IN_COOLDOWN: {internal_state.cooldown_reason}"],
+                        validation_time_ms=int((time.perf_counter() - start_time) * 1000),
+                    )
+                    return result
+
+            # Snapshot current state for remaining checks (outside lock is ok)
+            # For other validations, allow external state override
+            state = risk_state or self._risk_state
 
         result = RiskValidation(
             status=ValidationStatus.APPROVED,
             proposal=proposal,
         )
 
-        # Check circuit breakers first (halt trading)
+        # NOTE: Circuit breakers already checked above under lock
+        # The following check is for secondary validation after other checks
         if state.trading_halted:
             result.status = ValidationStatus.HALTED
             result.rejections.append(f"TRADING_HALTED: {state.halt_reason}")
@@ -718,17 +819,26 @@ class RiskManagementEngine:
         state: RiskState,
         result: RiskValidation
     ) -> bool:
-        """Validate total portfolio exposure."""
+        """
+        Validate total portfolio exposure.
+
+        CRITICAL: Exposure includes leverage multiplier.
+        $1000 at 5x leverage = 50% exposure on $10k portfolio, not 10%!
+        """
         if float(state.current_equity) == 0:
             return True
 
-        position_exposure = (proposal.size_usd / float(state.current_equity)) * 100
+        # CRITICAL FIX: Include leverage in exposure calculation
+        # Example: $1000 position at 5x = $5000 actual market exposure
+        actual_exposure_usd = proposal.size_usd * proposal.leverage
+        position_exposure = (actual_exposure_usd / float(state.current_equity)) * 100
         new_total = state.total_exposure_pct + position_exposure
 
         if new_total > self.max_exposure_pct:
             result.status = ValidationStatus.REJECTED
             result.rejections.append(
-                f"EXPOSURE_LIMIT: Would be {new_total:.1f}% > {self.max_exposure_pct}% max"
+                f"EXPOSURE_LIMIT: Would be {new_total:.1f}% > {self.max_exposure_pct}% max "
+                f"(${proposal.size_usd:.2f} x {proposal.leverage}x leverage = ${actual_exposure_usd:.2f} exposure)"
             )
             return False
 

@@ -6,6 +6,9 @@ This module provides:
 - Indicator endpoints for testing
 - Snapshot endpoints for testing
 - Debug endpoints for prompt inspection
+
+SECURITY: All endpoints (except health) require authentication.
+See security.py for rate limiting, CORS, and other protections.
 """
 
 import logging
@@ -27,6 +30,7 @@ from ..data.indicator_library import IndicatorLibrary
 from ..data.market_snapshot import MarketSnapshotBuilder
 from ..llm.prompt_builder import PromptBuilder
 from ..utils.config import get_config_loader, ConfigError
+from .security import setup_security, get_security_config
 
 logger = logging.getLogger(__name__)
 
@@ -143,6 +147,11 @@ def create_app() -> FastAPI:
         version="1.0.0",
         lifespan=lifespan,
     )
+
+    # Set up security FIRST (middleware order matters)
+    # This adds: request size limits, timeouts, rate limiting, CORS
+    security_config = get_security_config()
+    setup_security(app, security_config)
 
     # Register routes
     register_health_routes(app)

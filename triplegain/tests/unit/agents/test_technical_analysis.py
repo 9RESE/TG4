@@ -234,7 +234,7 @@ class TestResponseParsing:
 
         parsed = ta_agent._create_output_from_indicators(mock_snapshot)
 
-        assert parsed['confidence'] == 0.4  # Lower for fallback
+        assert parsed['confidence'] == 0.25  # Conservative confidence for heuristic fallback
         assert 'LLM parsing failed' in str(parsed['signals']['warnings'])
 
 
@@ -437,7 +437,7 @@ class TestProcessMethod:
         # Should use indicator-based fallback
         assert output is not None
         assert output.symbol == "BTC/USDT"
-        assert output.confidence == 0.4  # Fallback confidence
+        assert output.confidence == 0.25  # Conservative fallback confidence
 
 
 # =============================================================================
@@ -598,7 +598,7 @@ class TestIndicatorFallback:
         parsed = ta_agent._create_output_from_indicators(snapshot)
 
         assert parsed['bias'] == 'neutral'
-        assert parsed['confidence'] == 0.4
+        assert parsed['confidence'] == 0.25  # Conservative fallback confidence
 
 
 # =============================================================================

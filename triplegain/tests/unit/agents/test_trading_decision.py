@@ -424,7 +424,26 @@ class TestConsensusCalculation:
         assert consensus.agreeing_models == 6
 
     def test_majority_consensus(self, trading_agent):
-        """Majority should win."""
+        """Clear majority (>50%) should win."""
+        # 4/6 = 67% consensus - clear majority
+        decisions = [
+            ModelDecision(model_name="m1", provider="test", action="BUY", confidence=0.8),
+            ModelDecision(model_name="m2", provider="test", action="BUY", confidence=0.7),
+            ModelDecision(model_name="m3", provider="test", action="BUY", confidence=0.75),
+            ModelDecision(model_name="m4", provider="test", action="BUY", confidence=0.65),
+            ModelDecision(model_name="m5", provider="test", action="SELL", confidence=0.8),
+            ModelDecision(model_name="m6", provider="test", action="HOLD", confidence=0.5),
+        ]
+
+        consensus = trading_agent._calculate_consensus(decisions)
+
+        assert consensus.final_action == "BUY"
+        assert consensus.agreeing_models == 4
+        assert consensus.votes["BUY"] == 4
+
+    def test_weak_consensus_forces_hold(self, trading_agent):
+        """Weak consensus (<=50%) should force HOLD to prevent risky trades."""
+        # 3/6 = 50% consensus - too weak, should force HOLD
         decisions = [
             ModelDecision(model_name="m1", provider="test", action="BUY", confidence=0.8),
             ModelDecision(model_name="m2", provider="test", action="BUY", confidence=0.7),
@@ -436,8 +455,8 @@ class TestConsensusCalculation:
 
         consensus = trading_agent._calculate_consensus(decisions)
 
-        assert consensus.final_action == "BUY"
-        assert consensus.agreeing_models == 3
+        # CRITICAL: Weak consensus forces HOLD - prevents acting on uncertain signals
+        assert consensus.final_action == "HOLD"
         assert consensus.votes["BUY"] == 3
 
     def test_no_valid_decisions(self, trading_agent):

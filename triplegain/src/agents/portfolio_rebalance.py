@@ -16,7 +16,7 @@ import logging
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, ROUND_DOWN
 from typing import Optional, Any
 
 from .base_agent import BaseAgent, AgentOutput
@@ -495,10 +495,11 @@ class PortfolioRebalanceAgent(BaseAgent):
             # Calculate batch amounts with proper rounding
             base_batch_amount = trade.amount_usd / Decimal(num_batches)
 
-            # Round to 2 decimal places for consistency
-            rounded_batch_amount = base_batch_amount.quantize(Decimal('0.01'))
+            # Round DOWN to 2 decimal places to prevent overflow
+            # Using ROUND_DOWN ensures total never exceeds original amount
+            rounded_batch_amount = base_batch_amount.quantize(Decimal('0.01'), rounding=ROUND_DOWN)
 
-            # Calculate remainder to add to first batch
+            # Calculate remainder to add to first batch (always positive with ROUND_DOWN)
             remainder = trade.amount_usd - (rounded_batch_amount * num_batches)
 
             for batch_idx in range(num_batches):

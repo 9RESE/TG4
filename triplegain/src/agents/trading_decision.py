@@ -23,6 +23,7 @@ from datetime import datetime, timezone
 from typing import Optional, Any, TYPE_CHECKING
 
 from .base_agent import BaseAgent, AgentOutput
+from ..llm.clients.base import parse_json_response
 
 if TYPE_CHECKING:
     from ..data.market_snapshot import MarketSnapshot
@@ -488,21 +489,14 @@ class TradingDecisionAgent(BaseAgent):
 
     def _parse_decision(self, response_text: str, model_name: str) -> dict:
         """Parse a model's response into structured decision."""
-        # Try to extract JSON
-        json_match = re.search(r'\{[\s\S]*\}', response_text)
-        if json_match:
-            try:
-                parsed = json.loads(json_match.group())
-                return self._normalize_decision(parsed)
-            except json.JSONDecodeError:
-                pass
+        # Use robust JSON parser that handles markdown-wrapped JSON
+        parsed, error = parse_json_response(response_text)
 
-        # Fallback: try full response
-        try:
-            parsed = json.loads(response_text.strip())
+        if parsed is not None:
             return self._normalize_decision(parsed)
-        except json.JSONDecodeError:
-            pass
+
+        # Log the parsing error for debugging
+        logger.debug(f"JSON parsing failed for {model_name}: {error}")
 
         # Last resort: extract action from text
         return self._extract_decision_from_text(response_text)
@@ -583,11 +577,22 @@ class TradingDecisionAgent(BaseAgent):
 
         # Find winning action
         max_votes = max(votes.values())
-        winning_action = max(votes.keys(), key=lambda a: (votes[a], -list(votes.keys()).index(a)))
 
         # Calculate consensus strength
         total_valid = len(valid_decisions)
         consensus_strength = max_votes / total_valid if total_valid > 0 else 0
+
+        # CRITICAL: Force HOLD if consensus is too weak (<=50%)
+        # This prevents executing trades when models strongly disagree
+        # (e.g., 2-2-2 three-way tie would pick alphabetically without this)
+        if consensus_strength <= 0.5:
+            winning_action = 'HOLD'
+            logger.info(
+                f"Forcing HOLD due to weak consensus: {consensus_strength:.0%} "
+                f"(votes: {votes})"
+            )
+        else:
+            winning_action = max(votes.keys(), key=lambda a: (votes[a], -list(votes.keys()).index(a)))
 
         # Determine agreement type and confidence boost
         # Per design: Unanimous (6/6): +0.15, Strong (5/6): +0.10, Majority (4/6): +0.05

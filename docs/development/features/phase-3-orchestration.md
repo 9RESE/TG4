@@ -1,7 +1,7 @@
 # Phase 3: Orchestration - Feature Documentation
 
-**Version**: 1.4
-**Status**: COMPLETE (with all enhancements and review fixes)
+**Version**: 1.5
+**Status**: COMPLETE (with all enhancements, security, and consolidated review fixes)
 **Date**: 2025-12-19
 
 ## Overview
@@ -543,7 +543,7 @@ execution:
 - `tests/unit/api/test_routes_orchestration.py` - 43 tests
 
 **Total Phase 3 Tests**: 257 tests
-**Total Project Tests**: 916
+**Total Project Tests**: 917
 **Coverage**: 87%
 
 ## Integration Points
@@ -587,6 +587,43 @@ execution:
 - [Comprehensive Code Review](../reviews/full/triplegain-comprehensive-code-review.md)
 
 ## Changelog
+
+### v1.5 (2025-12-19) - Consolidated Review Fixes
+
+Comprehensive fixes from consolidated code review addressing 13 P0 and 12 P1 issues:
+
+**API Security Layer** (new module: `triplegain/src/api/security.py`):
+- API key authentication with role-based access control
+- Tiered rate limiting (5/30/60 requests per minute by endpoint type)
+- CORS configuration via environment variables
+- 1MB request size limit middleware
+- 45s request timeout middleware
+
+**Trading Decision Logic**:
+- Force HOLD when consensus ≤ 50% to prevent acting on uncertain signals
+- Fixes 3-way tie (2-2-2) that previously picked action alphabetically
+
+**Risk Engine Hardening**:
+- Thread-safe with `threading.Lock()` for concurrent validation
+- Circuit breaker checks always use internal state (prevents bypass via stale external state)
+- Leverage now properly factored into exposure calculation
+- Comprehensive input validation via `TradeProposalValidationError`
+
+**LLM Response Handling**:
+- Robust JSON parser handles markdown-wrapped responses (```json...```)
+- Multiple fallback strategies for JSON extraction
+
+**MessageBus Thread Safety**:
+- Fixed potential deadlock when handlers publish messages
+- Two-phase publish: copy subscribers under lock, call handlers outside lock
+
+**Conservative Fallbacks**:
+- TA fallback confidence reduced from 0.4 → 0.25
+- DCA rounding uses ROUND_DOWN to prevent overflow
+
+**Tests**: 917 passing | **Coverage**: 87%
+
+**ADR**: [ADR-006: Consolidated Review Fixes](../../architecture/09-decisions/ADR-006-consolidated-review-fixes.md)
 
 ### v1.4 (2025-12-19) - Security & Robustness Fixes
 - **API Security**: All 20+ endpoints now return generic error messages instead of exposing stack traces
@@ -632,4 +669,4 @@ execution:
 
 ---
 
-*Phase 3 Feature Documentation v1.4 - December 2025*
+*Phase 3 Feature Documentation v1.5 - December 2025*
