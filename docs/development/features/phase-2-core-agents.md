@@ -1,8 +1,9 @@
 # Phase 2: Core Agents - Feature Documentation
 
-**Version**: 1.0
-**Status**: COMPLETE
+**Version**: 1.1
+**Status**: COMPLETE (with Code Review Fixes)
 **Date**: 2025-12-18
+**Updated**: 2025-12-18 - Code review fixes applied
 
 ## Overview
 
@@ -42,7 +43,9 @@ class BaseAgent(ABC):
 - Automatic output validation
 - JSON serialization (`to_dict()`, `to_json()`)
 - Database storage integration
-- Output caching
+- Thread-safe output caching with asyncio locks
+- TTL-based cache expiration per symbol
+- Configurable cache TTL (`cache_ttl_seconds`)
 
 ### 2. Technical Analysis Agent
 
@@ -117,11 +120,13 @@ class BaseAgent(ABC):
 
 **Validation Layers**:
 1. **Stop-Loss Validation**: Required, min/max distance
-2. **Confidence Validation**: Dynamic thresholds after losses
+2. **Confidence Validation**: Dynamic thresholds after losses + entry strictness
 3. **Position Size Validation**: Max % of equity
-4. **Leverage Validation**: Regime-adjusted limits
-5. **Exposure Validation**: Total portfolio exposure
-6. **Margin Validation**: Sufficient available margin
+4. **Volatility Spike Check**: Reduce size 50% during ATR > 3x average
+5. **Leverage Validation**: Regime-adjusted limits
+6. **Exposure Validation**: Total portfolio exposure
+7. **Correlated Position Check**: Max correlated exposure (40% default)
+8. **Margin Validation**: Sufficient available margin
 
 **Circuit Breakers**:
 | Trigger | Action |
@@ -130,6 +135,13 @@ class BaseAgent(ABC):
 | Weekly loss > 10% | Halt + reduce positions 50% |
 | Max drawdown > 20% | Halt + close all positions |
 | 5 consecutive losses | 1x leverage only |
+| Volatility spike (ATR > 3x avg) | Reduce size 50% + 15min cooldown |
+
+**New Features** (v1.1):
+- **State Persistence**: Risk state persisted to database, survives restarts
+- **Auto Reset**: Daily/weekly resets triggered automatically
+- **Correlated Positions**: Tracks BTC/XRP correlation to limit combined exposure
+- **Entry Strictness**: Regime-based confidence adjustment (relaxed to very_strict)
 
 **Cooldown Periods**:
 - Post-trade: 5 minutes
@@ -177,12 +189,22 @@ def calculate_position_size(
 - `total_cost_usd`: Sum of all model costs
 
 **Consensus Algorithm**:
-1. Query all 6 models in parallel
+1. Query all 6 models in parallel (with `asyncio.wait` for partial results)
 2. Filter valid decisions (no errors, valid action)
 3. Count votes per action
 4. Select action with most votes
-5. Average confidence from agreeing models
-6. Average trade parameters from agreeing models
+5. Calculate agreement type and confidence boost:
+   - Unanimous (6/6): +0.15 confidence boost
+   - Strong majority (5/6): +0.10 confidence boost
+   - Majority (4/6): +0.05 confidence boost
+   - Split (<4/6): No boost
+6. Average confidence from agreeing models + apply boost
+7. Average trade parameters from agreeing models
+
+**New Features** (v1.1):
+- Proper base class initialization for stats/caching
+- `asyncio.wait` preserves partial results when models timeout
+- Timed-out models are logged individually (not all-or-nothing)
 
 ### 6. LLM Client Infrastructure
 
@@ -210,6 +232,12 @@ class BaseLLMClient(ABC):
 - `model`: Model identifier
 - `latency_ms`: Response time
 - `cost_usd`: API cost
+
+**New Features** (v1.1):
+- **Rate Limiting**: Per-provider sliding window rate limiter
+- **Retry Logic**: Exponential backoff with configurable max retries
+- **Cost Calculation**: Automatic cost tracking for all models
+- `generate_with_retry()`: Rate-limited generation with automatic retries
 
 **Implemented Clients**:
 
@@ -284,13 +312,15 @@ circuit_breakers:
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/v1/agents/ta/{symbol}` | POST | Invoke TA agent |
-| `/api/v1/agents/regime/{symbol}` | POST | Invoke Regime agent |
-| `/api/v1/agents/decision/{symbol}` | POST | Invoke Trading Decision |
+| `/api/v1/agents/ta/{symbol}` | GET | Get cached TA analysis |
+| `/api/v1/agents/ta/{symbol}/run` | POST | Trigger fresh TA analysis |
+| `/api/v1/agents/regime/{symbol}` | GET | Get cached regime |
+| `/api/v1/agents/regime/{symbol}/run` | POST | Trigger fresh regime detection |
+| `/api/v1/agents/trading/{symbol}/run` | POST | Trigger trading decision |
 | `/api/v1/risk/validate` | POST | Validate trade proposal |
 | `/api/v1/risk/state` | GET | Get current risk state |
-| `/api/v1/risk/position-size` | POST | Calculate position size |
-| `/api/v1/models/comparison` | GET | Model performance stats |
+| `/api/v1/risk/reset` | POST | Reset risk state (admin) |
+| `/api/v1/agents/stats` | GET | Get all agent statistics |
 
 ## Testing
 
@@ -336,12 +366,47 @@ circuit_breakers:
 
 5. **Fallback Outputs**: When LLM fails, agents produce safe conservative outputs using indicators.
 
+## Code Review Fixes (v1.1)
+
+All issues identified in the Phase 2 code review have been addressed:
+
+### High Priority (Completed)
+| Issue | Fix |
+|-------|-----|
+| Volatility spike circuit breaker missing | Added `update_volatility()` with 3x ATR detection |
+| Risk state not persisted | Added `to_dict()`, `from_dict()`, `persist_state()`, `load_state()` |
+| Rate limiting for LLM APIs | Added `RateLimiter` class with sliding window |
+| Output caching thread safety | Added `asyncio.Lock` for thread-safe cache access |
+
+### Medium Priority (Completed)
+| Issue | Fix |
+|-------|-----|
+| Entry strictness not consumed | Added `entry_strictness` parameter to `validate_trade()` |
+| Correlated position check | Added `_validate_correlation()` with pair correlation matrix |
+| Confidence boost not applied | Applied boost in `TradingDecisionOutput` creation |
+| Daily/weekly reset not automated | Added `_check_and_reset_periods()` |
+
+### Low Priority (Completed)
+| Issue | Fix |
+|-------|-----|
+| TradingDecisionAgent bypasses base class | Fixed to call `super().__init__()` |
+| Model timeout handling | Changed to `asyncio.wait` to preserve partial results |
+| Missing POST trigger endpoints | Added `/run` POST endpoints for TA and Regime |
+| Confidence thresholds from config | Now loaded from `risk.yaml` confidence section |
+
+**Migration**: `migrations/003_risk_state_and_indexes.sql` adds:
+- `risk_state` table for persistence
+- `risk_state_history` table for audit
+- Additional indexes for query optimization
+
 ## References
 
 - [Phase 2 Implementation Plan](../TripleGain-implementation-plan/02-phase-2-core-agents.md)
 - [Risk Management Design](../TripleGain-master-design/03-risk-management-rules-engine.md)
 - [Multi-Agent Architecture](../TripleGain-master-design/01-multi-agent-architecture.md)
+- [Phase 2 Code Review](../reviews/phase-2/phase-2-code-logic-review.md)
+- [ADR-003: Phase 2 Code Review Fixes](../../architecture/09-decisions/ADR-003-phase2-code-review-fixes.md)
 
 ---
 
-*Phase 2 Feature Documentation v1.0 - December 2025*
+*Phase 2 Feature Documentation v1.1 - December 2025*

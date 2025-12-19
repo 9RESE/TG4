@@ -19,8 +19,10 @@ logs/
 *.log
 *.json.log
 
-# Archived/old source (deprecated)
-src/
+# Archived/old source (deprecated) - root level only
+/src/
+# But track triplegain/src/
+!triplegain/src/
 # Output artifacts
 *.jsonl
 *.csv

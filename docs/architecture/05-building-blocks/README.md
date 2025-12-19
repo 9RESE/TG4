@@ -107,11 +107,23 @@
 | Layer | Check |
 |-------|-------|
 | Stop-Loss | Required, 0.5-5% distance |
-| Confidence | Dynamic threshold (0.6-0.8 based on losses) |
+| Confidence | Dynamic threshold (0.6-0.8 based on losses) + entry strictness |
 | Position Size | Max 20% of equity |
+| Volatility Spike | ATR > 3x average reduces size 50% |
 | Leverage | Regime-adjusted (1-5x) |
 | Exposure | Max 80% total |
+| Correlation | Max 40% correlated exposure (BTC/XRP) |
 | Margin | Sufficient available |
+
+#### Risk Engine Features (v1.1)
+
+| Feature | Description |
+|---------|-------------|
+| State Persistence | Risk state survives restarts (database-backed) |
+| Auto Reset | Daily/weekly resets trigger automatically |
+| Volatility Detection | ATR spike detection with position reduction |
+| Correlation Matrix | BTC/XRP correlation-aware exposure limits |
+| Entry Strictness | Regime-based confidence adjustment |
 
 ### LLM Clients (Phase 2 - COMPLETE)
 
@@ -123,6 +135,15 @@
 | AnthropicClient | `triplegain/src/llm/clients/anthropic_client.py` | **Done** | Claude models |
 | DeepSeekClient | `triplegain/src/llm/clients/deepseek_client.py` | **Done** | DeepSeek V3 |
 | XAIClient | `triplegain/src/llm/clients/xai_client.py` | **Done** | Grok models |
+
+#### LLM Client Features (v1.1)
+
+| Feature | Description |
+|---------|-------------|
+| Rate Limiter | Sliding window algorithm per provider |
+| Retry Logic | Exponential backoff with configurable max retries |
+| Cost Tracking | Automatic cost calculation for all models |
+| `generate_with_retry()` | Rate-limited generation with automatic retries |
 
 ### Orchestration Layer (Phase 3 - PLANNED)
 
@@ -247,5 +268,7 @@ class BaseLLMClient(ABC):
 - [Phase 2 Implementation](../../development/TripleGain-implementation-plan/02-phase-2-core-agents.md)
 - [ADR-001: Phase 1 Architecture](../09-decisions/ADR-001-phase1-foundation-architecture.md)
 - [ADR-002: Phase 2 Architecture](../09-decisions/ADR-002-phase2-core-agents-architecture.md)
+- [ADR-003: Phase 2 Code Review Fixes](../09-decisions/ADR-003-phase2-code-review-fixes.md)
 - [Phase 1 Review](../../development/reviews/phase-1/phase-1-comprehensive-review.md)
+- [Phase 2 Review](../../development/reviews/phase-2/phase-2-code-logic-review.md)
 - [Phase 2 Feature Documentation](../../development/features/phase-2-core-agents.md)
