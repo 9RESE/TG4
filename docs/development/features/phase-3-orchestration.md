@@ -1,8 +1,8 @@
 # Phase 3: Orchestration - Feature Documentation
 
-**Version**: 1.0
-**Status**: COMPLETE
-**Date**: 2025-12-18
+**Version**: 1.1
+**Status**: COMPLETE (with deep review fixes)
+**Date**: 2025-12-19
 
 ## Overview
 
@@ -73,6 +73,28 @@ The coordinator orchestrates agent execution and resolves conflicts:
 - `RUNNING`: Normal operation, executing schedules
 - `PAUSED`: Schedules run, trading signals ignored
 - `HALTED`: Circuit breaker triggered, all trading stopped
+
+**Degradation Levels** (v1.1):
+- `NORMAL`: All systems operational
+- `REDUCED`: Skip non-critical agents (sentiment)
+- `LIMITED`: Skip optional agents, reduce LLM calls
+- `EMERGENCY`: Only risk-based decisions, no LLM
+
+**State Persistence** (v1.1):
+- Coordinator state automatically saved to database on stop
+- Statistics, task schedules, and enabled/disabled state restored on start
+- Stored in `coordinator_state` table
+
+**Consensus Building** (v1.1):
+When trading signals are received, coordinator builds consensus from:
+- TA Agent agreement (trend direction)
+- Regime Agent agreement (favorable regime)
+- Sentiment Agent agreement (bullish/bearish)
+
+Confidence multiplier applied based on agreement ratio:
+- 66%+ agreement: 1.0-1.3x confidence boost
+- 33-66% agreement: 1.0x (neutral)
+- <33% agreement: 0.85-1.0x confidence reduction
 
 **Scheduled Tasks**:
 | Task | Agent | Interval | Symbols |
@@ -151,6 +173,11 @@ class RebalanceOutput(AgentOutput):
 5. LLM determines execution strategy (limit/market, sequencing)
 6. Execute sells first (fund availability), then buys
 
+**Trade Execution Routing** (v1.1):
+- Coordinator automatically routes rebalance trades to execution manager
+- Each trade validated with risk engine before execution
+- `rebalance_trade_executed` events published to message bus
+
 ### 4. Order Execution Manager
 
 **Location**: `triplegain/src/execution/order_manager.py`
@@ -185,6 +212,27 @@ PENDING → OPEN → FILLED
 - Contingent order placement (SL/TP after fill)
 - Order monitoring with state transitions
 - Mock mode for testing (no Kraken client)
+
+**Rate Limiting** (v1.1):
+Token bucket algorithm for API call throttling:
+```python
+class TokenBucketRateLimiter:
+    # General API: 60 calls/min, 10-token burst
+    # Order API: 30 calls/min, 5-token burst
+    async def acquire(tokens: int = 1) -> float  # Returns wait time
+```
+
+Applied to: `_place_order()`, `_monitor_order()`, `cancel_order()`, `sync_with_exchange()`
+
+**Input Validation** (v1.1):
+- Trade size validation (must be > 0)
+- Calculated order size validation
+- Returns `ExecutionResult` with error message for invalid inputs
+
+**Order History Cleanup** (v1.1):
+- Configurable `max_history_size` (default: 1000)
+- Automatic cleanup when limit exceeded
+- Separate lock for history to avoid race conditions
 
 **Key Methods**:
 ```python
@@ -228,9 +276,31 @@ unrealized_pnl = (entry_price - current_price) * size * leverage
 
 **Features**:
 - Real-time P&L updates
-- Stop-loss/take-profit monitoring
 - Position snapshots for time-series
 - Risk engine integration for exposure updates
+
+**Automatic SL/TP Monitoring** (v1.1):
+```python
+async def check_sl_tp_triggers(current_prices: dict[str, Decimal]) -> list[tuple[Position, str]]:
+    # Checks all open positions against current prices
+    # Returns list of (position, trigger_type) where trigger_type is 'stop_loss' or 'take_profit'
+    # Correctly handles both LONG and SHORT positions
+```
+
+Integrated into snapshot loop - automatically closes triggered positions.
+
+**Position Validation** (v1.1):
+```python
+def __post_init__(self):
+    # Validates on creation:
+    # - leverage: 1-5 (system max)
+    # - size: must be > 0
+    # - entry_price: must be >= 0
+```
+
+**Decimal Precision** (v1.1):
+- All Decimal values stored as strings in database
+- Preserves full precision through database round-trip
 
 ### 6. API Routes
 
@@ -421,7 +491,25 @@ execution:
 - [Phase 3 Implementation Plan](../TripleGain-implementation-plan/03-phase-3-orchestration.md)
 - [ADR-004: Phase 3 Architecture](../../architecture/09-decisions/ADR-004-phase3-orchestration-architecture.md)
 - [Multi-Agent Architecture](../TripleGain-master-design/01-multi-agent-architecture.md)
+- [Deep Code Review](../reviews/phase-3/phase-3-deep-code-review.md)
+- [Fixes Implemented](../reviews/phase-3/phase-3-fixes-implemented.md)
+
+## Changelog
+
+### v1.1 (2025-12-19) - Deep Review Fixes
+- **Coordinator**: Added consensus building, state persistence, graceful degradation
+- **Order Manager**: Added token bucket rate limiting, input validation, history cleanup
+- **Position Tracker**: Added automatic SL/TP monitoring, position validation, Decimal precision
+- **Portfolio Agent**: Added trade execution routing through coordinator
+
+### v1.0 (2025-12-18) - Initial Release
+- Message Bus with pub/sub pattern
+- Coordinator Agent with conflict resolution
+- Portfolio Rebalancing Agent
+- Order Execution Manager
+- Position Tracker
+- API Routes
 
 ---
 
-*Phase 3 Feature Documentation v1.0 - December 2025*
+*Phase 3 Feature Documentation v1.1 - December 2025*

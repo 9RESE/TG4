@@ -1,23 +1,10 @@
-### DEV NOTES
+### DEV NOTES DO NOT EDIT
+Update the docs based on all recent git changes. Review git log and diff to identify what changed, then update relevant documentation (architecture, features, ADRs, etc.) following the CLAUDE.md standards (Arc42, Diataxis, C4). Commit the documentation updates.
 
-## Current Status (2025-12-18)
-- **Phase 2**: COMPLETE
-- **Test Suite**: 689 tests passing, 90% coverage
-- **Next**: Phase 3 Orchestration
+we need to do a deep code and logic review of the implementation of phase 3 in docs/development/TripleGain-implementation-plan/ of the docs/development/TripleGain-master-design/ Provide a document of your findings and recommendations in this folder docs/development/reviews/phase-3/. ultrathink    
 
-## Recent Accomplishments
-- Comprehensive test coverage achieved (67% → 90%)
-- Mocked LLM client tests for all 5 providers
-- Async database tests with proper mocking patterns
-- API endpoint tests using FastAPI TestClient
+address all issues and implement all fixes and recommendations in docs/development/reviews/phase-3/   
 
-## Testing Infrastructure
-- `aioresponses` for HTTP mocking (aiohttp clients)
-- `AsyncMock` for async database operations
-- `MagicMock` for LLM clients
-- Fixture-based test organization
+we need to do a deep code and logic review of the implementation of phase 3 in docs/development/TripleGain-implementation-plan/ of the docs/development/TripleGain-master-design/ and the implementation of the fixes from the reviews in docs/development/reviews/phase-3/ Provide a document of your findings and recommendations in this folder docs/development/reviews/phase-3/. ultrathink
 
-## Pending Tasks
-- Phase 3: Communication protocol, Coordinator, Execution
-- Phase 4: Sentiment agent, Hodl Bag, A/B dashboard
-- Phase 5: Production testing, Paper trading, Live deployment
+

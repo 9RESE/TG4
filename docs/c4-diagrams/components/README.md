@@ -1,6 +1,6 @@
 # C4 Component Diagram
 
-**Last Updated**: 2025-12-18 (Phase 3 Complete)
+**Last Updated**: 2025-12-19 (Phase 3 with Deep Review Fixes)
 
 ## Trading App Components
 
@@ -88,16 +88,26 @@
 | Component | Responsibility | Model | File Location |
 |-----------|----------------|-------|---------------|
 | Message Bus | Inter-agent pub/sub communication | None | `src/orchestration/message_bus.py` |
-| Coordinator Agent | Agent scheduling, conflict resolution | DeepSeek V3 / Claude | `src/orchestration/coordinator.py` |
-| Portfolio Rebalance Agent | 33/33/33 allocation maintenance | DeepSeek V3 | `src/agents/portfolio_rebalance.py` |
+| Coordinator Agent | Agent scheduling, conflict resolution, consensus building, state persistence, graceful degradation | DeepSeek V3 / Claude | `src/orchestration/coordinator.py` |
+| Portfolio Rebalance Agent | 33/33/33 allocation maintenance, trade execution routing | DeepSeek V3 | `src/agents/portfolio_rebalance.py` |
+
+**Coordinator Features (v1.1)**:
+- Consensus building: Amplifies confidence when multiple agents agree
+- State persistence: Saves/restores state across restarts
+- Graceful degradation: NORMAL → REDUCED → LIMITED → EMERGENCY levels
 
 ### Execution Layer (Phase 3)
 
 | Component | Responsibility | File Location |
 |-----------|----------------|---------------|
-| Order Execution Manager | Order lifecycle, Kraken API | `src/execution/order_manager.py` |
-| Position Tracker | P&L calculation, SL/TP monitoring | `src/execution/position_tracker.py` |
+| Order Execution Manager | Order lifecycle, Kraken API, rate limiting, input validation | `src/execution/order_manager.py` |
+| Position Tracker | P&L calculation, automatic SL/TP monitoring, position validation | `src/execution/position_tracker.py` |
 | Kraken API Client | Exchange communication | External dependency |
+
+**Execution Features (v1.1)**:
+- Token bucket rate limiting for API calls
+- Automatic SL/TP trigger checking
+- Decimal precision preservation
 
 ### LLM Layer (Phase 2)
 
@@ -189,4 +199,4 @@
 
 ---
 
-*C4 Component Diagram v3.0 - Phase 3 Complete - December 2025*
+*C4 Component Diagram v3.1 - Phase 3 with Deep Review Fixes - December 2025*
