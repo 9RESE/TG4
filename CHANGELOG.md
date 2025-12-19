@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.4] - 2025-12-19
+
+### Added
+- **Minimum Quorum**: Trading decisions now require 4/6 models (configurable `min_quorum`) to prevent trading on insufficient data (P1-01)
+- **Regime Hysteresis**: Regime changes require consecutive confirmations and higher confidence to prevent flapping (P1-02)
+- **Hodl Bag Allocation**: Added `allocate_profits_to_hodl()` method with configurable 10% profit allocation (P2-02)
+- **Regime State Persistence**: `load_regime_state()` restores previous regime on restart from database (P2-04)
+- **Prompt Hash Tracking**: Technical Analysis agent now includes SHA-256 prompt hash in output for caching (P3-01)
+- **Default Model Config**: Externalized `DEFAULT_MODEL_CONFIG` constant for easier model updates (P3-05)
+
+### Fixed
+- **SQL Injection**: Replaced string interpolation with parameterized query using `make_interval()` (P2-01)
+- **Allocation Validation**: Target allocation misconfiguration now raises `ValueError` instead of warning (P2-03)
+- **Price Type Safety**: Changed `entry_price`, `stop_loss`, `take_profit` from `float` to `Decimal` in ModelDecision, ConsensusResult, TradingDecisionOutput (P3-02)
+- **Stop Loss Bounds**: Added clamping of `stop_loss_pct` to 1.0-5.0% range per design spec (P3-04)
+
+### Changed
+- `ConsensusResult.agreement_type` now includes 'insufficient_quorum' value
+- Config key naming convention documented (P3-03)
+- Action schema documented with rationale for CLOSE_LONG/CLOSE_SHORT vs single CLOSE (P2-05)
+
 ## [0.3.3] - 2025-12-19
 
 ### Added

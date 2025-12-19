@@ -172,12 +172,15 @@ class PortfolioRebalanceAgent(BaseAgent):
         self.target_xrp_pct = Decimal(str(target.get('xrp_pct', 33.33)))
         self.target_usdt_pct = Decimal(str(target.get('usdt_pct', 33.34)))
 
-        # Validate target allocations sum to ~100%
+        # P2-03: Strict validation - target allocations MUST sum to ~100%
+        # Raise error instead of warning to prevent misconfiguration causing portfolio drift
         total_allocation = self.target_btc_pct + self.target_xrp_pct + self.target_usdt_pct
         if abs(total_allocation - 100) > Decimal('0.1'):
-            logger.warning(
-                f"Target allocations sum to {float(total_allocation):.2f}%, not 100%. "
-                f"BTC={float(self.target_btc_pct):.2f}%, XRP={float(self.target_xrp_pct):.2f}%, "
+            raise ValueError(
+                f"Target allocations must sum to 100% (+/- 0.1%), "
+                f"got {float(total_allocation):.2f}%: "
+                f"BTC={float(self.target_btc_pct):.2f}%, "
+                f"XRP={float(self.target_xrp_pct):.2f}%, "
                 f"USDT={float(self.target_usdt_pct):.2f}%"
             )
 
@@ -197,6 +200,10 @@ class PortfolioRebalanceAgent(BaseAgent):
         # Hodl bag configuration
         hodl = config.get('hodl_bags', {})
         self.hodl_enabled = hodl.get('enabled', True)
+        # P2-02: Percentage of realized profits to allocate to hodl bags
+        self.hodl_profit_allocation_pct = Decimal(str(hodl.get('profit_allocation_pct', 10)))
+        # Distribution strategy: 'proportional' (based on target allocation) or 'btc_only', 'xrp_only'
+        self.hodl_distribution_strategy = hodl.get('distribution_strategy', 'proportional')
 
         # Price cache
         self._price_cache: dict[str, Decimal] = {}
@@ -668,6 +675,120 @@ Determine the optimal execution strategy considering fees, slippage, and market 
             'XRP': Decimal(str(hodl.get('xrp_amount', 0))),
             'USDT': Decimal(str(hodl.get('usdt_amount', 0))),
         }
+
+    async def allocate_profits_to_hodl(
+        self,
+        trade_result: dict,
+    ) -> dict[str, Decimal]:
+        """
+        Allocate percentage of realized profits to hodl bags.
+
+        P2-02: Implements the 10% (configurable) profit allocation to hodl bags
+        as specified in the design.
+
+        Args:
+            trade_result: Completed trade with profit/loss information
+                Expected keys: 'realized_pnl_usd', 'symbol' (optional)
+
+        Returns:
+            dict of asset -> amount added to hodl bag (in USD or asset units)
+        """
+        if not self.hodl_enabled:
+            logger.debug("Hodl bags disabled, skipping profit allocation")
+            return {}
+
+        # Get realized PnL
+        pnl = Decimal(str(trade_result.get('realized_pnl_usd', 0)))
+
+        if pnl <= 0:
+            logger.debug(f"No profit to allocate (PnL: ${float(pnl):.2f})")
+            return {}
+
+        # Calculate allocation amount
+        hodl_amount_usd = (pnl * self.hodl_profit_allocation_pct / 100)
+
+        if hodl_amount_usd < Decimal('1.0'):
+            logger.debug(f"Hodl allocation too small: ${float(hodl_amount_usd):.2f}")
+            return {}
+
+        # Get current prices for asset conversion
+        prices = await self._get_current_prices()
+
+        # Determine distribution based on strategy
+        allocations: dict[str, Decimal] = {}
+
+        if self.hodl_distribution_strategy == 'btc_only':
+            # Allocate all to BTC
+            btc_price = prices.get('BTC/USDT', Decimal('0'))
+            if btc_price > 0:
+                btc_amount = hodl_amount_usd / btc_price
+                allocations['BTC'] = btc_amount.quantize(Decimal('0.00000001'))
+
+        elif self.hodl_distribution_strategy == 'xrp_only':
+            # Allocate all to XRP
+            xrp_price = prices.get('XRP/USDT', Decimal('0'))
+            if xrp_price > 0:
+                xrp_amount = hodl_amount_usd / xrp_price
+                allocations['XRP'] = xrp_amount.quantize(Decimal('0.000001'))
+
+        else:
+            # Proportional distribution (default) - split between BTC and XRP
+            # Use target allocation percentages (exclude USDT from hodl)
+            total_crypto_pct = self.target_btc_pct + self.target_xrp_pct
+            if total_crypto_pct > 0:
+                btc_share = self.target_btc_pct / total_crypto_pct
+                xrp_share = self.target_xrp_pct / total_crypto_pct
+
+                btc_usd = hodl_amount_usd * btc_share
+                xrp_usd = hodl_amount_usd * xrp_share
+
+                btc_price = prices.get('BTC/USDT', Decimal('0'))
+                xrp_price = prices.get('XRP/USDT', Decimal('0'))
+
+                if btc_price > 0:
+                    allocations['BTC'] = (btc_usd / btc_price).quantize(Decimal('0.00000001'))
+                if xrp_price > 0:
+                    allocations['XRP'] = (xrp_usd / xrp_price).quantize(Decimal('0.000001'))
+
+        # Persist to database if available
+        if self.db and allocations:
+            await self._update_hodl_bags(allocations)
+
+        logger.info(
+            f"Allocated ${float(hodl_amount_usd):.2f} ({float(self.hodl_profit_allocation_pct)}% of "
+            f"${float(pnl):.2f} profit) to hodl bags: "
+            f"{', '.join(f'{a}: {float(amt):.8f}' for a, amt in allocations.items())}"
+        )
+
+        return allocations
+
+    async def _update_hodl_bags(self, allocations: dict[str, Decimal]) -> None:
+        """
+        Update hodl bag amounts in database.
+
+        Args:
+            allocations: Asset -> amount to add
+        """
+        if not self.db:
+            return
+
+        try:
+            for asset, amount in allocations.items():
+                # Upsert the hodl bag amount
+                query = """
+                    INSERT INTO hodl_bags (account_id, asset, amount, last_updated)
+                    VALUES ('default', $1, $2, NOW())
+                    ON CONFLICT (account_id, asset)
+                    DO UPDATE SET
+                        amount = hodl_bags.amount + $2,
+                        last_updated = NOW()
+                """
+                await self.db.execute(query, asset, float(amount))
+
+            logger.debug(f"Updated hodl bags in database: {allocations}")
+
+        except Exception as e:
+            logger.error(f"Failed to update hodl bags in database: {e}")
 
     def get_output_schema(self) -> dict:
         """Return JSON schema for output validation."""

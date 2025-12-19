@@ -6,6 +6,7 @@ Invoked: Every minute on candle close.
 Latency target: <500ms
 """
 
+import hashlib
 import json
 import logging
 import re
@@ -115,6 +116,9 @@ class TAOutput(AgentOutput):
     # Bias (long/short/neutral)
     bias: str = "neutral"
 
+    # P3-01: Prompt hash for caching/deduplication
+    prompt_hash: str = ""
+
     def validate(self) -> tuple[bool, list[str]]:
         """Validate TA-specific constraints."""
         is_valid, errors = super().validate()
@@ -177,6 +181,25 @@ class TechnicalAnalysisAgent(BaseAgent):
         self.timeout_ms = config.get('timeout_ms', 5000)
         self.retry_count = config.get('retry_count', 2)
 
+    def _compute_prompt_hash(self, system_prompt: str, user_message: str) -> str:
+        """
+        Compute hash of prompt for caching/deduplication.
+
+        P3-01: Used to:
+        - Detect duplicate prompts for caching
+        - Track prompt evolution over time
+        - Enable response caching for identical inputs
+
+        Args:
+            system_prompt: The system prompt content
+            user_message: The user message content
+
+        Returns:
+            16-character hex hash of the combined prompt
+        """
+        content = f"{system_prompt}|{user_message}"
+        return hashlib.sha256(content.encode()).hexdigest()[:16]
+
     async def process(
         self,
         snapshot: 'MarketSnapshot',
@@ -202,6 +225,9 @@ class TechnicalAnalysisAgent(BaseAgent):
             portfolio_context=portfolio_context,
             query=self._get_analysis_query(),
         )
+
+        # P3-01: Compute prompt hash for caching/deduplication
+        prompt_hash = self._compute_prompt_hash(prompt.system_prompt, prompt.user_message)
 
         # Call LLM with retries
         response_text = None
@@ -251,6 +277,7 @@ class TechnicalAnalysisAgent(BaseAgent):
             secondary_signals=parsed.get('signals', {}).get('secondary', []),
             warnings=parsed.get('signals', {}).get('warnings', []),
             bias=parsed.get('bias', 'neutral'),
+            prompt_hash=prompt_hash,  # P3-01: Include prompt hash for caching
         )
 
         # Validate output

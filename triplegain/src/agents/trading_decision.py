@@ -20,6 +20,7 @@ import re
 import statistics
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
 from typing import Optional, Any, TYPE_CHECKING
 
 from .base_agent import BaseAgent, AgentOutput
@@ -36,7 +37,48 @@ logger = logging.getLogger(__name__)
 
 
 # Valid trading actions
+# P2-05: Design spec (section 2.4) originally showed ["BUY", "SELL", "HOLD", "CLOSE"]
+# Implementation extends this to CLOSE_LONG/CLOSE_SHORT for clarity on which position to close.
+# This is preferred over a single "CLOSE" action because:
+# 1. Explicit side prevents ambiguity when both long and short positions exist
+# 2. More informative for logging and decision tracking
+# 3. Easier for execution layer to handle without additional context
 VALID_ACTIONS = ["BUY", "SELL", "HOLD", "CLOSE_LONG", "CLOSE_SHORT"]
+
+# P3-05: Default model configuration - externalized for easier updates
+# Update these model IDs when upgrading to newer versions
+DEFAULT_MODEL_CONFIG = {
+    'qwen': {
+        'provider': 'ollama',
+        'model': 'qwen2.5:7b',
+        'description': 'Local baseline model for fast inference',
+    },
+    'gpt4': {
+        'provider': 'openai',
+        'model': 'gpt-4-turbo',
+        'description': 'OpenAI flagship model',
+    },
+    'grok': {
+        'provider': 'xai',
+        'model': 'grok-2-1212',
+        'description': 'xAI Grok model with web search capability',
+    },
+    'deepseek': {
+        'provider': 'deepseek',
+        'model': 'deepseek-chat',
+        'description': 'DeepSeek V3 for cost-effective analysis',
+    },
+    'sonnet': {
+        'provider': 'anthropic',
+        'model': 'claude-3-5-sonnet-20241022',
+        'description': 'Claude Sonnet - balanced capability/cost',
+    },
+    'opus': {
+        'provider': 'anthropic',
+        'model': 'claude-3-opus-20240229',
+        'description': 'Claude Opus - highest capability',
+    },
+}
 
 
 @dataclass
@@ -46,10 +88,11 @@ class ModelDecision:
     provider: str
     action: str  # BUY, SELL, HOLD, CLOSE_LONG, CLOSE_SHORT
     confidence: float
-    entry_price: Optional[float] = None
-    stop_loss: Optional[float] = None
-    take_profit: Optional[float] = None
-    position_size_pct: Optional[float] = None
+    # P3-02: Use Decimal for price values to prevent floating-point precision issues
+    entry_price: Optional[Decimal] = None
+    stop_loss: Optional[Decimal] = None
+    take_profit: Optional[Decimal] = None
+    position_size_pct: Optional[float] = None  # Percentage stays as float (0-100)
     reasoning: str = ""
     latency_ms: int = 0
     tokens_used: int = 0
@@ -78,10 +121,10 @@ class ConsensusResult:
     agreement_type: str = "split"  # unanimous, strong_majority, majority, split
     confidence_boost: float = 0.0  # Boost to apply based on agreement
 
-    # Averaged parameters
-    avg_entry_price: Optional[float] = None
-    avg_stop_loss: Optional[float] = None
-    avg_take_profit: Optional[float] = None
+    # P3-02: Averaged parameters (Decimal for prices)
+    avg_entry_price: Optional[Decimal] = None
+    avg_stop_loss: Optional[Decimal] = None
+    avg_take_profit: Optional[Decimal] = None
     avg_position_size_pct: Optional[float] = None
 
     # Individual decisions
@@ -128,10 +171,10 @@ class TradingDecisionOutput(AgentOutput):
     action: str = "HOLD"
     consensus_strength: float = 0.0
 
-    # Trade parameters
-    entry_price: Optional[float] = None
-    stop_loss: Optional[float] = None
-    take_profit: Optional[float] = None
+    # P3-02: Trade parameters (Decimal for prices)
+    entry_price: Optional[Decimal] = None
+    stop_loss: Optional[Decimal] = None
+    take_profit: Optional[Decimal] = None
     position_size_pct: Optional[float] = None
     leverage: int = 1
 
@@ -215,19 +258,16 @@ class TradingDecisionAgent(BaseAgent):
         # Store all clients for multi-model querying
         self.llm_clients = llm_clients
 
-        # Model configuration
-        self.models = config.get('models', {
-            'qwen': {'provider': 'ollama', 'model': 'qwen2.5:7b'},
-            'gpt4': {'provider': 'openai', 'model': 'gpt-4-turbo'},
-            'grok': {'provider': 'xai', 'model': 'grok-2-1212'},
-            'deepseek': {'provider': 'deepseek', 'model': 'deepseek-chat'},
-            'sonnet': {'provider': 'anthropic', 'model': 'claude-3-5-sonnet-20241022'},
-            'opus': {'provider': 'anthropic', 'model': 'claude-3-opus-20240229'},
-        })
+        # P3-05: Model configuration - use externalized defaults
+        self.models = config.get('models', DEFAULT_MODEL_CONFIG)
 
         # Consensus thresholds
         self.min_consensus = config.get('min_consensus', 0.5)  # 50% agreement
         self.high_consensus = config.get('high_consensus', 0.67)  # 2/3 agreement
+
+        # Minimum quorum - require at least this many valid model responses
+        # Default 4/6 models to prevent trading on insufficient data
+        self.min_quorum = config.get('min_quorum', 4)
 
         # Confidence boost per design spec
         # Unanimous (6/6): +0.15, Strong (5/6): +0.10, Majority (4/6): +0.05
@@ -512,12 +552,12 @@ class TradingDecisionAgent(BaseAgent):
         # Clamp confidence
         parsed['confidence'] = max(0.0, min(1.0, float(parsed.get('confidence', 0.5))))
 
-        # Validate prices
+        # P3-02: Validate and convert prices to Decimal
         for key in ['entry_price', 'stop_loss', 'take_profit']:
             if key in parsed:
                 try:
-                    parsed[key] = float(parsed[key])
-                except (ValueError, TypeError):
+                    parsed[key] = Decimal(str(parsed[key]))
+                except (ValueError, TypeError, InvalidOperation):
                     parsed[key] = None
 
         # Position size
@@ -526,6 +566,13 @@ class TradingDecisionAgent(BaseAgent):
                 parsed['position_size_pct'] = max(0, min(100, float(parsed['position_size_pct'])))
             except (ValueError, TypeError):
                 parsed['position_size_pct'] = None
+
+        # P3-04: Validate stop_loss_pct bounds (design spec: 1.0-5.0%)
+        if 'stop_loss_pct' in parsed:
+            try:
+                parsed['stop_loss_pct'] = max(1.0, min(5.0, float(parsed['stop_loss_pct'])))
+            except (ValueError, TypeError):
+                parsed['stop_loss_pct'] = 2.0  # Default to 2% if invalid
 
         # Truncate reasoning
         if 'reasoning' in parsed and len(str(parsed['reasoning'])) > 300:
@@ -568,6 +615,33 @@ class TradingDecisionAgent(BaseAgent):
                 agreement_type='split',
                 confidence_boost=0.0,
                 model_decisions=decisions,
+            )
+
+        # P1-01: Require minimum quorum for trading decisions
+        # This prevents trading based on too few model responses (e.g., when others timeout)
+        if len(valid_decisions) < self.min_quorum:
+            logger.warning(
+                f"Insufficient quorum: {len(valid_decisions)}/{len(decisions)} valid, "
+                f"need {self.min_quorum}. Forcing HOLD."
+            )
+            # Still compute costs/tokens for tracking purposes
+            total_cost = sum(d.cost_usd for d in decisions)
+            total_tokens = sum(d.tokens_used for d in decisions)
+            total_latency = max((d.latency_ms for d in decisions), default=0)
+
+            return ConsensusResult(
+                final_action='HOLD',
+                final_confidence=0.0,
+                consensus_strength=0.0,
+                votes={d.action: 1 for d in valid_decisions},  # Still record votes for debugging
+                total_models=len(decisions),
+                agreeing_models=0,
+                agreement_type='insufficient_quorum',
+                confidence_boost=0.0,
+                model_decisions=decisions,
+                total_cost_usd=total_cost,
+                total_tokens=total_tokens,
+                total_latency_ms=total_latency,
             )
 
         # Count votes
@@ -619,23 +693,24 @@ class TradingDecisionAgent(BaseAgent):
             avg_confidence = 0.0
 
         # Average trade parameters from agreeing models
-        avg_entry = None
-        avg_stop = None
-        avg_tp = None
-        avg_size = None
+        # P3-02: Use Decimal arithmetic for price averages
+        avg_entry: Optional[Decimal] = None
+        avg_stop: Optional[Decimal] = None
+        avg_tp: Optional[Decimal] = None
+        avg_size: Optional[float] = None
 
         if winning_action in ['BUY', 'SELL', 'CLOSE_LONG', 'CLOSE_SHORT']:
-            entries = [d.entry_price for d in agreeing_decisions if d.entry_price]
-            stops = [d.stop_loss for d in agreeing_decisions if d.stop_loss]
-            tps = [d.take_profit for d in agreeing_decisions if d.take_profit]
-            sizes = [d.position_size_pct for d in agreeing_decisions if d.position_size_pct]
+            entries = [d.entry_price for d in agreeing_decisions if d.entry_price is not None]
+            stops = [d.stop_loss for d in agreeing_decisions if d.stop_loss is not None]
+            tps = [d.take_profit for d in agreeing_decisions if d.take_profit is not None]
+            sizes = [d.position_size_pct for d in agreeing_decisions if d.position_size_pct is not None]
 
             if entries:
-                avg_entry = statistics.mean(entries)
+                avg_entry = sum(entries) / len(entries)
             if stops:
-                avg_stop = statistics.mean(stops)
+                avg_stop = sum(stops) / len(stops)
             if tps:
-                avg_tp = statistics.mean(tps)
+                avg_tp = sum(tps) / len(tps)
             if sizes:
                 avg_size = statistics.mean(sizes)
 

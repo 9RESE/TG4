@@ -1,9 +1,9 @@
 # Phase 2: Core Agents - Feature Documentation
 
-**Version**: 1.2
-**Status**: COMPLETE (with Deep Audit Fixes)
+**Version**: 1.3
+**Status**: COMPLETE (with Phase 2B Robustness Fixes)
 **Date**: 2025-12-18
-**Updated**: 2025-12-18 - Deep audit fixes applied
+**Updated**: 2025-12-19 - Phase 2B robustness fixes applied
 
 ## Overview
 
@@ -425,6 +425,65 @@ A comprehensive deep audit identified additional issues:
 
 **Tests Added**: 10 new unit tests (378 total, was 368)
 
+## Phase 2B Robustness Fixes (v1.3)
+
+A comprehensive code review (Review 4 Phase 2B) identified 12 additional issues:
+
+### High Priority Fixes (P1)
+
+| Issue | Component | Fix |
+|-------|-----------|-----|
+| No minimum quorum for consensus | Trading Decision | Added `min_quorum` config (default 4/6 models). Forces HOLD if fewer valid responses. |
+| No regime flapping prevention | Regime Detection | Added hysteresis: requires 2+ consecutive confirmations at >70% confidence for regime change. |
+
+### Medium Priority Fixes (P2)
+
+| Issue | Component | Fix |
+|-------|-----------|-----|
+| SQL injection risk | Base Agent | Replaced `INTERVAL '%s seconds'` with `make_interval(secs => $3)` parameterized query. |
+| Hodl bag profit allocation not implemented | Portfolio Rebalance | Added `allocate_profits_to_hodl()` method with 10% profit allocation (configurable). |
+| Target allocation validation too lenient | Portfolio Rebalance | Changed to raise `ValueError` instead of warning if allocations don't sum to 100%. |
+| Regime state not persistent | Regime Detection | Added `load_regime_state()` to restore previous regime on restart from database. |
+| Output schema action mismatch | Trading Decision | Documented CLOSE_LONG/CLOSE_SHORT vs single CLOSE design decision. |
+
+### Low Priority Fixes (P3)
+
+| Issue | Component | Fix |
+|-------|-----------|-----|
+| Missing prompt hash for TA agent | Technical Analysis | Added `_compute_prompt_hash()` and `prompt_hash` field for caching/deduplication. |
+| Float vs Decimal inconsistency | Trading Decision | Changed `entry_price`, `stop_loss`, `take_profit` to `Decimal` in all dataclasses. |
+| Cache TTL config key inconsistency | Base Agent | Documented naming conventions (`_seconds`, `_pct`, `enabled` suffixes). |
+| Missing stop_loss bounds validation | Trading Decision | Added 1.0-5.0% range clamping per design spec. |
+| Hardcoded model names | Trading Decision | Externalized to `DEFAULT_MODEL_CONFIG` constant. |
+
+### New Configuration Options
+
+```yaml
+# agents.yaml additions
+trading_decision:
+  min_quorum: 4  # Require 4/6 models for trading (default: 4)
+
+regime_detection:
+  min_regime_change_confidence: 0.7  # Higher bar for regime changes
+  regime_change_periods: 2           # Consecutive confirmations required
+
+portfolio:
+  hodl_bags:
+    enabled: true
+    profit_allocation_pct: 10        # % of profits to hodl bags
+    distribution_strategy: proportional  # or 'btc_only', 'xrp_only'
+```
+
+### New API Features
+
+| Feature | Location | Description |
+|---------|----------|-------------|
+| Quorum tracking | `ConsensusResult.agreement_type` | New value `'insufficient_quorum'` for debugging |
+| Regime persistence | `RegimeDetectionAgent.load_regime_state()` | Auto-called on first `process()` |
+| Profit allocation | `PortfolioRebalanceAgent.allocate_profits_to_hodl()` | Called after profitable trade closes |
+
+See [ADR-009](../../architecture/09-decisions/ADR-009-agent-robustness-fixes.md) for detailed design rationale.
+
 ## References
 
 - [Phase 2 Implementation Plan](../TripleGain-implementation-plan/02-phase-2-core-agents.md)
@@ -432,8 +491,10 @@ A comprehensive deep audit identified additional issues:
 - [Multi-Agent Architecture](../TripleGain-master-design/01-multi-agent-architecture.md)
 - [Phase 2 Code Review](../reviews/phase-2/phase-2-code-logic-review.md)
 - [Phase 2 Deep Audit Review](../reviews/phase-2/phase-2-deep-audit-review.md)
+- [Phase 2B Findings](../reviews/full/review-4/findings/phase-2b-findings.md)
 - [ADR-003: Phase 2 Code Review Fixes](../../architecture/09-decisions/ADR-003-phase2-code-review-fixes.md)
+- [ADR-009: Agent Robustness Fixes](../../architecture/09-decisions/ADR-009-agent-robustness-fixes.md)
 
 ---
 
-*Phase 2 Feature Documentation v1.2 - December 2025*
+*Phase 2 Feature Documentation v1.3 - December 2025*

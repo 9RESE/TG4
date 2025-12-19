@@ -235,6 +235,75 @@ class RegimeDetectionAgent(BaseAgent):
         self._regime_start_time: Optional[datetime] = None
         self._periods_in_current_regime = 0
 
+        # P1-02: Regime hysteresis settings to prevent flapping
+        # Require higher confidence for regime changes (prevents noise-induced switches)
+        self.min_regime_change_confidence = config.get('min_regime_change_confidence', 0.7)
+        # Number of consecutive periods new regime must be detected before switching
+        self.regime_change_periods = config.get('regime_change_periods', 2)
+        # Pending regime change tracking
+        self._pending_regime: Optional[str] = None
+        self._pending_regime_count: int = 0
+
+        # P2-04: Flag to track if state has been loaded from DB
+        self._state_loaded = False
+
+    async def load_regime_state(self) -> bool:
+        """
+        Load regime state from database on startup.
+
+        P2-04: Restores previous regime state after restart to prevent:
+        - Incorrect regime duration reporting
+        - Sudden regime transitions on restart
+        - Inaccurate transition probability tracking
+
+        Returns:
+            True if state was loaded successfully, False otherwise
+        """
+        if self.db is None:
+            logger.debug("No database configured, cannot load regime state")
+            return False
+
+        if self._state_loaded:
+            logger.debug("Regime state already loaded")
+            return True
+
+        try:
+            # Get the most recent regime output from database
+            query = """
+                SELECT output_data, timestamp
+                FROM agent_outputs
+                WHERE agent_name = 'regime_detection'
+                ORDER BY timestamp DESC
+                LIMIT 1
+            """
+            row = await self.db.fetchrow(query)
+
+            if row:
+                import json
+                output_data = json.loads(row['output_data'])
+                self._previous_regime = output_data.get('regime', 'ranging')
+                self._regime_start_time = row['timestamp']
+
+                # Calculate approximate periods based on time elapsed
+                # (Assuming 5-minute intervals)
+                now = datetime.now(timezone.utc)
+                elapsed = (now - self._regime_start_time).total_seconds()
+                self._periods_in_current_regime = int(elapsed / 300)  # 5 minutes per period
+
+                logger.info(
+                    f"Loaded regime state from DB: regime={self._previous_regime}, "
+                    f"started={self._regime_start_time}, periods={self._periods_in_current_regime}"
+                )
+                self._state_loaded = True
+                return True
+
+            logger.debug("No previous regime state found in database")
+            return False
+
+        except Exception as e:
+            logger.warning(f"Failed to load regime state from database: {e}")
+            return False
+
     async def process(
         self,
         snapshot: 'MarketSnapshot',
@@ -254,6 +323,10 @@ class RegimeDetectionAgent(BaseAgent):
             RegimeOutput with regime classification
         """
         logger.debug(f"Regime Agent processing {snapshot.symbol}")
+
+        # P2-04: Auto-load regime state from DB on first process call
+        if not self._state_loaded:
+            await self.load_regime_state()
 
         # Build additional context from TA output
         additional_context = {}
@@ -300,14 +373,29 @@ class RegimeDetectionAgent(BaseAgent):
             logger.error(f"Failed to parse Regime response: {e}")
             return self._create_fallback_output(snapshot, f"Parse error: {e}")
 
-        # Track regime changes
-        current_regime = parsed.get('regime', 'ranging')
-        if current_regime != self._previous_regime:
+        # Track regime changes with hysteresis to prevent flapping
+        detected_regime = parsed.get('regime', 'ranging')
+        detected_confidence = parsed.get('confidence', 0.5)
+
+        # P1-02: Apply hysteresis to regime changes
+        if self._should_change_regime(detected_regime, detected_confidence):
+            # Confirmed regime change
+            current_regime = detected_regime
             self._regime_start_time = datetime.now(timezone.utc)
             self._periods_in_current_regime = 0
             self._previous_regime = current_regime
+            # Reset pending state
+            self._pending_regime = None
+            self._pending_regime_count = 0
+            logger.info(
+                f"Regime change confirmed: -> {current_regime} "
+                f"(confidence: {detected_confidence:.2f})"
+            )
         else:
-            self._periods_in_current_regime += 1
+            # Keep current regime
+            current_regime = self._previous_regime if self._previous_regime else detected_regime
+            if current_regime == self._previous_regime:
+                self._periods_in_current_regime += 1
 
         # Get parameters for regime
         regime_params = REGIME_PARAMETERS.get(current_regime, REGIME_PARAMETERS["ranging"])
@@ -566,3 +654,64 @@ Return ONLY the JSON object."""
             position_size_multiplier=0.25,  # Very conservative
             entry_strictness='very_strict',
         )
+
+    def _should_change_regime(self, new_regime: str, confidence: float) -> bool:
+        """
+        Apply hysteresis to prevent regime flapping.
+
+        P1-02: Requires both:
+        1. Confidence above threshold for regime changes
+        2. Consecutive detections of new regime (configurable periods)
+
+        Args:
+            new_regime: The detected regime from current analysis
+            confidence: Detection confidence (0-1)
+
+        Returns:
+            True if regime should change, False to keep current regime
+        """
+        # First detection - always accept
+        if self._previous_regime is None:
+            return True
+
+        # Same regime - no change needed
+        if new_regime == self._previous_regime:
+            # Reset pending regime tracking
+            self._pending_regime = None
+            self._pending_regime_count = 0
+            return False
+
+        # Different regime detected - apply hysteresis
+
+        # Check confidence threshold
+        if confidence < self.min_regime_change_confidence:
+            logger.debug(
+                f"Regime change suppressed: {self._previous_regime} -> {new_regime} "
+                f"(confidence {confidence:.2f} < {self.min_regime_change_confidence})"
+            )
+            return False
+
+        # Track pending regime changes (require consecutive confirmations)
+        if self._pending_regime == new_regime:
+            self._pending_regime_count += 1
+            if self._pending_regime_count >= self.regime_change_periods:
+                # Confirmed - regime has been detected enough times consecutively
+                return True
+            else:
+                logger.debug(
+                    f"Regime change pending: {self._previous_regime} -> {new_regime} "
+                    f"({self._pending_regime_count}/{self.regime_change_periods} confirmations)"
+                )
+                return False
+        else:
+            # New pending regime - start counting
+            self._pending_regime = new_regime
+            self._pending_regime_count = 1
+            if self.regime_change_periods <= 1:
+                # Immediate change allowed
+                return True
+            logger.debug(
+                f"New regime pending: {self._previous_regime} -> {new_regime} "
+                f"(1/{self.regime_change_periods} confirmations)"
+            )
+            return False

@@ -139,6 +139,10 @@ class BaseAgent(ABC):
         self._last_output: Optional[AgentOutput] = None
 
         # Thread-safe cache with TTL
+        # P3-03: Standardized config key naming convention:
+        # - All TTL configs use '_seconds' suffix (cache_ttl_seconds, timeout_seconds, etc.)
+        # - All percentage configs use '_pct' suffix
+        # - All boolean flags use 'is_' or 'enabled' prefix/suffix
         self._cache: dict[str, tuple[AgentOutput, datetime]] = {}
         self._cache_lock = asyncio.Lock()
         self._cache_ttl_seconds = config.get('cache_ttl_seconds', 300)
@@ -245,16 +249,18 @@ class BaseAgent(ABC):
         # Check database if available
         if self.db is not None:
             try:
+                # P2-01: Use parameterized query to prevent SQL injection
+                # Instead of string interpolation, use make_interval() with a parameter
                 query = """
                     SELECT output_data, timestamp
                     FROM agent_outputs
                     WHERE agent_name = $1 AND symbol = $2
-                    AND timestamp > NOW() - INTERVAL '%s seconds'
+                    AND timestamp > NOW() - make_interval(secs => $3)
                     ORDER BY timestamp DESC
                     LIMIT 1
-                """ % max_age_seconds
+                """
 
-                row = await self.db.fetchrow(query, self.agent_name, symbol)
+                row = await self.db.fetchrow(query, self.agent_name, symbol, max_age_seconds)
                 if row:
                     output = self._parse_stored_output(row['output_data'])
                     if output:

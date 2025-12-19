@@ -38,9 +38,9 @@ def trading_output() -> TradingDecisionOutput:
         reasoning="Strong consensus for BUY with 5/6 models agreeing",
         action="BUY",
         consensus_strength=0.83,
-        entry_price=45000.0,
-        stop_loss=44100.0,
-        take_profit=48000.0,
+        entry_price=Decimal("45000.0"),  # P3-02: Use Decimal for prices
+        stop_loss=Decimal("44100.0"),
+        take_profit=Decimal("48000.0"),
         position_size_pct=10.0,
         votes={"BUY": 5, "HOLD": 1},
         agreeing_models=5,
@@ -84,6 +84,9 @@ def trading_agent():
         'min_consensus': 0.5,
         'high_consensus': 0.67,
         'timeout_seconds': 30,
+        # Set min_quorum to 1 for unit tests that test core consensus logic with few models
+        # Production default is 4 (see P1-01 in phase-2b-findings.md)
+        'min_quorum': 1,
     }
 
     return TradingDecisionAgent(mock_clients, mock_prompt_builder, config)
@@ -490,19 +493,19 @@ class TestConsensusCalculation:
         decisions = [
             ModelDecision(
                 model_name="m1", provider="test", action="BUY", confidence=0.8,
-                entry_price=45000, stop_loss=44000, take_profit=47000
+                entry_price=Decimal("45000"), stop_loss=Decimal("44000"), take_profit=Decimal("47000")
             ),
             ModelDecision(
                 model_name="m2", provider="test", action="BUY", confidence=0.7,
-                entry_price=45100, stop_loss=44200, take_profit=47200
+                entry_price=Decimal("45100"), stop_loss=Decimal("44200"), take_profit=Decimal("47200")
             ),
             ModelDecision(model_name="m3", provider="test", action="SELL", confidence=0.9),
         ]
 
         consensus = trading_agent._calculate_consensus(decisions)
 
-        assert consensus.avg_entry_price == 45050  # (45000 + 45100) / 2
-        assert consensus.avg_stop_loss == 44100  # (44000 + 44200) / 2
+        assert consensus.avg_entry_price == Decimal("45050")  # (45000 + 45100) / 2
+        assert consensus.avg_stop_loss == Decimal("44100")  # (44000 + 44200) / 2
 
     def test_total_cost_tracking(self, trading_agent):
         """Total cost should sum all model costs."""

@@ -68,13 +68,13 @@ Uptime   Recovery  Latency  Throughput  Risk    Audit
 | Component | Coverage | Tests |
 |-----------|----------|-------|
 | Foundation Layer | 87% | 224 |
-| Core Agents | 87% | 215 |
+| Core Agents | 87% | 188 |
 | Risk Engine | 87% | 90 |
 | Orchestration | 87% | 114 |
 | Execution | 87% | 70 |
-| LLM Clients | 87% | 105 |
+| LLM Clients | 87% | 157 |
 | API Layer | 87% | 110 |
-| **Total** | **87%** | **917** |
+| **Total** | **87%** | **969** |
 
 *Last updated: 2025-12-19*
 
@@ -85,10 +85,23 @@ Uptime   Recovery  Latency  Throughput  Risk    Audit
 | Review 1 | Complete | Initial comprehensive | N/A |
 | Review 2 | Complete | Consolidated findings | 25/25 |
 | Review 3 | Complete | LLM integration deep dive | 12/12 |
-| Review 4 Phase 1 | Complete | Foundation layer | 8/14 |
-| Review 4 Phase 2-6 | Pending | - | - |
+| Review 4 Phase 1 | Complete | Foundation layer (P1/P2) | 8/8 |
+| Review 4 Phase 1 P3 | Complete | Foundation layer (P3) | 5/5 |
+| Review 4 Phase 2A | Complete | LLM client robustness | 15/15 |
+| Review 4 Phase 2B | Complete | Agent layer robustness | 12/12 |
+| Review 4 Phase 3-6 | Pending | - | - |
 
 See [ADRs](../09-decisions/) for detailed fix documentation.
+
+### Agent Safety Controls
+
+| Control | Description | Status |
+|---------|-------------|--------|
+| Minimum Quorum | Require 4/6 models for trading | ✅ v0.3.4 |
+| Regime Hysteresis | 2+ consecutive confirmations for regime change | ✅ v0.3.4 |
+| Decimal Pricing | Exact arithmetic for trade prices | ✅ v0.3.4 |
+| SQL Parameterization | All dynamic SQL values parameterized | ✅ v0.3.4 |
+| Stop-Loss Bounds | 1-5% range validation | ✅ v0.3.4 |
 
 ### Static Analysis
 

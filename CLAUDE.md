@@ -99,7 +99,7 @@ migrations/             # Database migrations (001, 002, 003)
 - [Changelog](CHANGELOG.md)
 
 ## Version
-**v0.3.3** (2025-12-19) - Phase 2A LLM Client Robustness Fixes (15 issues resolved)
+**v0.3.4** (2025-12-19) - Phase 2B Agent Robustness Fixes (12 issues resolved)
 
 ---
 *Uses global config from ~/.claude/CLAUDE.md*
