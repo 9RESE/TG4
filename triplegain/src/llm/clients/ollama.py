@@ -12,7 +12,7 @@ from typing import Optional
 
 import aiohttp
 
-from .base import BaseLLMClient, LLMResponse
+from .base import BaseLLMClient, LLMResponse, get_user_agent
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +25,11 @@ class OllamaClient(BaseLLMClient):
     - Base URL: http://localhost:11434
     - Model: qwen2.5:7b
     - Model path: /media/rese/2tb_drive/ollama_config/
+
+    Features:
+    - Connection pooling for performance (2A-02)
+    - JSON format mode (2A-06)
+    - No SSL needed (local)
     """
 
     provider_name = "ollama"
@@ -38,6 +43,7 @@ class OllamaClient(BaseLLMClient):
                 - base_url: Ollama API URL (default: http://localhost:11434)
                 - timeout_seconds: Request timeout (default: 30)
                 - default_model: Default model to use
+                - json_mode: Enable JSON format mode (default: True)
         """
         super().__init__(config)
         self.base_url = config.get('base_url', 'http://localhost:11434')
@@ -45,6 +51,7 @@ class OllamaClient(BaseLLMClient):
             total=config.get('timeout_seconds', 30)
         )
         self.default_model = config.get('default_model', 'qwen2.5:7b')
+        self.json_mode = config.get('json_mode', True)  # 2A-06
 
         # Ollama-specific options
         self.default_options = config.get('default_options', {
@@ -55,6 +62,25 @@ class OllamaClient(BaseLLMClient):
             'num_ctx': 8192,
             'repeat_penalty': 1.1,
         })
+
+    async def _get_local_session(self) -> aiohttp.ClientSession:
+        """
+        Get or create session for local Ollama (no SSL needed).
+
+        Returns:
+            Shared aiohttp ClientSession for local connections
+        """
+        if self._session is None or self._session.closed:
+            # No SSL for local connection
+            self._connector = aiohttp.TCPConnector(
+                limit=10,  # Connection pool size
+                keepalive_timeout=30,
+            )
+            self._session = aiohttp.ClientSession(
+                timeout=self.timeout,
+                connector=self._connector,
+            )
+        return self._session
 
     async def generate(
         self,
@@ -93,19 +119,29 @@ class OllamaClient(BaseLLMClient):
             }
         }
 
-        try:
-            async with aiohttp.ClientSession(timeout=self.timeout) as session:
-                async with session.post(
-                    f"{self.base_url}/api/generate",
-                    json=payload
-                ) as response:
-                    if response.status != 200:
-                        error_text = await response.text()
-                        raise RuntimeError(
-                            f"Ollama API error: {response.status} - {error_text}"
-                        )
+        # Enable JSON format (2A-06)
+        if self.json_mode:
+            payload['format'] = 'json'
 
-                    data = await response.json()
+        headers = {
+            'Content-Type': 'application/json',
+            'User-Agent': get_user_agent(),  # 2A-10
+        }
+
+        try:
+            session = await self._get_local_session()
+            async with session.post(
+                f"{self.base_url}/api/generate",
+                json=payload,
+                headers=headers
+            ) as response:
+                if response.status != 200:
+                    error_text = await response.text()
+                    raise RuntimeError(
+                        f"Ollama API error: {response.status} - {error_text}"
+                    )
+
+                data = await response.json()
 
             latency_ms = int((time.perf_counter() - start_time) * 1000)
 
@@ -130,6 +166,8 @@ class OllamaClient(BaseLLMClient):
                 finish_reason=data.get('done_reason', 'stop'),
                 latency_ms=latency_ms,
                 cost_usd=0.0,
+                input_tokens=prompt_eval_count,  # 2A-05
+                output_tokens=eval_count,  # 2A-05
                 raw_response=data,
             )
 
@@ -150,16 +188,17 @@ class OllamaClient(BaseLLMClient):
             True if healthy, False otherwise
         """
         try:
-            async with aiohttp.ClientSession(
+            session = await self._get_local_session()
+            async with session.get(
+                f"{self.base_url}/api/tags",
                 timeout=aiohttp.ClientTimeout(total=5)
-            ) as session:
-                async with session.get(f"{self.base_url}/api/tags") as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        models = data.get('models', [])
-                        logger.debug(f"Ollama healthy, {len(models)} models available")
-                        return True
-                    return False
+            ) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    models = data.get('models', [])
+                    logger.debug(f"Ollama healthy, {len(models)} models available")
+                    return True
+                return False
         except Exception as e:
             logger.warning(f"Ollama health check failed: {e}")
             return False
@@ -172,14 +211,15 @@ class OllamaClient(BaseLLMClient):
             List of model info dictionaries
         """
         try:
-            async with aiohttp.ClientSession(
+            session = await self._get_local_session()
+            async with session.get(
+                f"{self.base_url}/api/tags",
                 timeout=aiohttp.ClientTimeout(total=10)
-            ) as session:
-                async with session.get(f"{self.base_url}/api/tags") as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        return data.get('models', [])
-                    return []
+            ) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    return data.get('models', [])
+                return []
         except Exception as e:
             logger.error(f"Failed to list Ollama models: {e}")
             return []
@@ -231,19 +271,29 @@ class OllamaClient(BaseLLMClient):
             }
         }
 
-        try:
-            async with aiohttp.ClientSession(timeout=self.timeout) as session:
-                async with session.post(
-                    f"{self.base_url}/api/chat",
-                    json=payload
-                ) as response:
-                    if response.status != 200:
-                        error_text = await response.text()
-                        raise RuntimeError(
-                            f"Ollama chat API error: {response.status} - {error_text}"
-                        )
+        # Enable JSON format (2A-06)
+        if self.json_mode:
+            payload['format'] = 'json'
 
-                    data = await response.json()
+        headers = {
+            'Content-Type': 'application/json',
+            'User-Agent': get_user_agent(),  # 2A-10
+        }
+
+        try:
+            session = await self._get_local_session()
+            async with session.post(
+                f"{self.base_url}/api/chat",
+                json=payload,
+                headers=headers
+            ) as response:
+                if response.status != 200:
+                    error_text = await response.text()
+                    raise RuntimeError(
+                        f"Ollama chat API error: {response.status} - {error_text}"
+                    )
+
+                data = await response.json()
 
             latency_ms = int((time.perf_counter() - start_time) * 1000)
 
@@ -263,6 +313,8 @@ class OllamaClient(BaseLLMClient):
                 finish_reason=data.get('done_reason', 'stop'),
                 latency_ms=latency_ms,
                 cost_usd=0.0,
+                input_tokens=prompt_eval_count,  # 2A-05
+                output_tokens=eval_count,  # 2A-05
                 raw_response=data,
             )
 

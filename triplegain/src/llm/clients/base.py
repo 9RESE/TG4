@@ -10,20 +10,38 @@ Provides a unified interface for:
 
 Includes:
 - Rate limiting per provider
-- Exponential backoff retry logic
+- Exponential backoff retry logic with error classification
 - Cost tracking
+- Connection pooling support
+- Response schema validation
 """
 
 import asyncio
 import json
 import logging
 import re
+import ssl
 import time
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional, Any
 
+import aiohttp
+import certifi
+
 logger = logging.getLogger(__name__)
+
+# Version for User-Agent header
+__version__ = "0.3.2"
+
+# Non-retryable error patterns (2A-01)
+NON_RETRYABLE_PATTERNS = [
+    "401", "unauthorized", "api key", "authentication",
+    "403", "forbidden", "access denied",
+    "400", "bad request", "invalid",
+    "404", "not found",
+    "422", "unprocessable",
+]
 
 
 def parse_json_response(response_text: str) -> tuple[Optional[dict], Optional[str]]:
@@ -191,6 +209,7 @@ class RateLimiter:
         Returns:
             Time waited in seconds (0 if no wait needed)
         """
+        wait_time = 0.0  # Initialize at start (2A-04 fix)
         async with self._lock:
             now = time.monotonic()
 
@@ -213,7 +232,34 @@ class RateLimiter:
 
             # Record this request
             self._request_times.append(now)
-            return max(0, wait_time) if 'wait_time' in dir() else 0
+            return max(0.0, wait_time)
+
+    def update_from_provider(
+        self,
+        remaining: Optional[int] = None,
+        reset_time: Optional[int] = None,
+        limit: Optional[int] = None
+    ) -> None:
+        """
+        Update rate limiter from provider response headers (2A-07).
+
+        Args:
+            remaining: Number of remaining requests
+            reset_time: Unix timestamp when limit resets
+            limit: Total requests allowed per window
+        """
+        if limit is not None and limit > 0:
+            # Update max_requests if provider reports a different limit
+            if limit != self.max_requests:
+                logger.debug(f"Updating rate limit from {self.max_requests} to {limit}")
+                self.max_requests = limit
+
+        if remaining is not None and remaining == 0 and reset_time is not None:
+            # Provider says we're at limit, calculate wait time
+            now = time.time()
+            if reset_time > now:
+                wait_seconds = reset_time - now
+                logger.warning(f"Provider rate limit hit, reset in {wait_seconds:.1f}s")
 
     @property
     def available_requests(self) -> int:
@@ -240,8 +286,64 @@ class LLMResponse:
     # Cost tracking (in USD)
     cost_usd: float = 0.0
 
+    # Parsed JSON response (2A-08)
+    parsed_json: Optional[dict] = None
+    parse_error: Optional[str] = None
+
+    # Token breakdown for accurate cost calculation (2A-05)
+    input_tokens: int = 0
+    output_tokens: int = 0
+
     # Provider-specific metadata
     raw_response: Optional[dict] = None
+
+
+def create_ssl_context() -> ssl.SSLContext:
+    """
+    Create secure SSL context with certificate validation (2A-09).
+
+    Returns:
+        Configured SSL context
+    """
+    return ssl.create_default_context(cafile=certifi.where())
+
+
+def get_user_agent() -> str:
+    """Get User-Agent string for API requests (2A-10)."""
+    return f"TripleGain/{__version__} (LLM Trading System)"
+
+
+def sanitize_error_message(error: Any, provider: str) -> str:
+    """
+    Sanitize error message to remove potential API key exposure (2A-03).
+
+    Args:
+        error: Error object or dict
+        provider: Provider name for context
+
+    Returns:
+        Sanitized error message
+    """
+    if isinstance(error, dict):
+        # Extract safe parts from error dict
+        error_obj = error.get('error', error)
+        if isinstance(error_obj, dict):
+            error_type = error_obj.get('type', 'unknown')
+            error_message = error_obj.get('message', str(error_obj))
+        else:
+            error_type = 'unknown'
+            error_message = str(error_obj)
+    else:
+        error_type = type(error).__name__
+        error_message = str(error)
+
+    # Remove any potential API key patterns
+    import re
+    # Pattern to match API keys (various formats)
+    key_pattern = r'(sk-[a-zA-Z0-9]{20,}|[a-zA-Z0-9]{32,}|Bearer\s+[^\s]+)'
+    error_message = re.sub(key_pattern, '[REDACTED]', error_message)
+
+    return f"{provider}: {error_type} - {error_message}"
 
 
 class BaseLLMClient(ABC):
@@ -253,9 +355,11 @@ class BaseLLMClient(ABC):
     - health_check(): Verify connection/availability
 
     Includes:
-    - Rate limiting per provider
-    - Exponential backoff retry
-    - Cost calculation
+    - Rate limiting per provider with header parsing
+    - Exponential backoff retry with error classification
+    - Cost calculation with actual token counts
+    - Connection pooling for performance
+    - SSL certificate validation
     """
 
     provider_name: str = "base"
@@ -284,6 +388,107 @@ class BaseLLMClient(ABC):
         self._base_delay = config.get('retry_base_delay', 1.0)
         self._max_delay = config.get('retry_max_delay', 30.0)
 
+        # Connection pooling (2A-02)
+        self._session: Optional[aiohttp.ClientSession] = None
+        self._connector: Optional[aiohttp.TCPConnector] = None
+
+    def _is_retryable(self, error: Exception) -> bool:
+        """
+        Check if an error is retryable (2A-01).
+
+        Non-retryable errors include authentication failures (401/403),
+        bad requests (400), and not found (404).
+
+        Args:
+            error: The exception to check
+
+        Returns:
+            True if the error should be retried, False otherwise
+        """
+        error_str = str(error).lower()
+        for pattern in NON_RETRYABLE_PATTERNS:
+            if pattern in error_str:
+                return False
+        return True
+
+    async def _get_session(self, timeout: aiohttp.ClientTimeout) -> aiohttp.ClientSession:
+        """
+        Get or create shared session with connection pooling (2A-02).
+
+        Args:
+            timeout: Request timeout configuration
+
+        Returns:
+            Shared aiohttp ClientSession
+        """
+        if self._session is None or self._session.closed:
+            # Create SSL context for HTTPS (2A-09)
+            ssl_context = create_ssl_context()
+
+            self._connector = aiohttp.TCPConnector(
+                limit=10,  # Connection pool size
+                keepalive_timeout=30,
+                ssl=ssl_context,
+            )
+            self._session = aiohttp.ClientSession(
+                timeout=timeout,
+                connector=self._connector,
+            )
+        return self._session
+
+    async def close(self) -> None:
+        """Close the client session and release resources."""
+        if self._session and not self._session.closed:
+            await self._session.close()
+        if self._connector and not self._connector.closed:
+            await self._connector.close()
+        self._session = None
+        self._connector = None
+
+    def _get_headers(self, api_key: Optional[str] = None, auth_type: str = "bearer") -> dict:
+        """
+        Get common headers with User-Agent (2A-10).
+
+        Args:
+            api_key: Optional API key for authorization
+            auth_type: Type of auth header ("bearer" or "x-api-key")
+
+        Returns:
+            Headers dict
+        """
+        headers = {
+            'Content-Type': 'application/json',
+            'User-Agent': get_user_agent(),
+        }
+
+        if api_key:
+            if auth_type == "x-api-key":
+                headers['x-api-key'] = api_key
+            else:
+                headers['Authorization'] = f'Bearer {api_key}'
+
+        return headers
+
+    def _parse_rate_limit_headers(self, headers: dict) -> None:
+        """
+        Parse and apply rate limit headers from provider response (2A-07).
+
+        Args:
+            headers: Response headers dict
+        """
+        try:
+            remaining = headers.get('X-RateLimit-Remaining') or headers.get('x-ratelimit-remaining')
+            reset_time = headers.get('X-RateLimit-Reset') or headers.get('x-ratelimit-reset')
+            limit = headers.get('X-RateLimit-Limit') or headers.get('x-ratelimit-limit')
+
+            self._rate_limiter.update_from_provider(
+                remaining=int(remaining) if remaining else None,
+                reset_time=int(reset_time) if reset_time else None,
+                limit=int(limit) if limit else None
+            )
+        except (ValueError, TypeError) as e:
+            logger.debug(f"Failed to parse rate limit headers: {e}")
+
     async def generate_with_retry(
         self,
         model: str,
@@ -291,6 +496,7 @@ class BaseLLMClient(ABC):
         user_message: str,
         temperature: float = 0.3,
         max_tokens: int = 2048,
+        parse_json: bool = False,
     ) -> LLMResponse:
         """
         Generate with rate limiting and exponential backoff retry.
@@ -301,12 +507,13 @@ class BaseLLMClient(ABC):
             user_message: User query/task
             temperature: Sampling temperature (0-1)
             max_tokens: Maximum response tokens
+            parse_json: If True, parse response as JSON and attach to response (2A-08)
 
         Returns:
             LLMResponse with generated text and metadata
 
         Raises:
-            Exception: If all retries fail
+            Exception: If all retries fail or non-retryable error occurs
         """
         last_exception = None
 
@@ -326,15 +533,37 @@ class BaseLLMClient(ABC):
                     max_tokens=max_tokens,
                 )
 
-                # Calculate and update cost
-                cost = self._calculate_cost(model, response.tokens_used)
+                # Calculate and update cost using actual token counts (2A-05)
+                if response.input_tokens > 0 and response.output_tokens > 0:
+                    cost = self._calculate_cost_actual(
+                        model, response.input_tokens, response.output_tokens
+                    )
+                else:
+                    # Fallback to approximation
+                    cost = self._calculate_cost(model, response.tokens_used)
                 response.cost_usd = cost
                 self._update_stats(response.tokens_used, cost)
+
+                # Parse JSON if requested (2A-08)
+                if parse_json:
+                    parsed, error = parse_json_response(response.text)
+                    response.parsed_json = parsed
+                    response.parse_error = error
+                    if error:
+                        logger.warning(f"{self.provider_name}: JSON parsing failed: {error}")
 
                 return response
 
             except Exception as e:
                 last_exception = e
+
+                # Check if error is retryable (2A-01)
+                if not self._is_retryable(e):
+                    logger.error(
+                        f"{self.provider_name}: Non-retryable error: {e}"
+                    )
+                    raise
+
                 if attempt < self._max_retries:
                     # Exponential backoff
                     delay = min(
@@ -389,7 +618,9 @@ class BaseLLMClient(ABC):
 
     def _calculate_cost(self, model: str, tokens_used: int) -> float:
         """
-        Calculate cost for a request.
+        Calculate cost for a request using approximation.
+
+        Note: Prefer _calculate_cost_actual when token breakdown is available.
 
         Args:
             model: Model name
@@ -410,6 +641,57 @@ class BaseLLMClient(ABC):
         output_cost = (output_tokens / 1000) * costs['output']
 
         return input_cost + output_cost
+
+    def _calculate_cost_actual(
+        self,
+        model: str,
+        input_tokens: int,
+        output_tokens: int
+    ) -> float:
+        """
+        Calculate cost using actual token counts (2A-05).
+
+        Args:
+            model: Model name
+            input_tokens: Actual input/prompt tokens
+            output_tokens: Actual output/completion tokens
+
+        Returns:
+            Cost in USD
+        """
+        costs = MODEL_COSTS.get(model)
+        if not costs:
+            return 0.0
+
+        input_cost = (input_tokens / 1000) * costs['input']
+        output_cost = (output_tokens / 1000) * costs['output']
+
+        return input_cost + output_cost
+
+    def _validate_response_schema(
+        self,
+        data: dict,
+        required_fields: list[str],
+        provider: str
+    ) -> bool:
+        """
+        Validate API response matches expected schema (2A-13).
+
+        Args:
+            data: Response data dict
+            required_fields: List of required top-level fields
+            provider: Provider name for error messages
+
+        Returns:
+            True if all required fields present, False otherwise
+        """
+        missing = [f for f in required_fields if f not in data]
+        if missing:
+            logger.warning(
+                f"{provider} response missing expected fields: {missing}"
+            )
+            return False
+        return True
 
     def get_stats(self) -> dict:
         """Get client statistics."""

@@ -410,7 +410,7 @@ class TestOpenAIClient:
                 payload={'error': {'message': 'Rate limit exceeded'}},
             )
 
-            with pytest.raises(RuntimeError, match='OpenAI API error'):
+            with pytest.raises(RuntimeError, match='OpenAI:.*Rate limit'):
                 await client.generate(
                     model='gpt-4-turbo',
                     system_prompt='System',
@@ -602,7 +602,7 @@ class TestAnthropicClient:
                 payload={'error': {'message': 'Invalid request'}},
             )
 
-            with pytest.raises(RuntimeError, match='Anthropic API error'):
+            with pytest.raises(RuntimeError, match='Anthropic:.*Invalid'):
                 await client.generate(
                     model='claude-3-5-sonnet-20241022',
                     system_prompt='System',
@@ -824,7 +824,7 @@ class TestDeepSeekClient:
                 payload={'error': {'message': 'Server error'}},
             )
 
-            with pytest.raises(RuntimeError, match='DeepSeek API error'):
+            with pytest.raises(RuntimeError, match='DeepSeek:.*Server'):
                 await client.generate(
                     model='deepseek-chat',
                     system_prompt='System',
@@ -1017,7 +1017,7 @@ class TestXAIClient:
                 payload={'error': {'message': 'Forbidden'}},
             )
 
-            with pytest.raises(RuntimeError, match='xAI API error'):
+            with pytest.raises(RuntimeError, match='xAI:.*Forbidden'):
                 await client.generate(
                     model='grok-2',
                     system_prompt='System',

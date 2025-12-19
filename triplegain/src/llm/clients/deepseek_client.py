@@ -12,7 +12,13 @@ from typing import Optional
 
 import aiohttp
 
-from .base import BaseLLMClient, LLMResponse
+from .base import (
+    BaseLLMClient,
+    LLMResponse,
+    sanitize_error_message,
+    get_user_agent,
+    create_ssl_context,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -24,12 +30,20 @@ DEEPSEEK_PRICING = {
     'deepseek-reasoner': {'input': 0.55, 'output': 2.19},
 }
 
+# Required fields in DeepSeek response (2A-13)
+DEEPSEEK_REQUIRED_FIELDS = ['id', 'choices']
+
 
 class DeepSeekClient(BaseLLMClient):
     """
     DeepSeek API client.
 
     Supports DeepSeek V3 (deepseek-chat) and DeepSeek Coder.
+    Features:
+    - Connection pooling for performance (2A-02)
+    - JSON response mode (2A-06)
+    - Rate limit header parsing (2A-07)
+    - Response schema validation (2A-13)
     """
 
     provider_name = "deepseek"
@@ -43,6 +57,7 @@ class DeepSeekClient(BaseLLMClient):
                 - api_key: DeepSeek API key (or DEEPSEEK_API_KEY env var)
                 - default_model: Default model to use
                 - timeout_seconds: Request timeout
+                - json_mode: Enable JSON response mode (default: True)
         """
         super().__init__(config)
         self.api_key = config.get('api_key') or os.environ.get('DEEPSEEK_API_KEY')
@@ -54,6 +69,7 @@ class DeepSeekClient(BaseLLMClient):
         self.timeout = aiohttp.ClientTimeout(
             total=config.get('timeout_seconds', 60)
         )
+        self.json_mode = config.get('json_mode', True)  # 2A-06
 
     async def generate(
         self,
@@ -80,27 +96,36 @@ class DeepSeekClient(BaseLLMClient):
             'max_tokens': max_tokens,
         }
 
-        headers = {
-            'Authorization': f'Bearer {self.api_key}',
-            'Content-Type': 'application/json',
-        }
+        # Enable JSON response mode (2A-06)
+        # DeepSeek uses OpenAI-compatible API
+        if self.json_mode:
+            payload['response_format'] = {'type': 'json_object'}
+
+        headers = self._get_headers(self.api_key, auth_type="bearer")
 
         try:
-            async with aiohttp.ClientSession(timeout=self.timeout) as session:
-                async with session.post(
-                    f"{self.base_url}/chat/completions",
-                    json=payload,
-                    headers=headers
-                ) as response:
-                    if response.status != 200:
-                        error = await response.json()
-                        raise RuntimeError(
-                            f"DeepSeek API error: {response.status} - {error}"
-                        )
+            session = await self._get_session(self.timeout)
+            async with session.post(
+                f"{self.base_url}/chat/completions",
+                json=payload,
+                headers=headers
+            ) as response:
+                # Parse rate limit headers (2A-07)
+                self._parse_rate_limit_headers(dict(response.headers))
 
-                    data = await response.json()
+                if response.status != 200:
+                    error = await response.json()
+                    # Sanitize error message (2A-03)
+                    raise RuntimeError(
+                        sanitize_error_message(error, "DeepSeek")
+                    )
+
+                data = await response.json()
 
             latency_ms = int((time.perf_counter() - start_time) * 1000)
+
+            # Validate response schema (2A-13)
+            self._validate_response_schema(data, DEEPSEEK_REQUIRED_FIELDS, "DeepSeek")
 
             # Extract response
             choice = data['choices'][0]
@@ -113,7 +138,7 @@ class DeepSeekClient(BaseLLMClient):
             completion_tokens = usage.get('completion_tokens', 0)
             total_tokens = prompt_tokens + completion_tokens
 
-            # Calculate cost
+            # Calculate cost using actual tokens (2A-05)
             pricing = DEEPSEEK_PRICING.get(model, {'input': 0.14, 'output': 0.28})
             cost = (
                 (prompt_tokens / 1_000_000) * pricing['input'] +
@@ -134,6 +159,8 @@ class DeepSeekClient(BaseLLMClient):
                 finish_reason=finish_reason,
                 latency_ms=latency_ms,
                 cost_usd=cost,
+                input_tokens=prompt_tokens,  # 2A-05
+                output_tokens=completion_tokens,  # 2A-05
                 raw_response=data,
             )
 
@@ -148,15 +175,13 @@ class DeepSeekClient(BaseLLMClient):
             return False
 
         try:
-            async with aiohttp.ClientSession(
-                timeout=aiohttp.ClientTimeout(total=10)
-            ) as session:
-                headers = {'Authorization': f'Bearer {self.api_key}'}
-                async with session.get(
-                    f"{self.base_url}/models",
-                    headers=headers
-                ) as response:
-                    return response.status == 200
+            session = await self._get_session(aiohttp.ClientTimeout(total=10))
+            headers = self._get_headers(self.api_key, auth_type="bearer")
+            async with session.get(
+                f"{self.base_url}/models",
+                headers=headers
+            ) as response:
+                return response.status == 200
         except Exception as e:
             logger.warning(f"DeepSeek health check failed: {e}")
             return False

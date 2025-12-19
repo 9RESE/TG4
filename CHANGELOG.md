@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.3] - 2025-12-19
+
+### Added
+- **Connection Pooling**: All LLM clients now use shared `aiohttp.ClientSession` with `TCPConnector` for connection reuse (2A-02)
+- **Error Type Detection**: New `_is_retryable()` method classifies errors - auth/forbidden/bad request errors fail immediately (2A-01)
+- **API Key Sanitization**: `sanitize_error_message()` redacts API keys and tokens from error logs (2A-03)
+- **Rate Limit Headers**: `_parse_rate_limit_headers()` and `RateLimiter.update_from_provider()` respect provider limits (2A-07)
+- **JSON Response Mode**: All clients now request structured JSON output from providers (2A-06)
+- **SSL Certificate Validation**: `create_ssl_context()` uses certifi for explicit HTTPS verification (2A-09)
+- **User-Agent Header**: All API requests include `TripleGain/{version}` User-Agent (2A-10)
+- **Response Schema Validation**: `_validate_response_schema()` warns on missing expected fields (2A-13)
+- **52 new LLM tests**: Comprehensive coverage for JSON utilities, error handling, cost calculation
+
+### Fixed
+- **RateLimiter wait_time**: Fixed incorrect `'wait_time' in dir()` check to proper variable initialization (2A-04)
+- **Cost Calculation**: Added `_calculate_cost_actual()` using real input/output token counts (2A-05)
+- **Empty Anthropic Content**: Now logs warning when Claude returns empty content array (2A-11)
+- **Search Method Warning**: `generate_with_search()` now warns that search is not yet implemented (2A-12)
+
+### Changed
+- `LLMResponse` dataclass now includes `input_tokens`, `output_tokens`, `parsed_json`, `parse_error` fields
+- `generate_with_retry()` accepts optional `parse_json` parameter for automatic JSON parsing (2A-08)
+- Error messages use new sanitized format: `{provider}: {type} - {message}`
+- Test count increased from 917 to 969 (52 new tests)
+
 ## [0.3.2] - 2025-12-19
 
 ### Added

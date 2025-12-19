@@ -12,7 +12,13 @@ from typing import Optional
 
 import aiohttp
 
-from .base import BaseLLMClient, LLMResponse
+from .base import (
+    BaseLLMClient,
+    LLMResponse,
+    sanitize_error_message,
+    get_user_agent,
+    create_ssl_context,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -25,12 +31,20 @@ ANTHROPIC_PRICING = {
     'claude-3-haiku-20240307': {'input': 0.25, 'output': 1.25},
 }
 
+# Required fields in Anthropic response (2A-13)
+ANTHROPIC_REQUIRED_FIELDS = ['id', 'content', 'stop_reason']
+
 
 class AnthropicClient(BaseLLMClient):
     """
     Anthropic API client for Claude models.
 
     Supports Claude 3 Opus, Sonnet, and Haiku.
+    Features:
+    - Connection pooling for performance (2A-02)
+    - Empty content warning (2A-11)
+    - Rate limit header parsing (2A-07)
+    - Response schema validation (2A-13)
     """
 
     provider_name = "anthropic"
@@ -72,9 +86,13 @@ class AnthropicClient(BaseLLMClient):
         model = model or self.default_model
         start_time = time.perf_counter()
 
+        # For JSON responses, add instruction to system prompt (2A-06)
+        # Note: Anthropic doesn't have a native JSON mode like OpenAI
+        json_system_prompt = system_prompt + "\n\nIMPORTANT: Respond ONLY with valid JSON, no markdown or explanation."
+
         payload = {
             'model': model,
-            'system': system_prompt,
+            'system': json_system_prompt,
             'messages': [
                 {'role': 'user', 'content': user_message},
             ],
@@ -82,32 +100,49 @@ class AnthropicClient(BaseLLMClient):
             'max_tokens': max_tokens,
         }
 
-        headers = {
-            'x-api-key': self.api_key,
-            'anthropic-version': self.api_version,
-            'Content-Type': 'application/json',
-        }
+        headers = self._get_headers(self.api_key, auth_type="x-api-key")
+        headers['anthropic-version'] = self.api_version
 
         try:
-            async with aiohttp.ClientSession(timeout=self.timeout) as session:
-                async with session.post(
-                    f"{self.base_url}/messages",
-                    json=payload,
-                    headers=headers
-                ) as response:
-                    if response.status != 200:
-                        error = await response.json()
-                        raise RuntimeError(
-                            f"Anthropic API error: {response.status} - {error}"
-                        )
+            session = await self._get_session(self.timeout)
+            async with session.post(
+                f"{self.base_url}/messages",
+                json=payload,
+                headers=headers
+            ) as response:
+                # Parse rate limit headers (2A-07)
+                self._parse_rate_limit_headers(dict(response.headers))
 
-                    data = await response.json()
+                if response.status != 200:
+                    error = await response.json()
+                    # Sanitize error message (2A-03)
+                    raise RuntimeError(
+                        sanitize_error_message(error, "Anthropic")
+                    )
+
+                data = await response.json()
 
             latency_ms = int((time.perf_counter() - start_time) * 1000)
 
-            # Extract response
+            # Validate response schema (2A-13)
+            # Note: Anthropic may return empty content on some stop reasons
+            if 'content' not in data:
+                logger.warning(
+                    f"Anthropic response missing 'content' field. "
+                    f"stop_reason: {data.get('stop_reason')}"
+                )
+
+            # Extract response with empty content warning (2A-11)
             content = data.get('content', [])
-            text = content[0]['text'] if content else ''
+            if not content:
+                logger.warning(
+                    f"Anthropic returned empty content for model {model}. "
+                    f"stop_reason: {data.get('stop_reason')}"
+                )
+                text = ''
+            else:
+                text = content[0].get('text', '')
+
             stop_reason = data.get('stop_reason', 'end_turn')
 
             # Token usage
@@ -116,7 +151,7 @@ class AnthropicClient(BaseLLMClient):
             output_tokens = usage.get('output_tokens', 0)
             total_tokens = input_tokens + output_tokens
 
-            # Calculate cost
+            # Calculate cost using actual tokens (2A-05)
             pricing = ANTHROPIC_PRICING.get(model, {'input': 3.0, 'output': 15.0})
             cost = (
                 (input_tokens / 1_000_000) * pricing['input'] +
@@ -137,6 +172,8 @@ class AnthropicClient(BaseLLMClient):
                 finish_reason=stop_reason,
                 latency_ms=latency_ms,
                 cost_usd=cost,
+                input_tokens=input_tokens,  # 2A-05
+                output_tokens=output_tokens,  # 2A-05
                 raw_response=data,
             )
 
@@ -153,25 +190,21 @@ class AnthropicClient(BaseLLMClient):
         try:
             # Anthropic doesn't have a simple health endpoint,
             # so we make a minimal request
-            async with aiohttp.ClientSession(
-                timeout=aiohttp.ClientTimeout(total=10)
-            ) as session:
-                headers = {
-                    'x-api-key': self.api_key,
-                    'anthropic-version': self.api_version,
-                    'Content-Type': 'application/json',
-                }
-                payload = {
-                    'model': 'claude-3-haiku-20240307',
-                    'max_tokens': 1,
-                    'messages': [{'role': 'user', 'content': 'hi'}],
-                }
-                async with session.post(
-                    f"{self.base_url}/messages",
-                    json=payload,
-                    headers=headers
-                ) as response:
-                    return response.status == 200
+            session = await self._get_session(aiohttp.ClientTimeout(total=10))
+            headers = self._get_headers(self.api_key, auth_type="x-api-key")
+            headers['anthropic-version'] = self.api_version
+
+            payload = {
+                'model': 'claude-3-haiku-20240307',
+                'max_tokens': 1,
+                'messages': [{'role': 'user', 'content': 'hi'}],
+            }
+            async with session.post(
+                f"{self.base_url}/messages",
+                json=payload,
+                headers=headers
+            ) as response:
+                return response.status == 200
         except Exception as e:
             logger.warning(f"Anthropic health check failed: {e}")
             return False

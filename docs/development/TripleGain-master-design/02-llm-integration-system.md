@@ -1,7 +1,8 @@
 # TripleGain LLM Integration System
 
-**Document Version**: 1.0
-**Status**: Design Phase
+**Document Version**: 1.1
+**Status**: Implementation Complete (v0.3.3)
+**Last Updated**: 2025-12-19
 
 ---
 
@@ -1283,4 +1284,72 @@ PROMPT_SAFETY_RULES = {
 
 ---
 
-*Document Version 1.0 - December 2025*
+## 9. Implementation Notes (v0.3.3)
+
+### 9.1 Client Architecture
+
+All LLM clients inherit from `BaseLLMClient` and provide:
+
+| Feature | Implementation | Version |
+|---------|---------------|---------|
+| Connection Pooling | `_get_session()` with `TCPConnector` | v0.3.3 |
+| Error Classification | `_is_retryable()` with pattern matching | v0.3.3 |
+| API Key Sanitization | `sanitize_error_message()` | v0.3.3 |
+| Rate Limit Headers | `_parse_rate_limit_headers()` | v0.3.3 |
+| JSON Response Mode | Provider-specific configuration | v0.3.3 |
+| SSL Validation | `create_ssl_context()` with certifi | v0.3.3 |
+| User-Agent | `get_user_agent()` | v0.3.3 |
+| Response Validation | `_validate_response_schema()` | v0.3.3 |
+
+### 9.2 LLMResponse Dataclass
+
+```python
+@dataclass
+class LLMResponse:
+    text: str                    # Raw response text
+    tokens_used: int             # Total tokens (input + output)
+    model: str                   # Model identifier
+    finish_reason: str = "stop"  # Completion reason
+    latency_ms: int = 0          # Request latency
+    cost_usd: float = 0.0        # Calculated cost
+    parsed_json: dict = None     # Auto-parsed JSON (if requested)
+    parse_error: str = None      # JSON parsing error (if any)
+    input_tokens: int = 0        # Actual input token count
+    output_tokens: int = 0       # Actual output token count
+    raw_response: dict = None    # Provider's raw response
+```
+
+### 9.3 Non-Retryable Error Patterns
+
+The following error patterns fail immediately without retry:
+
+- `401`, `unauthorized`, `api key`, `authentication`
+- `403`, `forbidden`, `access denied`
+- `400`, `bad request`, `invalid`
+- `404`, `not found`
+- `422`, `unprocessable`
+
+### 9.4 JSON Response Mode by Provider
+
+| Provider | Configuration |
+|----------|--------------|
+| OpenAI | `response_format: {type: 'json_object'}` |
+| Anthropic | System prompt suffix + `parse_json=True` |
+| DeepSeek | `response_format: {type: 'json_object'}` |
+| xAI | `response_format: {type: 'json_object'}` |
+| Ollama | `format: 'json'` |
+
+### 9.5 Test Coverage
+
+- **969 total tests** (87% coverage)
+- **157 LLM-specific tests** covering:
+  - Rate limiting behavior
+  - Error classification
+  - Cost calculation (approximation and actual)
+  - JSON parsing utilities
+  - Connection pooling
+  - Schema validation
+
+---
+
+*Document Version 1.1 - December 2025*
