@@ -66,6 +66,22 @@ class CoordinatorState(Enum):
     HALTED = "halted"        # Circuit breaker triggered
 
 
+class DegradationLevel(Enum):
+    """
+    Graceful degradation levels for system resilience.
+
+    Levels are triggered automatically based on system health:
+    - NORMAL: All systems operational
+    - REDUCED: Some non-critical services degraded
+    - LIMITED: Only essential services running
+    - EMERGENCY: Minimum viable operation
+    """
+    NORMAL = 0       # All systems operational
+    REDUCED = 1      # Skip non-critical agents (sentiment)
+    LIMITED = 2      # Skip optional agents, reduce LLM calls
+    EMERGENCY = 3    # Only risk-based decisions, no LLM
+
+
 @dataclass
 class ScheduledTask:
     """Scheduled agent invocation configuration."""
@@ -161,8 +177,14 @@ class CoordinatorAgent:
 
         # State
         self._state = CoordinatorState.RUNNING
+        self._degradation_level = DegradationLevel.NORMAL
         self._scheduled_tasks: list[ScheduledTask] = []
         self._main_loop_task: Optional[asyncio.Task] = None
+
+        # Health tracking for degradation
+        self._consecutive_llm_failures = 0
+        self._consecutive_api_failures = 0
+        self._max_failures_for_degradation = 3
 
         # LLM configuration
         llm_config = config.get('llm', {})
@@ -187,13 +209,17 @@ class CoordinatorAgent:
     async def start(self) -> None:
         """Start the coordinator main loop."""
         self._setup_schedules()
+        # Load persisted state before starting
+        await self.load_state()
         await self._setup_subscriptions()
         self._main_loop_task = asyncio.create_task(self._main_loop())
         logger.info("CoordinatorAgent started")
 
     async def stop(self) -> None:
-        """Stop the coordinator."""
+        """Stop the coordinator and persist state."""
         self._state = CoordinatorState.HALTED
+        # Persist state before stopping
+        await self.persist_state()
         if self._main_loop_task:
             self._main_loop_task.cancel()
             try:
@@ -229,6 +255,59 @@ class CoordinatorAgent:
     def state(self) -> CoordinatorState:
         """Get current coordinator state."""
         return self._state
+
+    @property
+    def degradation_level(self) -> DegradationLevel:
+        """Get current degradation level."""
+        return self._degradation_level
+
+    def _check_degradation_level(self) -> None:
+        """
+        Update degradation level based on system health.
+
+        Called after failures to potentially increase degradation,
+        or periodically to recover from degradation.
+        """
+        # Increase degradation on consecutive failures
+        total_failures = self._consecutive_llm_failures + self._consecutive_api_failures
+
+        if total_failures >= self._max_failures_for_degradation * 3:
+            new_level = DegradationLevel.EMERGENCY
+        elif total_failures >= self._max_failures_for_degradation * 2:
+            new_level = DegradationLevel.LIMITED
+        elif total_failures >= self._max_failures_for_degradation:
+            new_level = DegradationLevel.REDUCED
+        else:
+            new_level = DegradationLevel.NORMAL
+
+        if new_level != self._degradation_level:
+            old_level = self._degradation_level
+            self._degradation_level = new_level
+            logger.warning(
+                f"Degradation level changed: {old_level.name} -> {new_level.name} "
+                f"(LLM failures: {self._consecutive_llm_failures}, "
+                f"API failures: {self._consecutive_api_failures})"
+            )
+
+    def _record_llm_success(self) -> None:
+        """Record successful LLM call and potentially recover from degradation."""
+        self._consecutive_llm_failures = 0
+        self._check_degradation_level()
+
+    def _record_llm_failure(self) -> None:
+        """Record LLM failure and potentially increase degradation."""
+        self._consecutive_llm_failures += 1
+        self._check_degradation_level()
+
+    def _record_api_success(self) -> None:
+        """Record successful API call and potentially recover from degradation."""
+        self._consecutive_api_failures = 0
+        self._check_degradation_level()
+
+    def _record_api_failure(self) -> None:
+        """Record API failure and potentially increase degradation."""
+        self._consecutive_api_failures += 1
+        self._check_degradation_level()
 
     async def _main_loop(self) -> None:
         """Main coordinator loop - executes scheduled tasks."""
@@ -448,6 +527,9 @@ class CoordinatorAgent:
                 priority=MessagePriority.HIGH,
             ))
 
+            # Route rebalance trades to execution
+            await self._execute_rebalance_trades(output)
+
     async def _get_market_snapshot(self, symbol: str):
         """Get market snapshot for a symbol."""
         if 'snapshot_builder' in self.agents:
@@ -463,6 +545,7 @@ class CoordinatorAgent:
         Handle trading signal from Trading Decision Agent.
 
         Validates with Risk Engine and executes if approved.
+        Includes consensus building to amplify/reduce confidence.
         """
         if self._state != CoordinatorState.RUNNING:
             logger.debug(f"Skipping trading signal - coordinator state: {self._state.value}")
@@ -475,6 +558,20 @@ class CoordinatorAgent:
         if signal.get("action") == "HOLD":
             logger.debug(f"HOLD signal for {symbol} - no action needed")
             return
+
+        # Build consensus from multiple agents
+        consensus_multiplier = await self._build_consensus(signal)
+
+        # Apply consensus multiplier to confidence
+        original_confidence = signal.get("confidence", 0.5)
+        adjusted_confidence = min(1.0, original_confidence * consensus_multiplier)
+        signal["confidence"] = adjusted_confidence
+        signal["consensus_multiplier"] = consensus_multiplier
+
+        logger.debug(
+            f"Confidence adjusted: {original_confidence:.2f} -> {adjusted_confidence:.2f} "
+            f"(consensus: {consensus_multiplier:.2f})"
+        )
 
         # Check for conflicts
         conflicts = await self._detect_conflicts(signal)
@@ -536,6 +633,75 @@ class CoordinatorAgent:
     # -------------------------------------------------------------------------
     # Conflict Detection and Resolution
     # -------------------------------------------------------------------------
+
+    async def _build_consensus(self, signal: dict) -> float:
+        """
+        Build consensus from multiple agent signals.
+
+        When multiple agents agree on direction, amplify confidence.
+        Returns a confidence multiplier (1.0 = no change, >1.0 = amplified).
+        """
+        agreement_count = 0
+        total_agents = 0
+        signal_action = signal.get("action", "HOLD")
+
+        if signal_action == "HOLD":
+            return 1.0  # No consensus needed for HOLD
+
+        # Get latest outputs from message bus
+        ta_msg = await self.bus.get_latest(MessageTopic.TA_SIGNALS, max_age_seconds=120)
+        regime_msg = await self.bus.get_latest(MessageTopic.REGIME_UPDATES, max_age_seconds=600)
+        sentiment_msg = await self.bus.get_latest(MessageTopic.SENTIMENT_UPDATES, max_age_seconds=3600)
+
+        # Check TA agreement
+        if ta_msg:
+            total_agents += 1
+            ta_bias = ta_msg.payload.get("bias", "neutral")
+            if (signal_action == "BUY" and ta_bias == "long") or \
+               (signal_action == "SELL" and ta_bias == "short"):
+                agreement_count += 1
+                logger.debug(f"Consensus: TA agent agrees ({ta_bias})")
+
+        # Check regime appropriateness
+        if regime_msg:
+            total_agents += 1
+            regime = regime_msg.payload.get("regime", "neutral")
+            # Trending regimes support trading
+            if regime in ["trending_up", "trending_down", "breakout"]:
+                if (signal_action == "BUY" and regime in ["trending_up", "breakout"]) or \
+                   (signal_action == "SELL" and regime == "trending_down"):
+                    agreement_count += 1
+                    logger.debug(f"Consensus: Regime supports signal ({regime})")
+
+        # Check sentiment agreement
+        if sentiment_msg:
+            total_agents += 1
+            sent_bias = sentiment_msg.payload.get("sentiment_bias", "neutral")
+            if (signal_action == "BUY" and sent_bias == "bullish") or \
+               (signal_action == "SELL" and sent_bias == "bearish"):
+                agreement_count += 1
+                logger.debug(f"Consensus: Sentiment agrees ({sent_bias})")
+
+        # Calculate consensus multiplier
+        if total_agents == 0:
+            return 1.0
+
+        agreement_ratio = agreement_count / total_agents
+
+        # Amplify confidence based on agreement
+        # 100% agreement = 1.3x, 66% = 1.15x, 33% = 1.0x, 0% = 0.85x
+        if agreement_ratio >= 0.66:
+            multiplier = 1.0 + (agreement_ratio - 0.5) * 0.6  # 1.0 to 1.3
+        elif agreement_ratio >= 0.33:
+            multiplier = 1.0  # Neutral
+        else:
+            multiplier = 0.85 + agreement_ratio * 0.45  # 0.85 to 1.0
+
+        logger.info(
+            f"Consensus: {agreement_count}/{total_agents} agents agree, "
+            f"confidence multiplier: {multiplier:.2f}"
+        )
+        return multiplier
 
     async def _detect_conflicts(self, signal: dict) -> list[ConflictInfo]:
         """Detect conflicts between agent outputs."""
@@ -610,8 +776,31 @@ class CoordinatorAgent:
         Use LLM to resolve conflicts between agents.
 
         Invoked only when conflicts are detected.
+        Respects degradation level - in EMERGENCY mode, uses conservative defaults.
         """
         start_time = time.perf_counter()
+
+        # In EMERGENCY degradation, skip LLM and use conservative defaults
+        if self._degradation_level == DegradationLevel.EMERGENCY:
+            logger.warning("Emergency degradation: skipping LLM conflict resolution")
+            return ConflictResolution(
+                action="wait",
+                reasoning="Emergency degradation mode - conservative action",
+                confidence=0.3,
+            )
+
+        # In LIMITED degradation, only resolve high-priority conflicts
+        if self._degradation_level == DegradationLevel.LIMITED:
+            # Only resolve regime conflicts, skip sentiment conflicts
+            critical_conflicts = [c for c in conflicts if c.conflict_type == "regime_conflict"]
+            if not critical_conflicts:
+                logger.info("Limited degradation: skipping non-critical conflict resolution")
+                return ConflictResolution(
+                    action="proceed",
+                    reasoning="Limited degradation mode - proceeding with caution",
+                    confidence=0.5,
+                )
+            conflicts = critical_conflicts
 
         # Build conflict resolution prompt
         prompt = self._build_conflict_prompt(signal, conflicts)
@@ -621,6 +810,7 @@ class CoordinatorAgent:
             response = await self._call_llm_for_resolution(prompt)
             resolution = self._parse_resolution(response)
             self._total_conflicts_resolved += 1
+            self._record_llm_success()
 
             latency_ms = int((time.perf_counter() - start_time) * 1000)
             logger.info(f"Conflict resolved in {latency_ms}ms: {resolution.action}")
@@ -629,6 +819,7 @@ class CoordinatorAgent:
 
         except Exception as e:
             logger.error(f"Conflict resolution failed: {e}")
+            self._record_llm_failure()
             # Default to conservative action
             return ConflictResolution(
                 action="wait",
@@ -712,27 +903,117 @@ Remember to respond in JSON format with action, confidence, reasoning, and optio
         )
 
     def _apply_modifications(self, signal: dict, modifications: dict) -> dict:
-        """Apply resolution modifications to signal."""
+        """
+        Apply resolution modifications to signal with bounds validation.
+
+        Validates that modifications are within reasonable bounds to prevent
+        invalid trade parameters.
+        """
         modified = signal.copy()
 
         if "leverage" in modifications:
-            modified["leverage"] = modifications["leverage"]
+            leverage = modifications["leverage"]
+            # Bound leverage between 1 and max allowed (5x per system constraints)
+            leverage = max(1, min(5, int(leverage)))
+            modified["leverage"] = leverage
 
         if "size_reduction_pct" in modifications:
+            reduction_pct = modifications["size_reduction_pct"]
+            # Bound reduction between 0% and 100%
+            reduction_pct = max(0, min(100, float(reduction_pct)))
             original_size = modified.get("size_usd", 0)
-            reduction = modifications["size_reduction_pct"] / 100
-            modified["size_usd"] = original_size * (1 - reduction)
+            reduction = reduction_pct / 100
+            new_size = original_size * (1 - reduction)
+            # Ensure size doesn't go negative or below minimum
+            modified["size_usd"] = max(0, new_size)
 
         if "entry_adjustment_pct" in modifications:
+            adjustment_pct = modifications["entry_adjustment_pct"]
+            # Bound adjustment between -50% and +50%
+            adjustment_pct = max(-50, min(50, float(adjustment_pct)))
             original_entry = modified.get("entry_price", 0)
-            adjustment = modifications["entry_adjustment_pct"] / 100
-            modified["entry_price"] = original_entry * (1 + adjustment)
+            if original_entry > 0:
+                adjustment = adjustment_pct / 100
+                new_entry = original_entry * (1 + adjustment)
+                # Ensure entry price stays positive
+                modified["entry_price"] = max(0.0001, new_entry)
 
         return modified
 
     # -------------------------------------------------------------------------
     # Trade Routing
     # -------------------------------------------------------------------------
+
+    async def _execute_rebalance_trades(self, output) -> None:
+        """
+        Execute rebalance trades from Portfolio Rebalance Agent.
+
+        Trades are executed in order (sells first, then buys) to maintain
+        proper allocation and minimize exposure during rebalancing.
+
+        Args:
+            output: PortfolioRebalanceAgent output with trades list
+        """
+        if self._state != CoordinatorState.RUNNING:
+            logger.debug("Skipping rebalance - coordinator not running")
+            return
+
+        if not self.risk_engine or not self.execution_manager:
+            logger.warning("Risk engine or execution manager not configured for rebalance")
+            return
+
+        trades = output.metadata.get("trades", []) if hasattr(output, 'metadata') else []
+        if not trades:
+            logger.debug("No rebalance trades to execute")
+            return
+
+        logger.info(f"Executing {len(trades)} rebalance trades")
+
+        from ..risk.rules_engine import TradeProposal
+
+        for trade in trades:
+            try:
+                # Create trade proposal from rebalance trade
+                proposal = TradeProposal(
+                    symbol=trade.get("symbol", ""),
+                    side=trade.get("side", "buy"),
+                    size_usd=abs(trade.get("amount_usd", 0)),
+                    entry_price=trade.get("price", 0),
+                    leverage=1,  # No leverage for rebalancing
+                    confidence=0.8,  # Rebalance trades have high confidence
+                    regime="rebalance",
+                )
+
+                # Validate with risk engine
+                validation = self.risk_engine.validate_trade(proposal)
+
+                if not validation.is_approved():
+                    logger.warning(
+                        f"Rebalance trade rejected by risk: {trade.get('symbol')} - {validation.rejections}"
+                    )
+                    continue
+
+                # Execute trade
+                final_proposal = validation.modified_proposal or proposal
+                result = await self.execution_manager.execute_trade(final_proposal)
+
+                if result.success:
+                    logger.info(f"Rebalance trade executed: {trade.get('symbol')} {trade.get('side')}")
+                    await self.bus.publish(create_message(
+                        topic=MessageTopic.EXECUTION_EVENTS,
+                        source=self.agent_name,
+                        payload={
+                            "event_type": "rebalance_trade_executed",
+                            "order_id": result.order.id if result.order else None,
+                            "symbol": trade.get("symbol"),
+                            "side": trade.get("side"),
+                        },
+                    ))
+                else:
+                    logger.error(f"Rebalance trade failed: {trade.get('symbol')} - {result.error_message}")
+
+            except Exception as e:
+                logger.error(f"Rebalance trade error for {trade.get('symbol')}: {e}")
 
     async def _route_to_execution(self, signal: dict) -> None:
         """Route validated signal to execution manager."""
@@ -805,6 +1086,110 @@ Remember to respond in JSON format with action, confidence, reasoning, and optio
             logger.error(f"Execution failed: {e}")
 
     # -------------------------------------------------------------------------
+    # State Persistence
+    # -------------------------------------------------------------------------
+
+    async def persist_state(self) -> bool:
+        """
+        Persist coordinator state to database.
+
+        Saves task schedules, statistics, and enabled/disabled state
+        to survive restarts.
+
+        Returns:
+            True if persisted successfully
+        """
+        if not self.db:
+            return False
+
+        try:
+            state_data = {
+                "state": self._state.value,
+                "statistics": {
+                    "total_task_runs": self._total_task_runs,
+                    "total_conflicts_detected": self._total_conflicts_detected,
+                    "total_conflicts_resolved": self._total_conflicts_resolved,
+                    "total_trades_routed": self._total_trades_routed,
+                },
+                "tasks": {
+                    t.name: {
+                        "enabled": t.enabled,
+                        "last_run": t.last_run.isoformat() if t.last_run else None,
+                    }
+                    for t in self._scheduled_tasks
+                },
+            }
+
+            query = """
+                INSERT INTO coordinator_state (id, state_data, updated_at)
+                VALUES ($1, $2, $3)
+                ON CONFLICT (id) DO UPDATE SET
+                    state_data = $2,
+                    updated_at = $3
+            """
+            await self.db.execute(
+                query,
+                "coordinator",  # Single coordinator instance
+                json.dumps(state_data),
+                datetime.now(timezone.utc),
+            )
+            logger.debug("Coordinator state persisted")
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to persist coordinator state: {e}")
+            return False
+
+    async def load_state(self) -> bool:
+        """
+        Load coordinator state from database.
+
+        Restores task schedules, statistics, and enabled/disabled state
+        from last session.
+
+        Returns:
+            True if state loaded successfully
+        """
+        if not self.db:
+            return False
+
+        try:
+            query = """
+                SELECT state_data FROM coordinator_state WHERE id = $1
+            """
+            row = await self.db.fetchrow(query, "coordinator")
+
+            if not row:
+                logger.info("No persisted coordinator state found")
+                return False
+
+            state_data = json.loads(row['state_data'])
+
+            # Restore statistics
+            stats = state_data.get("statistics", {})
+            self._total_task_runs = stats.get("total_task_runs", 0)
+            self._total_conflicts_detected = stats.get("total_conflicts_detected", 0)
+            self._total_conflicts_resolved = stats.get("total_conflicts_resolved", 0)
+            self._total_trades_routed = stats.get("total_trades_routed", 0)
+
+            # Restore task state
+            tasks = state_data.get("tasks", {})
+            for task in self._scheduled_tasks:
+                if task.name in tasks:
+                    task_state = tasks[task.name]
+                    task.enabled = task_state.get("enabled", True)
+                    last_run = task_state.get("last_run")
+                    if last_run:
+                        task.last_run = datetime.fromisoformat(last_run)
+
+            logger.info("Coordinator state loaded from database")
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to load coordinator state: {e}")
+            return False
+
+    # -------------------------------------------------------------------------
     # Public API
     # -------------------------------------------------------------------------
 
@@ -812,6 +1197,7 @@ Remember to respond in JSON format with action, confidence, reasoning, and optio
         """Get coordinator status."""
         return {
             "state": self._state.value,
+            "degradation_level": self._degradation_level.name,
             "scheduled_tasks": [
                 {
                     "name": t.name,
@@ -827,6 +1213,10 @@ Remember to respond in JSON format with action, confidence, reasoning, and optio
                 "total_conflicts_detected": self._total_conflicts_detected,
                 "total_conflicts_resolved": self._total_conflicts_resolved,
                 "total_trades_routed": self._total_trades_routed,
+            },
+            "health": {
+                "consecutive_llm_failures": self._consecutive_llm_failures,
+                "consecutive_api_failures": self._consecutive_api_failures,
             },
         }
 

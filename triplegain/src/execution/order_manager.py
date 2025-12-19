@@ -8,7 +8,7 @@ Features:
 - Order monitoring and status updates
 - Contingent orders (stop loss, take profit)
 - Retry logic with exponential backoff
-- Rate limiting compliance
+- Rate limiting compliance with token bucket
 """
 
 import asyncio
@@ -26,6 +26,72 @@ if TYPE_CHECKING:
     from ..risk.rules_engine import TradeProposal
 
 logger = logging.getLogger(__name__)
+
+
+class TokenBucketRateLimiter:
+    """
+    Token bucket rate limiter for API call throttling.
+
+    Implements a simple token bucket algorithm that:
+    - Starts with a full bucket of tokens
+    - Removes tokens on each request
+    - Refills tokens at a steady rate
+    - Blocks when bucket is empty
+    """
+
+    def __init__(self, rate: float, capacity: int):
+        """
+        Initialize rate limiter.
+
+        Args:
+            rate: Tokens added per second
+            capacity: Maximum tokens in bucket
+        """
+        self.rate = rate
+        self.capacity = capacity
+        self.tokens = float(capacity)
+        self.last_update = time.monotonic()
+        self._lock = asyncio.Lock()
+
+    async def acquire(self, tokens: int = 1) -> float:
+        """
+        Acquire tokens, waiting if necessary.
+
+        Args:
+            tokens: Number of tokens to acquire
+
+        Returns:
+            Wait time in seconds (0 if no wait needed)
+        """
+        async with self._lock:
+            now = time.monotonic()
+            elapsed = now - self.last_update
+            self.last_update = now
+
+            # Refill tokens based on elapsed time
+            self.tokens = min(self.capacity, self.tokens + elapsed * self.rate)
+
+            if self.tokens >= tokens:
+                self.tokens -= tokens
+                return 0.0
+
+            # Calculate wait time
+            tokens_needed = tokens - self.tokens
+            wait_time = tokens_needed / self.rate
+
+            # Wait for tokens to be available
+            await asyncio.sleep(wait_time)
+
+            # Update after waiting
+            self.tokens = 0  # All tokens consumed
+            return wait_time
+
+    @property
+    def available_tokens(self) -> float:
+        """Get current available tokens (approximate)."""
+        now = time.monotonic()
+        elapsed = now - self.last_update
+        return min(self.capacity, self.tokens + elapsed * self.rate)
 
 
 class OrderStatus(Enum):
@@ -180,10 +246,22 @@ class OrderExecutionManager:
         self._max_retries = orders_config.get('max_retry_count', 3)
         self._retry_delay_seconds = orders_config.get('retry_delay_seconds', 5)
 
-        # Rate limiting
+        # Rate limiting with token bucket
         rate_limit = self.config.get('kraken', {}).get('rate_limit', {})
-        self._rate_limit_calls = rate_limit.get('calls_per_minute', 60)
-        self._rate_limit_orders = rate_limit.get('order_calls_per_minute', 30)
+        calls_per_minute = rate_limit.get('calls_per_minute', 60)
+        order_calls_per_minute = rate_limit.get('order_calls_per_minute', 30)
+
+        # Create rate limiters
+        # General API calls: tokens refill at rate per second, capacity = burst limit
+        self._api_rate_limiter = TokenBucketRateLimiter(
+            rate=calls_per_minute / 60.0,  # tokens per second
+            capacity=min(10, calls_per_minute),  # burst capacity
+        )
+        # Order-specific calls: more restrictive
+        self._order_rate_limiter = TokenBucketRateLimiter(
+            rate=order_calls_per_minute / 60.0,  # tokens per second
+            capacity=min(5, order_calls_per_minute),  # burst capacity
+        )
 
         # Order tracking
         self._open_orders: dict[str, Order] = {}
@@ -196,8 +274,10 @@ class OrderExecutionManager:
         self._total_orders_cancelled = 0
         self._total_errors = 0
 
-        # Lock for thread safety
-        self._lock = asyncio.Lock()
+        # Locks for thread safety - separate locks to reduce contention
+        self._lock = asyncio.Lock()  # For open orders
+        self._history_lock = asyncio.Lock()  # For order history
+        self._max_history_size = self.config.get('orders', {}).get('max_history_size', 1000)
 
     async def execute_trade(
         self,
@@ -214,12 +294,29 @@ class OrderExecutionManager:
         """
         start_time = time.perf_counter()
 
+        # Validate proposal size
+        if proposal.size_usd <= 0:
+            logger.warning(f"Invalid trade size: {proposal.size_usd}")
+            return ExecutionResult(
+                success=False,
+                error_message=f"Invalid trade size: {proposal.size_usd} (must be > 0)",
+                execution_time_ms=int((time.perf_counter() - start_time) * 1000),
+            )
+
         try:
             # Determine order type
             order_type = OrderType.LIMIT if proposal.entry_price else OrderType.MARKET
 
             # Calculate size in base currency
             size = await self._calculate_size(proposal)
+
+            # Validate calculated size
+            if size <= 0:
+                return ExecutionResult(
+                    success=False,
+                    error_message=f"Invalid calculated order size: {size}",
+                    execution_time_ms=int((time.perf_counter() - start_time) * 1000),
+                )
 
             # Create order
             order = Order(
@@ -291,7 +388,7 @@ class OrderExecutionManager:
 
     async def _place_order(self, order: Order) -> bool:
         """
-        Place order on Kraken exchange with retry logic.
+        Place order on Kraken exchange with retry logic and rate limiting.
 
         Args:
             order: Order to place
@@ -303,6 +400,11 @@ class OrderExecutionManager:
 
         for attempt in range(self._max_retries):
             try:
+                # Acquire rate limit tokens for order placement
+                wait_time = await self._order_rate_limiter.acquire(1)
+                if wait_time > 0:
+                    logger.debug(f"Rate limited: waited {wait_time:.2f}s before order placement")
+
                 # Build order params
                 params = {
                     "pair": kraken_symbol,
@@ -389,6 +491,9 @@ class OrderExecutionManager:
             await asyncio.sleep(poll_interval)
 
             try:
+                # Acquire rate limit tokens for API query
+                await self._api_rate_limiter.acquire(1)
+
                 # Query order status
                 if self.kraken and order.external_id:
                     result = await self.kraken.query_orders(txid=order.external_id)
@@ -433,12 +538,21 @@ class OrderExecutionManager:
             except Exception as e:
                 logger.error(f"Order monitoring error: {e}")
 
-        # Cleanup
+        # Cleanup - use separate locks to avoid race condition
         await self._update_order(order)
+
+        # Remove from open orders
         async with self._lock:
             if order.id in self._open_orders:
                 del self._open_orders[order.id]
+
+        # Add to history with its own lock and size limit
+        async with self._history_lock:
             self._order_history.append(order)
+            # Cleanup old history to prevent memory growth
+            if len(self._order_history) > self._max_history_size:
+                # Keep only the most recent orders
+                self._order_history = self._order_history[-self._max_history_size:]
 
     async def _handle_order_fill(
         self,
@@ -568,6 +682,9 @@ class OrderExecutionManager:
             return False
 
         try:
+            # Acquire rate limit tokens for cancel operation
+            await self._order_rate_limiter.acquire(1)
+
             if self.kraken and order.external_id:
                 result = await self.kraken.cancel_order(txid=order.external_id)
 
@@ -613,14 +730,16 @@ class OrderExecutionManager:
 
     async def get_order(self, order_id: str) -> Optional[Order]:
         """Get order by ID."""
+        # Check open orders first
         async with self._lock:
             if order_id in self._open_orders:
                 return self._open_orders[order_id]
 
-        # Check history
-        for order in self._order_history:
-            if order.id == order_id:
-                return order
+        # Check history with separate lock
+        async with self._history_lock:
+            for order in self._order_history:
+                if order.id == order_id:
+                    return order
 
         return None
 
@@ -635,6 +754,9 @@ class OrderExecutionManager:
             return 0
 
         try:
+            # Acquire rate limit tokens for sync operation
+            await self._api_rate_limiter.acquire(1)
+
             result = await self.kraken.open_orders()
 
             if result.get("error"):
@@ -732,4 +854,7 @@ class OrderExecutionManager:
             "total_errors": self._total_errors,
             "open_orders_count": len(self._open_orders),
             "history_count": len(self._order_history),
+            "max_history_size": self._max_history_size,
+            "api_rate_limit_tokens": self._api_rate_limiter.available_tokens,
+            "order_rate_limit_tokens": self._order_rate_limiter.available_tokens,
         }

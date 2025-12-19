@@ -65,6 +65,22 @@ class Position:
     notes: str = ""
     tags: list[str] = field(default_factory=list)
 
+    def __post_init__(self):
+        """Validate position fields after initialization."""
+        # Validate leverage (must be positive, max 5x per system constraints)
+        if self.leverage < 1:
+            raise ValueError(f"Leverage must be >= 1, got {self.leverage}")
+        if self.leverage > 5:
+            raise ValueError(f"Leverage must be <= 5 (system limit), got {self.leverage}")
+
+        # Validate size (must be positive)
+        if self.size <= 0:
+            raise ValueError(f"Position size must be > 0, got {self.size}")
+
+        # Validate entry price (must be non-negative)
+        if self.entry_price < 0:
+            raise ValueError(f"Entry price must be >= 0, got {self.entry_price}")
+
     def calculate_pnl(self, current_price: Decimal) -> tuple[Decimal, Decimal]:
         """
         Calculate unrealized P&L.
@@ -525,12 +541,84 @@ class PositionTracker:
             "pnl_by_position": {k: float(v) for k, v in pnl_by_position.items()},
         }
 
+    async def check_sl_tp_triggers(
+        self,
+        current_prices: dict[str, Decimal],
+    ) -> list[tuple[Position, str]]:
+        """
+        Check if any positions have hit SL/TP levels.
+
+        Args:
+            current_prices: Dict of symbol -> current price
+
+        Returns:
+            List of (position, trigger_type) tuples where trigger_type is 'stop_loss' or 'take_profit'
+        """
+        triggered: list[tuple[Position, str]] = []
+
+        async with self._lock:
+            for position in list(self._positions.values()):
+                if position.status != PositionStatus.OPEN:
+                    continue
+
+                price = current_prices.get(position.symbol)
+                if not price:
+                    continue
+
+                # Check stop-loss
+                if position.stop_loss:
+                    if position.side == PositionSide.LONG and price <= position.stop_loss:
+                        triggered.append((position, "stop_loss"))
+                        logger.warning(
+                            f"SL triggered for {position.id}: price {price} <= SL {position.stop_loss}"
+                        )
+                        continue
+                    elif position.side == PositionSide.SHORT and price >= position.stop_loss:
+                        triggered.append((position, "stop_loss"))
+                        logger.warning(
+                            f"SL triggered for {position.id}: price {price} >= SL {position.stop_loss}"
+                        )
+                        continue
+
+                # Check take-profit
+                if position.take_profit:
+                    if position.side == PositionSide.LONG and price >= position.take_profit:
+                        triggered.append((position, "take_profit"))
+                        logger.info(
+                            f"TP triggered for {position.id}: price {price} >= TP {position.take_profit}"
+                        )
+                    elif position.side == PositionSide.SHORT and price <= position.take_profit:
+                        triggered.append((position, "take_profit"))
+                        logger.info(
+                            f"TP triggered for {position.id}: price {price} <= TP {position.take_profit}"
+                        )
+
+        return triggered
+
+    async def _process_sl_tp_triggers(self) -> None:
+        """Process SL/TP triggers and close positions if needed."""
+        if not self._price_cache:
+            return
+
+        triggered = await self.check_sl_tp_triggers(self._price_cache)
+
+        for position, trigger_type in triggered:
+            price = self._price_cache.get(position.symbol)
+            if price:
+                await self.close_position(
+                    position_id=position.id,
+                    exit_price=price,
+                    reason=trigger_type,
+                )
+
     async def _snapshot_loop(self) -> None:
-        """Background task to capture position snapshots."""
+        """Background task to capture position snapshots and check SL/TP."""
         while self._running:
             try:
                 await asyncio.sleep(self._snapshot_interval_seconds)
                 await self._capture_snapshots()
+                # Check SL/TP triggers during snapshot loop
+                await self._process_sl_tp_triggers()
             except asyncio.CancelledError:
                 break
             except Exception as e:
@@ -615,7 +703,7 @@ class PositionTracker:
             logger.warning(f"Failed to load positions: {e}")
 
     async def _store_position(self, position: Position) -> None:
-        """Store position to database."""
+        """Store position to database using string representation for Decimal precision."""
         if not self.db:
             return
 
@@ -631,13 +719,13 @@ class PositionTracker:
                 uuid.UUID(position.id),
                 position.symbol,
                 position.side.value,
-                float(position.size),
-                float(position.entry_price),
+                str(position.size),  # Use str for Decimal precision
+                str(position.entry_price),  # Use str for Decimal precision
                 position.leverage,
                 position.status.value,
                 position.order_id,
-                float(position.stop_loss) if position.stop_loss else None,
-                float(position.take_profit) if position.take_profit else None,
+                str(position.stop_loss) if position.stop_loss else None,
+                str(position.take_profit) if position.take_profit else None,
                 position.opened_at,
                 position.notes,
             )
@@ -645,7 +733,7 @@ class PositionTracker:
             logger.error(f"Failed to store position: {e}")
 
     async def _update_position(self, position: Position) -> None:
-        """Update position in database."""
+        """Update position in database using string representation for Decimal precision."""
         if not self.db:
             return
 
@@ -664,17 +752,17 @@ class PositionTracker:
                 query,
                 uuid.UUID(position.id),
                 position.status.value,
-                float(position.stop_loss) if position.stop_loss else None,
-                float(position.take_profit) if position.take_profit else None,
+                str(position.stop_loss) if position.stop_loss else None,
+                str(position.take_profit) if position.take_profit else None,
                 position.closed_at,
-                float(position.exit_price) if position.exit_price else None,
-                float(position.realized_pnl),
+                str(position.exit_price) if position.exit_price else None,
+                str(position.realized_pnl),  # Use str for Decimal precision
             )
         except Exception as e:
             logger.error(f"Failed to update position: {e}")
 
     async def _store_snapshots(self) -> None:
-        """Store position snapshots to database."""
+        """Store position snapshots to database using string representation for Decimal precision."""
         if not self.db or not self._snapshots:
             return
 
@@ -694,9 +782,9 @@ class PositionTracker:
                     snapshot.timestamp,
                     uuid.UUID(snapshot.position_id),
                     snapshot.symbol,
-                    float(snapshot.current_price),
-                    float(snapshot.unrealized_pnl),
-                    float(snapshot.unrealized_pnl_pct),
+                    str(snapshot.current_price),  # Use str for Decimal precision
+                    str(snapshot.unrealized_pnl),  # Use str for Decimal precision
+                    str(snapshot.unrealized_pnl_pct),  # Use str for Decimal precision
                 )
         except Exception as e:
             logger.error(f"Failed to store snapshots: {e}")
