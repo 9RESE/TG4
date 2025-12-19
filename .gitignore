@@ -2,11 +2,14 @@ venv/
 __pycache__/
 *.pyc
 # Ignore downloaded/cache data but keep database code
-data/
-!data/__init__.py
-!data/kraken_db/
-data/kraken_db/.env
-data/kraken_db/candles/
+# Use /data/ to only match root level, not triplegain/src/data/
+/data/
+!/data/__init__.py
+!/data/kraken_db/
+/data/kraken_db/.env
+/data/kraken_db/candles/
+# Ensure triplegain source data module is tracked
+!triplegain/src/data/
 config/api_keys.yaml
 *.pkl
 *.h5

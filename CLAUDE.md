@@ -5,7 +5,7 @@ Python trading system with TimescaleDB + 6-model LLM comparison
 
 ## Quick Commands
 ```bash
-pytest triplegain/tests/                            # Run all tests (902 passing)
+pytest triplegain/tests/                            # Run all tests (916 passing)
 pytest --cov=triplegain/src --cov-report=term       # Run with coverage (87%)
 docker-compose up -d timescaledb                    # Start database
 python -m data.kraken_db.gap_filler --db-url "$DB_URL"  # Fill data gaps
@@ -33,8 +33,9 @@ uvicorn triplegain.src.api.app:app --reload         # Start API server
 - **API Endpoints**: Coordinator, portfolio, positions, orders routes
 - **Database Migration**: 9 tables (orders, positions, hodl_bags, coordinator_state, scheduled_trades, etc.)
 - **Config Files**: orchestration.yaml, portfolio.yaml, execution.yaml
-- **Test Coverage**: 902 tests, 87% coverage
+- **Test Coverage**: 916 tests, 87% coverage
 - **Deep Review Fixes**: 12 initial + 3 minor + 3 enhancements (see docs/development/reviews/phase-3/)
+- **Comprehensive Review Fixes**: Supertrend accuracy, async error handling, truncation logging, type coercion, API validation (see docs/development/reviews/full/)
 
 ### Phase 2 Deliverables (Completed)
 - **Base Agent Class**: Abstract interface with AgentOutput dataclass, validation, serialization

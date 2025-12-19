@@ -143,11 +143,16 @@ class PromptBuilder:
         # Truncate if over budget
         max_budget = budget.get('total', 8192) - budget.get('buffer', 2000)
         if estimated_tokens > max_budget:
+            original_tokens = estimated_tokens
             user_message = self.truncate_to_budget(
                 user_message,
                 max_tokens=max_budget - self.estimate_tokens(system_prompt)
             )
             estimated_tokens = self.estimate_tokens(system_prompt + user_message)
+            logger.warning(
+                f"Prompt truncated for {agent_name}: {original_tokens} -> {estimated_tokens} tokens "
+                f"(budget: {max_budget})"
+            )
 
         return AssembledPrompt(
             system_prompt=system_prompt,

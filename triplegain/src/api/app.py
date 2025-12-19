@@ -9,6 +9,7 @@ This module provides:
 """
 
 import logging
+import re
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Optional
@@ -34,6 +35,57 @@ _db_pool: Optional[DatabasePool] = None
 _indicator_library: Optional[IndicatorLibrary] = None
 _snapshot_builder: Optional[MarketSnapshotBuilder] = None
 _prompt_builder: Optional[PromptBuilder] = None
+
+# Symbol validation regex: BASE/QUOTE or BASE_QUOTE format (e.g., BTC/USDT, XRP_BTC)
+# Allows alphanumeric symbols with optional numbers (e.g., USDT, 1INCH)
+# Underscore variant is URL-safe and commonly used in API paths
+SYMBOL_PATTERN = re.compile(r'^[A-Z0-9]{2,10}[/_][A-Z0-9]{2,10}$')
+
+# Valid timeframes
+VALID_TIMEFRAMES = {'1m', '5m', '15m', '30m', '1h', '4h', '12h', '1d', '1w'}
+
+
+def validate_symbol(symbol: str) -> str:
+    """
+    Validate trading symbol format.
+
+    Args:
+        symbol: Trading pair (e.g., "BTC/USDT")
+
+    Returns:
+        Validated symbol (uppercase)
+
+    Raises:
+        HTTPException: If symbol format is invalid
+    """
+    symbol = symbol.upper()
+    if not SYMBOL_PATTERN.match(symbol):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid symbol format: '{symbol}'. Expected format: BASE/QUOTE (e.g., BTC/USDT)"
+        )
+    return symbol
+
+
+def validate_timeframe(timeframe: str) -> str:
+    """
+    Validate timeframe format.
+
+    Args:
+        timeframe: Candle timeframe (e.g., "1h")
+
+    Returns:
+        Validated timeframe
+
+    Raises:
+        HTTPException: If timeframe is invalid
+    """
+    if timeframe not in VALID_TIMEFRAMES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid timeframe: '{timeframe}'. Valid: {', '.join(sorted(VALID_TIMEFRAMES))}"
+        )
+    return timeframe
 
 
 @asynccontextmanager
@@ -183,6 +235,10 @@ def register_indicator_routes(app: FastAPI):
         Returns:
             Calculated indicators
         """
+        # Validate inputs
+        symbol = validate_symbol(symbol)
+        timeframe = validate_timeframe(timeframe)
+
         if not _db_pool or not _indicator_library:
             raise HTTPException(status_code=503, detail="Service not initialized")
 
@@ -227,6 +283,9 @@ def register_snapshot_routes(app: FastAPI):
         Returns:
             Market snapshot in prompt format
         """
+        # Validate inputs
+        symbol = validate_symbol(symbol)
+
         if not _snapshot_builder:
             raise HTTPException(status_code=503, detail="Service not initialized")
 
@@ -271,6 +330,9 @@ def register_debug_routes(app: FastAPI):
         Returns:
             Assembled prompt components
         """
+        # Validate inputs
+        symbol = validate_symbol(symbol)
+
         if not _prompt_builder or not _snapshot_builder:
             raise HTTPException(status_code=503, detail="Service not initialized")
 

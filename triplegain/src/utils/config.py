@@ -75,6 +75,9 @@ class ConfigLoader:
 
             config = yaml.safe_load(substituted_content)
 
+            # Coerce types (env vars come as strings)
+            config = self._coerce_types(config)
+
             if validate:
                 self._validate_config(config_name, config)
 
@@ -133,6 +136,46 @@ class ConfigLoader:
             return os.environ.get(var_name, default_value)
 
         return self.ENV_VAR_PATTERN.sub(replace_match, content)
+
+    def _coerce_types(self, value: Any) -> Any:
+        """
+        Recursively coerce string values to appropriate types.
+
+        Handles:
+        - Numeric strings to int/float
+        - Boolean strings to bool
+        - Nested dicts and lists
+
+        Args:
+            value: Value to coerce
+
+        Returns:
+            Coerced value
+        """
+        if isinstance(value, dict):
+            return {k: self._coerce_types(v) for k, v in value.items()}
+        elif isinstance(value, list):
+            return [self._coerce_types(item) for item in value]
+        elif isinstance(value, str):
+            # Try integer
+            if value.lstrip('-').isdigit():
+                try:
+                    return int(value)
+                except ValueError:
+                    pass
+            # Try float
+            try:
+                if '.' in value and value.replace('.', '', 1).lstrip('-').isdigit():
+                    return float(value)
+            except ValueError:
+                pass
+            # Try boolean
+            if value.lower() in ('true', 'yes', 'on'):
+                return True
+            if value.lower() in ('false', 'no', 'off'):
+                return False
+            return value
+        return value
 
     def _validate_config(self, config_name: str, config: dict) -> None:
         """
