@@ -40,6 +40,7 @@ if FASTAPI_AVAILABLE:
 
     class ClosePositionRequest(BaseModel):
         """Request to close a position."""
+        exit_price: float = Field(..., description="Exit price for P&L calculation")
         reason: str = Field("manual", description="Reason for closing")
 
     class ModifyPositionRequest(BaseModel):
@@ -339,16 +340,14 @@ def create_orchestration_router(
     @router.post("/positions/{position_id}/close")
     async def close_position(
         position_id: str,
-        request: ClosePositionRequest = Body(default_factory=ClosePositionRequest),
-        exit_price: float = Query(..., description="Exit price for the position")
+        request: ClosePositionRequest = Body(...),
     ):
         """
         Close an open position.
 
         Args:
             position_id: Position ID to close
-            request: Close request details
-            exit_price: Exit price for P&L calculation
+            request: Close request details (exit_price and reason)
 
         Returns:
             Closed position details
@@ -359,7 +358,7 @@ def create_orchestration_router(
         try:
             position = await position_tracker.close_position(
                 position_id,
-                Decimal(str(exit_price)),
+                Decimal(str(request.exit_price)),
                 reason=request.reason,
             )
             if not position:

@@ -363,8 +363,8 @@ class TestPositionEndpoints:
     def test_close_position(self, client, mock_position_tracker):
         """Test closing a position."""
         response = client.post(
-            "/api/v1/positions/pos-123/close?exit_price=46000",
-            json={"reason": "take_profit"}
+            "/api/v1/positions/pos-123/close",
+            json={"exit_price": 46000.0, "reason": "take_profit"}
         )
         assert response.status_code == 200
         data = response.json()
@@ -375,7 +375,8 @@ class TestPositionEndpoints:
         """Test closing non-existent position."""
         mock_position_tracker.close_position.return_value = None
         response = client.post(
-            "/api/v1/positions/nonexistent/close?exit_price=46000"
+            "/api/v1/positions/nonexistent/close",
+            json={"exit_price": 46000.0}
         )
         assert response.status_code == 404
 

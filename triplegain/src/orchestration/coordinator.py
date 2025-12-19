@@ -15,6 +15,7 @@ import logging
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
+from decimal import Decimal
 from enum import Enum
 from typing import Any, Callable, Awaitable, Optional, TYPE_CHECKING
 
@@ -325,6 +326,9 @@ class CoordinatorAgent:
     async def _execute_due_tasks(self) -> None:
         """Execute tasks that are due for execution."""
         now = datetime.now(timezone.utc)
+
+        # Execute scheduled DCA trades first
+        await self._execute_scheduled_trades()
 
         for task in self._scheduled_tasks:
             if not task.is_due(now):
@@ -962,23 +966,42 @@ Remember to respond in JSON format with action, confidence, reasoning, and optio
             logger.warning("Risk engine or execution manager not configured for rebalance")
             return
 
-        trades = output.metadata.get("trades", []) if hasattr(output, 'metadata') else []
+        # Access trades directly from RebalanceOutput dataclass
+        trades = output.trades if hasattr(output, 'trades') else []
         if not trades:
             logger.debug("No rebalance trades to execute")
             return
 
-        logger.info(f"Executing {len(trades)} rebalance trades")
+        # Get DCA info
+        dca_batches = getattr(output, 'dca_batches', 1)
+        dca_interval_hours = getattr(output, 'dca_interval_hours', 0)
+
+        # Separate immediate trades (batch 0) from scheduled trades
+        immediate_trades = [t for t in trades if getattr(t, 'batch_index', 0) == 0]
+        scheduled_trades = [t for t in trades if getattr(t, 'batch_index', 0) > 0]
+
+        if dca_batches > 1:
+            logger.info(
+                f"DCA rebalance: {len(immediate_trades)} immediate trades, "
+                f"{len(scheduled_trades)} scheduled across {dca_batches - 1} future batches"
+            )
+
+            # Store scheduled trades for later execution
+            if scheduled_trades:
+                await self._store_scheduled_trades(scheduled_trades)
+        else:
+            logger.info(f"Executing {len(immediate_trades)} rebalance trades immediately")
 
         from ..risk.rules_engine import TradeProposal
 
-        for trade in trades:
+        for trade in immediate_trades:
             try:
-                # Create trade proposal from rebalance trade
+                # Create trade proposal from RebalanceTrade object
                 proposal = TradeProposal(
-                    symbol=trade.get("symbol", ""),
-                    side=trade.get("side", "buy"),
-                    size_usd=abs(trade.get("amount_usd", 0)),
-                    entry_price=trade.get("price", 0),
+                    symbol=trade.symbol,
+                    side=trade.action,  # "buy" or "sell"
+                    size_usd=abs(float(trade.amount_usd)),
+                    entry_price=0,  # Market order for rebalancing
                     leverage=1,  # No leverage for rebalancing
                     confidence=0.8,  # Rebalance trades have high confidence
                     regime="rebalance",
@@ -989,7 +1012,7 @@ Remember to respond in JSON format with action, confidence, reasoning, and optio
 
                 if not validation.is_approved():
                     logger.warning(
-                        f"Rebalance trade rejected by risk: {trade.get('symbol')} - {validation.rejections}"
+                        f"Rebalance trade rejected by risk: {trade.symbol} - {validation.rejections}"
                     )
                     continue
 
@@ -998,22 +1021,134 @@ Remember to respond in JSON format with action, confidence, reasoning, and optio
                 result = await self.execution_manager.execute_trade(final_proposal)
 
                 if result.success:
-                    logger.info(f"Rebalance trade executed: {trade.get('symbol')} {trade.get('side')}")
+                    logger.info(f"Rebalance trade executed: {trade.symbol} {trade.action}")
                     await self.bus.publish(create_message(
                         topic=MessageTopic.EXECUTION_EVENTS,
                         source=self.agent_name,
                         payload={
                             "event_type": "rebalance_trade_executed",
                             "order_id": result.order.id if result.order else None,
-                            "symbol": trade.get("symbol"),
-                            "side": trade.get("side"),
+                            "symbol": trade.symbol,
+                            "side": trade.action,
+                            "batch_index": getattr(trade, 'batch_index', 0),
                         },
                     ))
                 else:
-                    logger.error(f"Rebalance trade failed: {trade.get('symbol')} - {result.error_message}")
+                    logger.error(f"Rebalance trade failed: {trade.symbol} - {result.error_message}")
 
             except Exception as e:
-                logger.error(f"Rebalance trade error for {trade.get('symbol')}: {e}")
+                logger.error(f"Rebalance trade error for {trade.symbol}: {e}")
+
+    async def _store_scheduled_trades(self, trades: list) -> None:
+        """Store scheduled DCA trades for later execution."""
+        if not self.db:
+            logger.warning("No database configured - scheduled trades will not persist")
+            # Store in memory as fallback
+            if not hasattr(self, '_scheduled_trades'):
+                self._scheduled_trades = []
+            self._scheduled_trades.extend(trades)
+            return
+
+        try:
+            for trade in trades:
+                query = """
+                    INSERT INTO scheduled_trades (
+                        symbol, side, amount_usd, batch_index, scheduled_time, status
+                    ) VALUES ($1, $2, $3, $4, $5, 'pending')
+                """
+                await self.db.execute(
+                    query,
+                    trade.symbol,
+                    trade.action,
+                    float(trade.amount_usd),
+                    trade.batch_index,
+                    trade.scheduled_time,
+                )
+            logger.info(f"Stored {len(trades)} scheduled DCA trades")
+        except Exception as e:
+            logger.error(f"Failed to store scheduled trades: {e}")
+
+    async def _execute_scheduled_trades(self) -> None:
+        """Execute any scheduled trades that are due."""
+        now = datetime.now(timezone.utc)
+
+        # Check in-memory scheduled trades
+        if hasattr(self, '_scheduled_trades') and self._scheduled_trades:
+            due_trades = [t for t in self._scheduled_trades if t.scheduled_time <= now]
+            if due_trades:
+                logger.info(f"Executing {len(due_trades)} scheduled DCA trades from memory")
+                for trade in due_trades:
+                    await self._execute_single_rebalance_trade(trade)
+                    self._scheduled_trades.remove(trade)
+
+        # Check database scheduled trades
+        if self.db:
+            try:
+                query = """
+                    SELECT id, symbol, side, amount_usd, batch_index, scheduled_time
+                    FROM scheduled_trades
+                    WHERE status = 'pending' AND scheduled_time <= $1
+                    ORDER BY scheduled_time, batch_index
+                """
+                rows = await self.db.fetch(query, now)
+
+                for row in rows:
+                    from ..agents.portfolio_rebalance import RebalanceTrade
+                    trade = RebalanceTrade(
+                        symbol=row['symbol'],
+                        action=row['side'],
+                        amount_usd=Decimal(str(row['amount_usd'])),
+                        batch_index=row['batch_index'],
+                        scheduled_time=row['scheduled_time'],
+                    )
+                    success = await self._execute_single_rebalance_trade(trade)
+
+                    # Update status
+                    update_query = """
+                        UPDATE scheduled_trades SET status = $1, executed_at = $2 WHERE id = $3
+                    """
+                    status = 'executed' if success else 'failed'
+                    await self.db.execute(update_query, status, now, row['id'])
+
+            except Exception as e:
+                logger.error(f"Failed to execute scheduled trades: {e}")
+
+    async def _execute_single_rebalance_trade(self, trade) -> bool:
+        """Execute a single rebalance trade."""
+        if not self.risk_engine or not self.execution_manager:
+            return False
+
+        try:
+            from ..risk.rules_engine import TradeProposal
+
+            proposal = TradeProposal(
+                symbol=trade.symbol,
+                side=trade.action,
+                size_usd=abs(float(trade.amount_usd)),
+                entry_price=0,
+                leverage=1,
+                confidence=0.8,
+                regime="rebalance",
+            )
+
+            validation = self.risk_engine.validate_trade(proposal)
+            if not validation.is_approved():
+                logger.warning(f"Scheduled trade rejected: {trade.symbol}")
+                return False
+
+            final_proposal = validation.modified_proposal or proposal
+            result = await self.execution_manager.execute_trade(final_proposal)
+
+            if result.success:
+                logger.info(f"Scheduled trade executed: {trade.symbol} batch {trade.batch_index}")
+                return True
+            else:
+                logger.error(f"Scheduled trade failed: {trade.symbol}")
+                return False
+
+        except Exception as e:
+            logger.error(f"Scheduled trade error: {e}")
+            return False
 
     async def _route_to_execution(self, signal: dict) -> None:
         """Route validated signal to execution manager."""

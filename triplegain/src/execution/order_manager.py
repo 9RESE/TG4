@@ -246,6 +246,11 @@ class OrderExecutionManager:
         self._max_retries = orders_config.get('max_retry_count', 3)
         self._retry_delay_seconds = orders_config.get('retry_delay_seconds', 5)
 
+        # Position limits configuration
+        limits_config = self.config.get('position_limits', {})
+        self._max_positions_per_symbol = limits_config.get('max_per_symbol', 2)
+        self._max_positions_total = limits_config.get('max_total', 5)
+
         # Rate limiting with token bucket
         rate_limit = self.config.get('kraken', {}).get('rate_limit', {})
         calls_per_minute = rate_limit.get('calls_per_minute', 60)
@@ -302,6 +307,17 @@ class OrderExecutionManager:
                 error_message=f"Invalid trade size: {proposal.size_usd} (must be > 0)",
                 execution_time_ms=int((time.perf_counter() - start_time) * 1000),
             )
+
+        # Check position limits (only for buy orders that open new positions)
+        if proposal.side == "buy":
+            limit_check = await self._check_position_limits(proposal.symbol)
+            if not limit_check["allowed"]:
+                logger.warning(f"Position limit exceeded: {limit_check['reason']}")
+                return ExecutionResult(
+                    success=False,
+                    error_message=limit_check["reason"],
+                    execution_time_ms=int((time.perf_counter() - start_time) * 1000),
+                )
 
         try:
             # Determine order type
@@ -531,7 +547,20 @@ class OrderExecutionManager:
                     await asyncio.sleep(2)
                     order.status = OrderStatus.FILLED
                     order.filled_size = order.size
-                    order.filled_price = order.price or Decimal("45000")
+                    # Use order price, position tracker price cache, or fallback
+                    fill_price = order.price
+                    if not fill_price and self.position_tracker:
+                        fill_price = self.position_tracker._price_cache.get(order.symbol)
+                    if not fill_price:
+                        # Fallback to reasonable defaults for mock mode
+                        mock_prices = {
+                            "BTC/USDT": Decimal("45000"),
+                            "XRP/USDT": Decimal("0.60"),
+                            "XRP/BTC": Decimal("0.000013"),
+                            "ETH/USDT": Decimal("2500"),
+                        }
+                        fill_price = mock_prices.get(order.symbol, Decimal("100"))
+                    order.filled_price = fill_price
                     order.updated_at = datetime.now(timezone.utc)
                     await self._handle_order_fill(order, proposal)
 
@@ -792,6 +821,49 @@ class OrderExecutionManager:
         if proposal.entry_price and proposal.entry_price > 0:
             return Decimal(str(proposal.size_usd)) / Decimal(str(proposal.entry_price))
         return Decimal(str(proposal.size_usd))
+
+    async def _check_position_limits(self, symbol: str) -> dict:
+        """
+        Check if opening a new position would exceed limits.
+
+        Args:
+            symbol: Trading symbol for the new position
+
+        Returns:
+            dict with 'allowed' bool and 'reason' string
+        """
+        # Get current open positions from tracker
+        if not self.position_tracker:
+            # If no tracker, allow the trade (limits can't be enforced)
+            return {"allowed": True, "reason": None}
+
+        try:
+            open_positions = await self.position_tracker.get_open_positions()
+
+            # Check total position limit
+            total_count = len(open_positions)
+            if total_count >= self._max_positions_total:
+                return {
+                    "allowed": False,
+                    "reason": f"Max total positions ({self._max_positions_total}) reached. "
+                              f"Current: {total_count}",
+                }
+
+            # Check per-symbol position limit
+            symbol_count = sum(1 for p in open_positions if p.symbol == symbol)
+            if symbol_count >= self._max_positions_per_symbol:
+                return {
+                    "allowed": False,
+                    "reason": f"Max positions for {symbol} ({self._max_positions_per_symbol}) reached. "
+                              f"Current: {symbol_count}",
+                }
+
+            return {"allowed": True, "reason": None}
+
+        except Exception as e:
+            logger.warning(f"Failed to check position limits: {e}")
+            # On error, allow the trade but log the issue
+            return {"allowed": True, "reason": None}
 
     def _to_kraken_symbol(self, symbol: str) -> str:
         """Convert internal symbol to Kraken format."""

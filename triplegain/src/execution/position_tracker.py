@@ -61,6 +61,13 @@ class Position:
     unrealized_pnl: Decimal = Decimal(0)
     unrealized_pnl_pct: Decimal = Decimal(0)
 
+    # Trailing stop fields
+    trailing_stop_enabled: bool = False
+    trailing_stop_activated: bool = False
+    trailing_stop_highest_price: Optional[Decimal] = None  # For LONG positions
+    trailing_stop_lowest_price: Optional[Decimal] = None   # For SHORT positions
+    trailing_stop_distance_pct: Decimal = Decimal("1.5")
+
     # Position metadata
     notes: str = ""
     tags: list[str] = field(default_factory=list)
@@ -128,6 +135,11 @@ class Position:
             "realized_pnl": str(self.realized_pnl),
             "unrealized_pnl": str(self.unrealized_pnl),
             "unrealized_pnl_pct": str(self.unrealized_pnl_pct),
+            "trailing_stop_enabled": self.trailing_stop_enabled,
+            "trailing_stop_activated": self.trailing_stop_activated,
+            "trailing_stop_highest_price": str(self.trailing_stop_highest_price) if self.trailing_stop_highest_price else None,
+            "trailing_stop_lowest_price": str(self.trailing_stop_lowest_price) if self.trailing_stop_lowest_price else None,
+            "trailing_stop_distance_pct": str(self.trailing_stop_distance_pct),
             "notes": self.notes,
             "tags": self.tags,
         }
@@ -152,6 +164,11 @@ class Position:
             realized_pnl=Decimal(data.get("realized_pnl", "0")),
             unrealized_pnl=Decimal(data.get("unrealized_pnl", "0")),
             unrealized_pnl_pct=Decimal(data.get("unrealized_pnl_pct", "0")),
+            trailing_stop_enabled=data.get("trailing_stop_enabled", False),
+            trailing_stop_activated=data.get("trailing_stop_activated", False),
+            trailing_stop_highest_price=Decimal(data["trailing_stop_highest_price"]) if data.get("trailing_stop_highest_price") else None,
+            trailing_stop_lowest_price=Decimal(data["trailing_stop_lowest_price"]) if data.get("trailing_stop_lowest_price") else None,
+            trailing_stop_distance_pct=Decimal(data.get("trailing_stop_distance_pct", "1.5")),
             notes=data.get("notes", ""),
             tags=data.get("tags", []),
         )
@@ -220,6 +237,12 @@ class PositionTracker:
         tracking_config = self.config.get('position_tracking', {})
         self._snapshot_interval_seconds = tracking_config.get('snapshot_interval_seconds', 60)
         self._max_snapshots = tracking_config.get('max_snapshots', 10000)
+
+        # Trailing stop configuration
+        trailing_config = self.config.get('trailing_stop', {})
+        self._trailing_stop_enabled = trailing_config.get('enabled', False)
+        self._trailing_stop_activation_pct = Decimal(str(trailing_config.get('activation_pct', 1.0)))
+        self._trailing_stop_distance_pct = Decimal(str(trailing_config.get('trail_distance_pct', 1.5)))
 
         # Price cache for P&L calculations
         self._price_cache: dict[str, Decimal] = {}
@@ -611,12 +634,117 @@ class PositionTracker:
                     reason=trigger_type,
                 )
 
+    async def update_trailing_stops(self, current_prices: dict[str, Decimal]) -> None:
+        """
+        Update trailing stops for all positions based on current prices.
+
+        This method:
+        1. Activates trailing stops when profit exceeds activation threshold
+        2. Updates the trailing stop level as price moves in favorable direction
+        3. Triggers stop when price retraces by trail distance
+
+        Args:
+            current_prices: Dict of symbol -> current price
+        """
+        if not self._trailing_stop_enabled:
+            return
+
+        async with self._lock:
+            for position in list(self._positions.values()):
+                if position.status != PositionStatus.OPEN:
+                    continue
+
+                if not position.trailing_stop_enabled:
+                    continue
+
+                price = current_prices.get(position.symbol)
+                if not price or position.entry_price == 0:
+                    continue
+
+                # Calculate current profit percentage
+                if position.side == PositionSide.LONG:
+                    profit_pct = ((price - position.entry_price) / position.entry_price) * 100
+                else:
+                    profit_pct = ((position.entry_price - price) / position.entry_price) * 100
+
+                # Check if trailing stop should be activated
+                if not position.trailing_stop_activated:
+                    if profit_pct >= self._trailing_stop_activation_pct:
+                        position.trailing_stop_activated = True
+                        if position.side == PositionSide.LONG:
+                            position.trailing_stop_highest_price = price
+                        else:
+                            position.trailing_stop_lowest_price = price
+                        logger.info(
+                            f"Trailing stop activated for {position.id}: "
+                            f"profit {float(profit_pct):.2f}% >= {float(self._trailing_stop_activation_pct)}%"
+                        )
+                    continue
+
+                # Update trailing stop for active positions
+                trail_distance = position.trailing_stop_distance_pct
+
+                if position.side == PositionSide.LONG:
+                    # Update highest price and calculate new stop
+                    if price > (position.trailing_stop_highest_price or Decimal(0)):
+                        position.trailing_stop_highest_price = price
+                        new_stop = price * (1 - trail_distance / 100)
+                        if position.stop_loss is None or new_stop > position.stop_loss:
+                            old_stop = position.stop_loss
+                            position.stop_loss = new_stop
+                            logger.debug(
+                                f"Trailing stop updated for {position.id}: "
+                                f"SL {old_stop} -> {new_stop}"
+                            )
+                else:
+                    # SHORT: Update lowest price and calculate new stop
+                    if price < (position.trailing_stop_lowest_price or Decimal("inf")):
+                        position.trailing_stop_lowest_price = price
+                        new_stop = price * (1 + trail_distance / 100)
+                        if position.stop_loss is None or new_stop < position.stop_loss:
+                            old_stop = position.stop_loss
+                            position.stop_loss = new_stop
+                            logger.debug(
+                                f"Trailing stop updated for {position.id}: "
+                                f"SL {old_stop} -> {new_stop}"
+                            )
+
+    def enable_trailing_stop_for_position(
+        self,
+        position_id: str,
+        distance_pct: Optional[Decimal] = None,
+    ) -> bool:
+        """
+        Enable trailing stop for a specific position.
+
+        Args:
+            position_id: Position ID
+            distance_pct: Optional custom trail distance percentage
+
+        Returns:
+            True if successfully enabled
+        """
+        position = self._positions.get(position_id)
+        if not position:
+            return False
+
+        position.trailing_stop_enabled = True
+        if distance_pct is not None:
+            position.trailing_stop_distance_pct = distance_pct
+        else:
+            position.trailing_stop_distance_pct = self._trailing_stop_distance_pct
+
+        logger.info(f"Trailing stop enabled for position {position_id}")
+        return True
+
     async def _snapshot_loop(self) -> None:
         """Background task to capture position snapshots and check SL/TP."""
         while self._running:
             try:
                 await asyncio.sleep(self._snapshot_interval_seconds)
                 await self._capture_snapshots()
+                # Update trailing stops
+                await self.update_trailing_stops(self._price_cache)
                 # Check SL/TP triggers during snapshot loop
                 await self._process_sl_tp_triggers()
             except asyncio.CancelledError:

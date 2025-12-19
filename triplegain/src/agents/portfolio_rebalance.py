@@ -15,7 +15,7 @@ import json
 import logging
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Optional, Any
 
@@ -86,6 +86,8 @@ class RebalanceTrade:
     amount_usd: Decimal
     execution_type: str = "limit"  # "market" or "limit"
     priority: int = 1  # Execution order
+    batch_index: int = 0  # DCA batch index (0 = immediate)
+    scheduled_time: Optional[datetime] = None  # When to execute (for DCA)
 
     def to_dict(self) -> dict:
         """Serialize to dictionary."""
@@ -95,6 +97,8 @@ class RebalanceTrade:
             "amount_usd": float(self.amount_usd),
             "execution_type": self.execution_type,
             "priority": self.priority,
+            "batch_index": self.batch_index,
+            "scheduled_time": self.scheduled_time.isoformat() if self.scheduled_time else None,
         }
 
 
@@ -105,6 +109,9 @@ class RebalanceOutput(AgentOutput):
     current_allocation: Optional[PortfolioAllocation] = None
     trades: list[RebalanceTrade] = field(default_factory=list)
     execution_strategy: str = "immediate"  # "immediate", "dca_24h", "limit_orders", "defer"
+    dca_batches: int = 1  # Number of DCA batches
+    dca_interval_hours: int = 0  # Hours between batches
+    total_trade_value_usd: Decimal = Decimal(0)  # Total trade value
 
     def to_dict(self) -> dict:
         """Serialize to dictionary."""
@@ -114,6 +121,9 @@ class RebalanceOutput(AgentOutput):
             "execution_strategy": self.execution_strategy,
             "current_allocation": self.current_allocation.to_dict() if self.current_allocation else None,
             "trades": [t.to_dict() for t in self.trades],
+            "dca_batches": self.dca_batches,
+            "dca_interval_hours": self.dca_interval_hours,
+            "total_trade_value_usd": float(self.total_trade_value_usd),
         })
         return base
 
@@ -165,6 +175,13 @@ class PortfolioRebalanceAgent(BaseAgent):
         self.threshold_pct = Decimal(str(rebalancing.get('threshold_pct', 5.0)))
         self.min_trade_usd = Decimal(str(rebalancing.get('min_trade_usd', 10.0)))
         self.default_execution_type = rebalancing.get('execution_type', 'limit')
+
+        # DCA (Dollar Cost Averaging) settings
+        dca_config = rebalancing.get('dca', {})
+        self.dca_enabled = dca_config.get('enabled', True)
+        self.dca_threshold_usd = Decimal(str(dca_config.get('threshold_usd', 500)))
+        self.dca_batches = dca_config.get('batches', 6)
+        self.dca_interval_hours = dca_config.get('interval_hours', 4)
 
         # Hodl bag configuration
         hodl = config.get('hodl_bags', {})
@@ -221,6 +238,9 @@ class PortfolioRebalanceAgent(BaseAgent):
             # Calculate required trades
             calculated_trades = self._calculate_rebalance_trades(allocation)
 
+            # Calculate total trade value before DCA split
+            total_trade_value = sum(t.amount_usd for t in calculated_trades)
+
             # Use LLM for execution strategy if we have trades
             execution_strategy = self.default_execution_type
             if calculated_trades and self.llm:
@@ -234,6 +254,13 @@ class PortfolioRebalanceAgent(BaseAgent):
                 except Exception as e:
                     logger.warning(f"LLM strategy decision failed, using defaults: {e}")
 
+            # Apply DCA batching for large rebalances
+            dca_trades, num_batches, interval_hours = self._create_dca_batches(calculated_trades)
+
+            # Update execution strategy if DCA applied
+            if num_batches > 1:
+                execution_strategy = "dca_24h"
+
             latency_ms = int((time.perf_counter() - start_time) * 1000)
 
             output = RebalanceOutput(
@@ -244,11 +271,15 @@ class PortfolioRebalanceAgent(BaseAgent):
                 reasoning=(
                     f"Deviation {float(allocation.max_deviation_pct):.1f}% "
                     f"exceeds threshold {float(self.threshold_pct)}%"
+                    + (f" (DCA: {num_batches} batches)" if num_batches > 1 else "")
                 ),
                 action="rebalance",
                 current_allocation=allocation,
-                trades=calculated_trades,
+                trades=dca_trades,
                 execution_strategy=execution_strategy,
+                dca_batches=num_batches,
+                dca_interval_hours=interval_hours,
+                total_trade_value_usd=total_trade_value,
                 latency_ms=latency_ms,
                 model_used=self.model,
             )
@@ -374,6 +405,60 @@ class PortfolioRebalanceAgent(BaseAgent):
 
         # Sort by priority (sells first, then buys)
         return sorted(trades, key=lambda t: t.priority)
+
+    def _create_dca_batches(
+        self,
+        trades: list[RebalanceTrade],
+    ) -> tuple[list[RebalanceTrade], int, int]:
+        """
+        Split trades into DCA batches if total value exceeds threshold.
+
+        Args:
+            trades: Original trades to potentially split
+
+        Returns:
+            Tuple of (dca_trades, num_batches, interval_hours)
+        """
+        if not trades or not self.dca_enabled:
+            return trades, 1, 0
+
+        total_value = sum(t.amount_usd for t in trades)
+
+        if total_value < self.dca_threshold_usd:
+            # Below threshold - execute immediately
+            return trades, 1, 0
+
+        # Split into DCA batches
+        num_batches = self.dca_batches
+        interval_hours = self.dca_interval_hours
+
+        dca_trades = []
+        now = datetime.now(timezone.utc)
+
+        for batch_idx in range(num_batches):
+            scheduled_time = now + timedelta(hours=batch_idx * interval_hours)
+
+            for trade in trades:
+                # Split trade amount across batches
+                batch_amount = trade.amount_usd / Decimal(num_batches)
+
+                if batch_amount >= self.min_trade_usd:
+                    dca_trades.append(RebalanceTrade(
+                        symbol=trade.symbol,
+                        action=trade.action,
+                        amount_usd=batch_amount,
+                        execution_type=trade.execution_type,
+                        priority=trade.priority,
+                        batch_index=batch_idx,
+                        scheduled_time=scheduled_time,
+                    ))
+
+        logger.info(
+            f"Created {len(dca_trades)} DCA trades across {num_batches} batches "
+            f"(total: ${float(total_value):.2f}, threshold: ${float(self.dca_threshold_usd):.2f})"
+        )
+
+        return dca_trades, num_batches, interval_hours
 
     async def _get_execution_strategy(
         self,

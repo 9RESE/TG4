@@ -5,7 +5,7 @@ Python trading system with TimescaleDB + 6-model LLM comparison
 
 ## Quick Commands
 ```bash
-pytest triplegain/tests/                            # Run all tests (916 passing)
+pytest triplegain/tests/                            # Run all tests (902 passing)
 pytest --cov=triplegain/src --cov-report=term       # Run with coverage (87%)
 docker-compose up -d timescaledb                    # Start database
 python -m data.kraken_db.gap_filler --db-url "$DB_URL"  # Fill data gaps
@@ -14,7 +14,7 @@ uvicorn triplegain.src.api.app:app --reload         # Start API server
 
 ## Current Phase: Phase 3 Complete
 
-**Status**: Phase 3 COMPLETE with deep review fixes (2025-12-19), ready for Phase 4 or paper trading
+**Status**: Phase 3 COMPLETE with all review fixes + enhancements (2025-12-19), ready for Phase 4 or paper trading
 
 | Phase | Status | Description |
 |-------|--------|-------------|
@@ -27,14 +27,14 @@ uvicorn triplegain.src.api.app:app --reload         # Start API server
 ### Phase 3 Deliverables (Completed)
 - **Message Bus**: In-memory pub/sub with topic routing, TTL, thread-safe
 - **Coordinator Agent**: DeepSeek V3 / Claude conflict resolution, agent scheduling, consensus building, state persistence, graceful degradation
-- **Portfolio Rebalance Agent**: 33/33/33 allocation, hodl bag exclusion, trade execution routing
-- **Order Execution Manager**: Kraken API integration, order lifecycle, retry logic, token bucket rate limiting, size validation
-- **Position Tracker**: P&L calculation, automatic SL/TP monitoring with triggers, leverage validation
+- **Portfolio Rebalance Agent**: 33/33/33 allocation, hodl bag exclusion, trade execution routing, DCA for large rebalances
+- **Order Execution Manager**: Kraken API integration, order lifecycle, retry logic, token bucket rate limiting, size validation, position limits enforcement
+- **Position Tracker**: P&L calculation, automatic SL/TP monitoring with triggers, leverage validation, trailing stops
 - **API Endpoints**: Coordinator, portfolio, positions, orders routes
-- **Database Migration**: 9 tables (orders, positions, hodl_bags, coordinator_state, etc.)
+- **Database Migration**: 9 tables (orders, positions, hodl_bags, coordinator_state, scheduled_trades, etc.)
 - **Config Files**: orchestration.yaml, portfolio.yaml, execution.yaml
-- **Test Coverage**: 916 tests, 87% coverage (227 new tests for Phase 3)
-- **Deep Review Fixes**: 12 issues addressed (see docs/development/reviews/phase-3/)
+- **Test Coverage**: 902 tests, 87% coverage
+- **Deep Review Fixes**: 12 initial + 3 minor + 3 enhancements (see docs/development/reviews/phase-3/)
 
 ### Phase 2 Deliverables (Completed)
 - **Base Agent Class**: Abstract interface with AgentOutput dataclass, validation, serialization
