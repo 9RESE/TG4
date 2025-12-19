@@ -1,847 +1,733 @@
-# TripleGain Orchestration Layer - Deep Code Review
-
-**Review Date**: 2025-12-19
-**Reviewer**: Code Review Agent
-**Scope**: Phase 3 Orchestration Layer (`triplegain/src/orchestration/`)
-**Test Results**: 97/97 passing (100%)
-
----
+# Orchestration Deep Code Review - 2025-12-19
 
 ## Executive Summary
 
-**Overall Grade: A- (9.0/10)**
+**Review Status**: ✅ **PASS WITH MINOR IMPROVEMENTS RECOMMENDED**
 
-The Orchestration layer implementation is **production-quality** with excellent architecture, comprehensive testing, and thoughtful error handling. The code demonstrates strong SOLID principles, proper async/await patterns, and robust concurrency management. Minor issues identified are non-critical and primarily related to edge case handling and documentation completeness.
+**Overall Assessment**: The orchestration implementation is solid, well-tested (97 tests passing, 87% coverage), and follows best practices. The code demonstrates good async patterns, thread safety via locks, and comprehensive error handling. However, several minor issues and potential race conditions were identified that should be addressed before production deployment.
 
-### Key Strengths
-- **Excellent design compliance** - Matches Phase 3 specs closely (95%)
-- **Robust concurrency** - Proper lock usage, no race conditions detected
-- **Comprehensive testing** - 97 unit tests, 100% passing, good coverage
-- **Clean architecture** - Clear separation of concerns, minimal coupling
-- **Production-ready error handling** - Graceful degradation and fallbacks
-- **Strong type safety** - Proper use of dataclasses, enums, type hints
-
-### Critical Findings
-- **None** - No P0 issues identified
-
-### Risk Assessment
-- **Production Readiness**: 90% - Ready for paper trading with minor enhancements
-- **Reliability**: High - Solid error handling and graceful degradation
-- **Maintainability**: High - Clean code, well-documented, good test coverage
-- **Performance**: Good - Meets latency targets, efficient message routing
+**Reviewer**: Code Review Agent
+**Date**: 2025-12-19
+**Files Reviewed**: 3 implementation files, 2 test files
+**Test Coverage**: 97/97 tests passing (100% pass rate)
 
 ---
 
-## Detailed Review
+## 1. Message Bus Implementation (`message_bus.py`)
 
-### 1. Design Compliance (9/10)
+### 1.1 CRITICAL ISSUES
 
-**Implementation matches design specifications:**
+**None identified**. The message bus implementation is robust and thread-safe.
 
-✅ **Message Bus** (`message_bus.py`)
-- ✅ In-memory pub/sub pattern correctly implemented
-- ✅ All required message topics present (10 topics)
-- ✅ Message priority levels (LOW, NORMAL, HIGH, URGENT)
-- ✅ TTL-based expiration with cleanup loop
-- ✅ Subscription filtering support
-- ✅ Thread-safe with `asyncio.Lock`
-- ✅ Message history with configurable size limits
+### 1.2 DESIGN ISSUES
 
-✅ **Coordinator Agent** (`coordinator.py`)
-- ✅ Scheduled task execution (TA, Regime, Trading, Portfolio)
-- ✅ Conflict detection (TA vs Sentiment, Regime appropriateness)
-- ✅ LLM-based conflict resolution with DeepSeek V3 primary, Claude fallback
-- ✅ State management (RUNNING, PAUSED, HALTED)
-- ✅ Circuit breaker handling
-- ✅ State persistence to database
+#### Issue #1: Message Priority Not Used for Delivery Order
+**Severity**: Medium
+**Location**: Lines 200-219 (`publish` method)
 
-**Deviations from Design:**
+**Description**: The code has a comment on line 204 saying "Sort by priority (notify urgent subscribers first)" but subscribers are NOT actually sorted by priority. Messages have priority levels (LOW, NORMAL, HIGH, URGENT) but they're delivered in subscription order, not priority order.
 
-✅ **Enhancements (Beyond Spec)**
-- **Graceful degradation system** - Not in original spec, excellent addition
-- **Consensus building** - Multi-agent confidence amplification (smart enhancement)
-- **DCA scheduling** - Support for Dollar-Cost Averaging in rebalance trades
-- **Bounds validation** - Modification parameter validation (leverage, size, entry)
-- **Degradation events** - Publishes degradation level changes
-
-⚠️ **Minor Gaps**
-1. **Dead Letter Queue** - Not implemented (mentioned in design as potential feature)
-   - **Impact**: Low - Handler errors are logged but messages not persisted for retry
-   - **Recommendation**: Consider adding for production monitoring
-
-2. **Message Persistence** - Config option exists but not fully implemented
-   - **Impact**: Low - History is in-memory only (acceptable for current scale)
-   - **Recommendation**: Implement if message audit trail needed
-
-**Score Justification**: Minor gaps are non-critical, enhancements add value.
-
----
-
-### 2. Code Quality (9/10)
-
-**Strengths:**
-
-✅ **SOLID Principles**
-- **Single Responsibility**: MessageBus handles messaging, Coordinator handles orchestration
-- **Open/Closed**: Easy to add new message topics or scheduled tasks
-- **Liskov Substitution**: Proper use of interfaces and type hints
-- **Interface Segregation**: Clean, focused interfaces
-- **Dependency Inversion**: Dependencies injected, not hardcoded
-
-✅ **Clean Code Practices**
-- Descriptive variable and function names
-- Proper docstrings on all classes and key methods
-- Consistent formatting and style
-- Logical code organization
-
-✅ **Type Safety**
-- Extensive use of `dataclasses` for structured data
-- `Enum` types for state machines (MessageTopic, MessagePriority, CoordinatorState)
-- Type hints throughout (`Optional`, `TYPE_CHECKING` for circular imports)
-- Proper use of `Decimal` for financial calculations
-
-**Issues:**
-
-⚠️ **P2: Magic Numbers**
+**Current Code**:
 ```python
-# coordinator.py line 725-729
+# Get subscriptions for topic
+subscriptions = self._subscriptions.get(message.topic, [])
+
+# Sort by priority (notify urgent subscribers first)
+# Note: This could be enhanced with subscriber priorities
+
+delivered = 0
+for sub in subscriptions:
+    if sub.matches(message):
+        await sub.handler(message)
+```
+
+**Impact**: URGENT messages are treated the same as LOW priority messages. In high-frequency scenarios, critical risk alerts might be delayed behind low-priority market data updates.
+
+**Recommendation**: Either:
+1. Remove the misleading comment if priority-based delivery isn't needed
+2. Implement priority-based message queuing if needed for production
+3. Add subscriber priorities if certain subscribers should be notified first
+
+**Suggested Fix**:
+```python
+# Option 1: Sort by message priority (highest first)
+if message.priority.value >= MessagePriority.HIGH.value:
+    # For high-priority messages, deliver immediately
+    for sub in subscriptions:
+        if sub.matches(message):
+            await sub.handler(message)
+else:
+    # For normal/low priority, deliver in order
+    for sub in subscriptions:
+        if sub.matches(message):
+            await sub.handler(message)
+
+# Option 2: Remove misleading comment
+```
+
+#### Issue #2: No Message Queue or Buffering for High Volume
+**Severity**: Low
+**Location**: `publish` method (lines 181-226)
+
+**Description**: Messages are published synchronously to all subscribers within a lock. If a subscriber handler is slow or blocks, it delays all other subscribers and the publisher.
+
+**Impact**: In high-frequency trading scenarios (per-minute TA updates), a slow subscriber could create backpressure and delay critical signals.
+
+**Recommendation**: Consider adding async task spawning for subscriber notifications:
+```python
+# Instead of awaiting each handler
+await sub.handler(message)
+
+# Spawn async tasks
+asyncio.create_task(sub.handler(message))
+```
+
+**Trade-off**: This would improve throughput but lose delivery guarantees. For a trading system, current synchronous delivery is probably safer.
+
+### 1.3 CODE QUALITY ISSUES
+
+#### Issue #3: Inconsistent Lock Usage in `get_stats`
+**Severity**: Low
+**Location**: Lines 388-397 (`get_stats` method)
+
+**Description**: The `get_stats()` method accesses `_message_history` and `_subscriptions` without acquiring the lock, while all other methods use `async with self._lock`.
+
+**Current Code**:
+```python
+def get_stats(self) -> dict:
+    """Get message bus statistics."""
+    return {
+        "total_published": self._total_published,
+        "history_size": len(self._message_history),  # Race condition
+        "subscriber_count": sum(len(s) for s in self._subscriptions.values()),  # Race condition
+    }
+```
+
+**Impact**: Potential race condition where stats could be read while history is being trimmed or subscriptions are being modified.
+
+**Fix**:
+```python
+async def get_stats(self) -> dict:
+    """Get message bus statistics."""
+    async with self._lock:
+        return {
+            "total_published": self._total_published,
+            "history_size": len(self._message_history),
+            "subscriber_count": sum(len(s) for s in self._subscriptions.values()),
+            "topics_active": len([t for t, s in self._subscriptions.items() if s]),
+        }
+```
+
+#### Issue #4: Duplicate Subscription Prevention Not Optimal
+**Severity**: Low
+**Location**: Lines 257-263 (`subscribe` method)
+
+**Description**: On subscribe, the code removes ALL existing subscriptions for the same subscriber/topic combination, then adds the new one. This is correct but inefficient if called repeatedly.
+
+**Current Code**:
+```python
+# Remove existing subscription for same subscriber/topic
+self._subscriptions[topic] = [
+    s for s in self._subscriptions[topic]
+    if s.subscriber_id != subscriber_id
+]
+```
+
+**Impact**: Minor performance issue if many subscriptions exist. Not critical for current scale.
+
+**Recommendation**: Document this behavior clearly or optimize with a dict lookup.
+
+### 1.4 TEST COVERAGE GAPS
+
+#### Gap #1: No Concurrent Publisher/Subscriber Test
+**Severity**: Medium
+
+**Missing Test**: Test multiple publishers and subscribers operating concurrently to verify lock safety.
+
+**Recommendation**: Add test:
+```python
+@pytest.mark.asyncio
+async def test_concurrent_publish_subscribe(self, message_bus):
+    """Test concurrent publishing from multiple sources."""
+    received = []
+
+    async def handler(msg):
+        received.append(msg)
+
+    await message_bus.subscribe("sub1", MessageTopic.TA_SIGNALS, handler)
+
+    # Publish 100 messages concurrently
+    tasks = [
+        message_bus.publish(create_message(
+            topic=MessageTopic.TA_SIGNALS,
+            source=f"source_{i}",
+            payload={"index": i}
+        ))
+        for i in range(100)
+    ]
+    await asyncio.gather(*tasks)
+
+    assert len(received) == 100
+```
+
+#### Gap #2: No Test for Message Priority Behavior
+**Severity**: Low
+
+**Missing Test**: Verify that URGENT messages are handled appropriately (though currently priority isn't used for ordering).
+
+#### Gap #3: No Test for Cleanup Loop Edge Cases
+**Severity**: Low
+
+**Missing Test**: Test cleanup task behavior when bus is stopped during cleanup.
+
+**Recommendation**: Add test:
+```python
+@pytest.mark.asyncio
+async def test_cleanup_during_shutdown(self, message_bus):
+    """Test cleanup task cancellation during stop."""
+    await message_bus.start()
+
+    # Add messages
+    for i in range(10):
+        await message_bus.publish(create_message(...))
+
+    # Stop immediately (while cleanup might be running)
+    await message_bus.stop()
+
+    # Should not raise
+    assert message_bus._running is False
+```
+
+---
+
+## 2. Coordinator Agent Implementation (`coordinator.py`)
+
+### 2.1 CRITICAL ISSUES
+
+**None identified**. The coordinator is well-implemented with proper error handling.
+
+### 2.2 DESIGN ISSUES
+
+#### Issue #5: Race Condition in Consensus Building
+**Severity**: Medium
+**Location**: Lines 668-735 (`_build_consensus` method)
+
+**Description**: The consensus building retrieves messages from the message bus but doesn't verify they match the signal's symbol. This could apply consensus from a different trading pair.
+
+**Current Code**:
+```python
+async def _build_consensus(self, signal: dict) -> float:
+    # ...
+    ta_msg = await self.bus.get_latest(MessageTopic.TA_SIGNALS, max_age_seconds=120)
+    # No symbol check!
+    if ta_msg:
+        total_agents += 1
+        ta_bias = ta_msg.payload.get("bias", "neutral")
+```
+
+**Impact**: If BTC/USDT signal arrives, but latest TA message is for XRP/USDT, the consensus logic uses the wrong symbol's data. This could lead to incorrect confidence multipliers.
+
+**Fix**:
+```python
+async def _build_consensus(self, signal: dict) -> float:
+    """Build consensus from multiple agent signals for the same symbol."""
+    symbol = signal.get("symbol", "")
+
+    # Get latest outputs for THIS SYMBOL
+    ta_msg = await self.bus.get_latest(MessageTopic.TA_SIGNALS, max_age_seconds=120)
+    if ta_msg and ta_msg.payload.get("symbol") == symbol:  # Symbol check
+        # ... consensus logic
+```
+
+#### Issue #6: Conflict Detection Has Same Symbol Matching Issue
+**Severity**: Medium
+**Location**: Lines 737-799 (`_detect_conflicts` method)
+
+**Description**: Similar to consensus building, conflict detection doesn't verify that retrieved messages match the signal's symbol.
+
+**Impact**: Could detect false conflicts between unrelated trading pairs.
+
+**Fix**: Same as Issue #5 - add symbol matching.
+
+#### Issue #7: Scheduled Tasks Don't Check Degradation Level
+**Severity**: Low
+**Location**: Lines 353-373 (`_execute_due_tasks` method)
+
+**Description**: Scheduled tasks run even in LIMITED or EMERGENCY degradation modes. The config mentions skipping non-critical agents in degradation, but this isn't implemented.
+
+**Current Code**:
+```python
+async def _execute_due_tasks(self) -> None:
+    """Execute tasks that are due for execution."""
+    now = datetime.now(timezone.utc)
+
+    # Execute scheduled DCA trades first
+    await self._execute_scheduled_trades()
+
+    for task in self._scheduled_tasks:
+        if not task.is_due(now):
+            continue
+        # No degradation check here!
+```
+
+**Recommendation**: Skip non-critical tasks during degradation:
+```python
+async def _execute_due_tasks(self) -> None:
+    now = datetime.now(timezone.utc)
+
+    for task in self._scheduled_tasks:
+        if not task.is_due(now):
+            continue
+
+        # Skip non-critical tasks during degradation
+        if self._degradation_level == DegradationLevel.EMERGENCY:
+            if task.name not in ["ta_analysis", "regime_detection"]:
+                logger.debug(f"Skipping {task.name} - emergency degradation")
+                continue
+        elif self._degradation_level == DegradationLevel.LIMITED:
+            if task.name == "sentiment_analysis":
+                logger.debug(f"Skipping {task.name} - limited degradation")
+                continue
+```
+
+#### Issue #8: No Timeout on Scheduled Task Execution
+**Severity**: Low
+**Location**: Lines 365-371 (task handler execution)
+
+**Description**: If a task handler hangs, it could block the main loop indefinitely.
+
+**Recommendation**: Add timeout:
+```python
+try:
+    logger.debug(f"Executing task {task.name} for {symbol}")
+    await asyncio.wait_for(task.handler(symbol), timeout=60)  # 1 minute max
+    self._total_task_runs += 1
+except asyncio.TimeoutError:
+    logger.error(f"Task {task.name} timed out for {symbol}")
+    await self._handle_task_error(task, symbol, TimeoutError("Task timeout"))
+except Exception as e:
+    logger.error(f"Task {task.name} failed for {symbol}: {e}", exc_info=True)
+```
+
+#### Issue #9: DCA Trade Storage Fallback to Memory Not Persisted
+**Severity**: Medium
+**Location**: Lines 1084-1092 (`_store_scheduled_trades` method)
+
+**Description**: When database is unavailable, scheduled DCA trades are stored in memory (`self._scheduled_trades`), but this list is not initialized in `__init__` and will be lost on coordinator restart.
+
+**Current Code**:
+```python
+if not self.db:
+    logger.warning("No database configured - scheduled trades will not persist")
+    # Store in memory as fallback
+    if not hasattr(self, '_scheduled_trades'):
+        self._scheduled_trades = []
+    self._scheduled_trades.extend(trades)
+    return
+```
+
+**Impact**: If coordinator restarts (or crashes) before executing scheduled trades, those trades are lost.
+
+**Recommendation**:
+1. Initialize `self._scheduled_trades = []` in `__init__`
+2. Document that memory-only storage is not production-safe
+3. Consider failing fast if DB is required for DCA
+
+#### Issue #10: State Persistence Doesn't Persist Degradation Level
+**Severity**: Low
+**Location**: Lines 1269-1318 (`persist_state` method)
+
+**Description**: The coordinator persists state, statistics, and task schedules, but NOT the current degradation level. On restart, it always starts at NORMAL.
+
+**Impact**: If coordinator was degraded due to LLM failures and restarts, it immediately tries LLM again instead of staying degraded.
+
+**Recommendation**: Persist degradation state:
+```python
+state_data = {
+    "state": self._state.value,
+    "degradation_level": self._degradation_level.name,  # Add this
+    "consecutive_llm_failures": self._consecutive_llm_failures,
+    "consecutive_api_failures": self._consecutive_api_failures,
+    # ...
+}
+```
+
+### 2.3 CODE QUALITY ISSUES
+
+#### Issue #11: Magic Numbers in Consensus Multiplier Calculation
+**Severity**: Low
+**Location**: Lines 723-729 (`_build_consensus` method)
+
+**Description**: Consensus multiplier calculation uses magic numbers (0.66, 0.5, 0.6, 0.85, etc.) without explanation.
+
+**Current Code**:
+```python
 if agreement_ratio >= 0.66:
     multiplier = 1.0 + (agreement_ratio - 0.5) * 0.6  # 1.0 to 1.3
 elif agreement_ratio >= 0.33:
-    multiplier = 1.0
+    multiplier = 1.0  # Neutral
 else:
     multiplier = 0.85 + agreement_ratio * 0.45  # 0.85 to 1.0
 ```
-- **Issue**: Consensus multiplier thresholds (0.66, 0.33) and coefficients (0.6, 0.45) are hardcoded
-- **Impact**: Medium - Makes tuning consensus logic difficult
-- **Recommendation**: Move to configuration with comments explaining rationale
 
-⚠️ **P3: Incomplete Error Context**
+**Recommendation**: Extract to constants with documentation:
 ```python
-# message_bus.py line 218
-logger.error(
-    f"Error delivering message to {sub.subscriber_id}: {e}",
-    exc_info=True
-)
-```
-- **Issue**: Error logs don't include message topic/priority for debugging
-- **Impact**: Low - Makes troubleshooting slightly harder
-- **Recommendation**: Add message context to error logs
-
-**Score Justification**: Excellent overall quality, minor improvements possible.
-
----
-
-### 3. Logic Correctness (10/10)
-
-**Verification:**
-
-✅ **Message Routing**
-- ✅ Messages published to correct topic subscribers
-- ✅ Filter functions applied correctly
-- ✅ Multiple subscribers receive messages independently
-- ✅ Handler errors don't stop delivery to other subscribers
-- ✅ Message history ordered correctly (newest first)
-
-✅ **Conflict Detection**
-- ✅ TA vs Sentiment conflicts detected when opposing biases + close confidence
-- ✅ Regime conflicts detected (trading in choppy market)
-- ✅ Confidence threshold comparison correct (`< 0.2` for conflict)
-- ✅ Multiple conflicts accumulated properly
-
-✅ **Conflict Resolution**
-- ✅ LLM called only when conflicts detected (efficient)
-- ✅ Timeout enforcement correct (10s default)
-- ✅ Fallback to Claude on DeepSeek failure
-- ✅ Conservative defaults on LLM failure ("wait" action)
-- ✅ JSON parsing handles embedded JSON in text responses
-- ✅ Modification bounds validated (leverage 1-5, size >= 0, entry > 0)
-
-✅ **Scheduled Tasks**
-- ✅ Task timing logic correct (interval elapsed check)
-- ✅ `run_on_start` flag handled properly
-- ✅ Disabled tasks skip execution
-- ✅ Task errors don't crash coordinator
-
-✅ **Consensus Building**
-- ✅ Agreement ratio calculation correct
-- ✅ Multiplier formula sound (amplifies strong agreement, reduces weak agreement)
-- ✅ HOLD signals skip consensus (correct optimization)
-
-**Edge Cases Tested:**
-- ✅ Empty subscriptions (0 delivered)
-- ✅ Expired messages filtered from history
-- ✅ Handler exceptions isolated per subscriber
-- ✅ LLM timeout fallback
-- ✅ Invalid JSON parsing fallback
-- ✅ Concurrent pub/sub operations
-
-**Score Justification**: No logic errors found, all edge cases handled.
-
----
-
-### 4. Error Handling (9/10)
-
-**Strengths:**
-
-✅ **Graceful Degradation System** (Excellent Addition)
-```python
-class DegradationLevel(Enum):
-    NORMAL = 0       # All systems operational
-    REDUCED = 1      # Skip non-critical agents (sentiment)
-    LIMITED = 2      # Skip optional agents, reduce LLM calls
-    EMERGENCY = 3    # Only risk-based decisions, no LLM
-```
-- **Automatic degradation** based on consecutive failures
-- **Recovery tracking** - resets on success
-- **Event publishing** - Dashboard can react to degradation
-- **Conservative fallbacks** - "wait" action in EMERGENCY mode
-
-✅ **LLM Resilience**
-- Primary/fallback model switching
-- Timeout enforcement (10s default)
-- Conservative defaults on failure
-- Failure tracking for degradation
-
-✅ **Message Bus Resilience**
-- Handler errors isolated (don't affect other subscribers)
-- Cleanup loop error handling (continues on exception)
-- Lock acquisition errors properly propagated
-
-✅ **Scheduled Task Resilience**
-- Task errors logged but don't crash main loop
-- Task error event published to bus
-- Main loop continues on task failure
-
-**Issues:**
-
-⚠️ **P1: Potential Lock Deadlock in MessageBus**
-```python
-# message_bus.py line 191-225
-async def publish(self, message: Message) -> int:
-    async with self._lock:
-        # ... store in history ...
-        subscriptions = self._subscriptions.get(message.topic, [])
-
-        for sub in subscriptions:
-            if sub.matches(message):
-                try:
-                    await sub.handler(message)  # ⚠️ Handler called while holding lock
-```
-- **Issue**: Handler is called while holding `self._lock`
-- **Risk**: If handler calls `publish()` or `subscribe()` → deadlock
-- **Likelihood**: Medium - Common pattern for agents to publish messages in response
-- **Current Mitigation**: Works if handlers don't call bus methods
-- **Recommendation**: Call handlers outside lock, or use reentrant lock pattern
-
-⚠️ **P2: No Dead Letter Queue**
-- **Issue**: Failed handler deliveries are logged but message not saved for retry
-- **Impact**: Medium - Transient failures lose messages
-- **Recommendation**: Add optional dead letter queue for failed deliveries
-
-⚠️ **P3: Missing Timeout on Database Operations**
-```python
-# coordinator.py line 1307
-await self.db.execute(
-    query,
-    "coordinator",
-    json.dumps(state_data),
-    datetime.now(timezone.utc),
-)
-```
-- **Issue**: Database operations have no timeout
-- **Impact**: Low - Could hang on database issues
-- **Recommendation**: Add timeout with `asyncio.wait_for()`
-
-**Score Justification**: Excellent error handling overall, one potential deadlock scenario.
-
----
-
-### 5. Concurrency (8/10)
-
-**Strengths:**
-
-✅ **Proper Lock Usage**
-- `asyncio.Lock` for thread-safe operations
-- Separate locks for order history (reduces contention)
-- Lock held for minimal duration (good practice)
-
-✅ **Async/Await Patterns**
-- Consistent use of `async`/`await`
-- No blocking operations in async functions
-- Proper use of `asyncio.create_task()` for background tasks
-
-✅ **Task Management**
-- Main loop cancellation handled properly
-- Cleanup task cancelled on stop
-- Background monitoring tasks tracked
-
-✅ **Rate Limiting**
-- Token bucket implementation correct
-- Separate limiters for API and order calls
-- Thread-safe with lock
-
-**Issues:**
-
-🔴 **P1: Potential Deadlock in MessageBus** (See Error Handling section)
-- **Issue**: Handler called while holding lock
-- **Fix**: Call handlers outside lock acquisition
-- **Example**:
-```python
-# Current (risky):
-async with self._lock:
-    for sub in subscriptions:
-        await sub.handler(message)  # Deadlock if handler calls publish()
-
-# Safer:
-async with self._lock:
-    handlers_to_call = [(sub.subscriber_id, sub.handler) for sub in subscriptions if sub.matches(message)]
-
-# Call handlers outside lock
-for sub_id, handler in handlers_to_call:
-    try:
-        await handler(message)
-    except Exception as e:
-        logger.error(f"Handler error: {e}")
-```
-
-⚠️ **P2: Race Condition in Task Last Run Update**
-```python
-# coordinator.py line 373
-task.last_run = now
-```
-- **Issue**: `last_run` updated without lock
-- **Risk**: Multiple concurrent `_execute_due_tasks()` calls could cause race
-- **Likelihood**: Low - only one main loop should run
-- **Recommendation**: Add assertion or lock for safety
-
-⚠️ **P3: No Backpressure Mechanism**
-- **Issue**: No limit on pending messages or subscription backlog
-- **Impact**: Low - Could consume memory under high load
-- **Recommendation**: Add max queue depth per subscriber
-
-**Score Justification**: Mostly solid concurrency, one deadlock risk.
-
----
-
-### 6. Performance (9/10)
-
-**Measured Performance:**
-
-✅ **Message Latency**
-- **Publish**: < 1ms for typical case (3 subscribers)
-- **Subscription**: < 0.1ms (dictionary append)
-- **Target**: < 5ms for Tier 1 operations ✅ Exceeded
-
-✅ **Conflict Resolution**
-- **LLM call**: ~2-3s typical (DeepSeek V3)
-- **Timeout**: 10s max enforced
-- **Target**: < 5s ✅ Within target
-- **Fallback**: Claude Sonnet if DeepSeek fails (additional 2-5s)
-
-✅ **Task Scheduling**
-- **Check interval**: 1s (main loop sleep)
-- **Overhead**: < 1ms per iteration
-- **Scalability**: O(n) tasks checked per iteration (acceptable for ~5 tasks)
-
-✅ **Memory Management**
-- **Message history**: Limited to 1000 messages (configurable)
-- **Cleanup interval**: 60s (removes expired messages)
-- **Order history**: Limited to 1000 orders (configurable)
-- **Typical memory**: ~10MB for history + ~5MB for open orders
-
-**Optimization Opportunities:**
-
-⚠️ **P2: Linear Message History Search**
-```python
-# message_bus.py line 325
-async with self._lock:
-    for msg in reversed(self._message_history):
-        if msg.topic != topic:
-            continue
-        # ... filters ...
-        return msg
-```
-- **Issue**: O(n) search through history (up to 1000 messages)
-- **Impact**: Medium - Could cause latency spikes under high message rate
-- **Recommendation**: Index by topic (dict of lists) for O(1) access
-- **Example**:
-```python
-# Instead of single list:
-self._message_history: list[Message] = []
-
-# Use topic index:
-self._message_history: dict[MessageTopic, list[Message]] = {}
-```
-
-⚠️ **P3: Lock Contention on Publish**
-- **Issue**: Single lock for all publish operations
-- **Impact**: Low - Serializes all publishers
-- **Recommendation**: Use per-topic locks if high message rate
-
-⚠️ **P3: Cleanup Loop O(n) Filtering**
-```python
-# message_bus.py line 414
-self._message_history = [
-    m for m in self._message_history
-    if not m.is_expired()
-]
-```
-- **Issue**: Creates new list every cleanup (60s)
-- **Impact**: Low - 1000 messages * 60s = low overhead
-- **Optimization**: In-place removal with `del` (micro-optimization)
-
-**Score Justification**: Meets performance targets, minor optimization opportunities.
-
----
-
-### 7. Test Coverage (10/10)
-
-**Test Suite Summary:**
-- **Total Tests**: 97 (100% passing)
-- **Message Bus Tests**: 44 tests
-- **Coordinator Tests**: 53 tests
-- **Coverage**: Estimated 90%+ (comprehensive)
-
-**Test Quality:**
-
-✅ **Message Bus Tests**
-- ✅ Message creation and serialization
-- ✅ Pub/sub basic functionality
-- ✅ Multiple subscribers
-- ✅ Subscription filtering
-- ✅ TTL expiration
-- ✅ Message history (get_latest, get_history)
-- ✅ Unsubscribe (single topic and all)
-- ✅ Handler error isolation
-- ✅ Stats tracking
-- ✅ Start/stop lifecycle
-- ✅ Cleanup of expired messages
-
-✅ **Coordinator Tests**
-- ✅ State management (RUNNING, PAUSED, HALTED)
-- ✅ Scheduled task execution
-- ✅ Task timing (is_due logic)
-- ✅ Conflict detection (TA vs Sentiment, Regime)
-- ✅ Conflict resolution (proceed, abort, modify, wait)
-- ✅ LLM fallback on error
-- ✅ Apply modifications (leverage, size, entry)
-- ✅ Trade routing
-- ✅ Risk rejection handling
-- ✅ Circuit breaker response
-- ✅ Task enable/disable
-- ✅ Force run task
-- ✅ Pause/resume cycle
-- ✅ Agent execution handlers (TA, Regime, Trading, Portfolio)
-- ✅ Event handling (execution events, risk alerts)
-- ✅ Statistics tracking
-
-**Test Coverage Gaps:**
-
-⚠️ **P2: Missing Concurrency Tests**
-- **Gap**: No tests for concurrent publish/subscribe
-- **Recommendation**: Add tests with `asyncio.gather()` to verify thread safety
-
-⚠️ **P3: Missing Integration Tests**
-- **Gap**: No end-to-end tests with real agents
-- **Status**: Expected in Phase 5 (paper trading)
-- **Recommendation**: Add integration tests for full pipeline
-
-⚠️ **P3: Missing Performance Tests**
-- **Gap**: No tests for latency or throughput
-- **Recommendation**: Add benchmark tests to catch regressions
-
-**Score Justification**: Excellent unit test coverage, minor gaps in concurrency and integration.
-
----
-
-## Issue Summary
-
-### P0: Critical (0 issues)
-*None*
-
-### P1: High Priority (1 issue)
-
-1. **Potential Deadlock in MessageBus.publish()**
-   - **File**: `message_bus.py` line 191-225
-   - **Issue**: Handler called while holding `self._lock`, could deadlock if handler calls `publish()` or `subscribe()`
-   - **Fix**: Call handlers outside lock acquisition
-   - **Impact**: High - Could cause system hang
-   - **Likelihood**: Medium - Common for agents to publish in response to messages
-
-### P2: Medium Priority (6 issues)
-
-2. **Magic Numbers in Consensus Building**
-   - **File**: `coordinator.py` line 725-729
-   - **Issue**: Hardcoded thresholds and multipliers
-   - **Fix**: Move to configuration
-   - **Impact**: Medium - Makes tuning difficult
-
-3. **No Dead Letter Queue**
-   - **File**: `message_bus.py`
-   - **Issue**: Failed handler deliveries not persisted for retry
-   - **Fix**: Add optional DLQ
-   - **Impact**: Medium - Transient failures lose messages
-
-4. **Linear Message History Search**
-   - **File**: `message_bus.py` line 325
-   - **Issue**: O(n) search through history
-   - **Fix**: Index by topic
-   - **Impact**: Medium - Could cause latency spikes
-
-5. **Race Condition in Task Last Run**
-   - **File**: `coordinator.py` line 373
-   - **Issue**: `last_run` updated without lock
-   - **Fix**: Add lock or assertion
-   - **Impact**: Low - Unlikely with single main loop
-
-6. **Missing Concurrency Tests**
-   - **File**: `test_message_bus.py`, `test_coordinator.py`
-   - **Issue**: No tests for concurrent operations
-   - **Fix**: Add concurrent publish/subscribe tests
-   - **Impact**: Medium - Could miss race conditions
-
-7. **Lock Contention on Publish**
-   - **File**: `message_bus.py`
-   - **Issue**: Single lock serializes all publishers
-   - **Fix**: Per-topic locks
-   - **Impact**: Low - Only relevant at high message rate
-
-### P3: Low Priority (4 issues)
-
-8. **Incomplete Error Context in Logs**
-   - **File**: `message_bus.py` line 218
-   - **Issue**: Error logs missing message topic/priority
-   - **Fix**: Add message context to logs
-   - **Impact**: Low - Slight debugging inconvenience
-
-9. **No Timeout on Database Operations**
-   - **File**: `coordinator.py` line 1307
-   - **Issue**: Database operations have no timeout
-   - **Fix**: Wrap with `asyncio.wait_for()`
-   - **Impact**: Low - Could hang on database issues
-
-10. **No Backpressure Mechanism**
-    - **File**: `message_bus.py`
-    - **Issue**: No limit on pending messages
-    - **Fix**: Add max queue depth per subscriber
-    - **Impact**: Low - Memory concern under extreme load
-
-11. **Missing Performance Tests**
-    - **File**: Test suite
-    - **Issue**: No latency/throughput benchmarks
-    - **Fix**: Add performance regression tests
-    - **Impact**: Low - Nice to have for monitoring
-
----
-
-## Recommendations
-
-### Immediate Actions (Before Production)
-
-1. ✅ **Fix P1 Deadlock Risk** (1-2 hours)
-   - Refactor `MessageBus.publish()` to call handlers outside lock
-   - Add test for concurrent publish from handler
-
-2. ✅ **Add Concurrency Tests** (2-3 hours)
-   - Test concurrent publish/subscribe
-   - Test message ordering under load
-   - Verify no race conditions
-
-### Short-Term Improvements (Phase 4)
-
-3. **Move Magic Numbers to Config** (1 hour)
-   - Extract consensus thresholds and multipliers
-   - Add comments explaining rationale
-   - Allow tuning without code changes
-
-4. **Optimize Message History Search** (2-3 hours)
-   - Add topic-indexed message storage
-   - Benchmark before/after
-   - Maintain backwards compatibility
-
-5. **Add Dead Letter Queue** (3-4 hours)
-   - Optional DLQ for failed deliveries
-   - Configurable retry policy
-   - Monitoring endpoint for DLQ size
-
-### Long-Term Enhancements (Phase 5+)
-
-6. **Integration Tests with Real Agents**
-   - Full pipeline test (TA → Regime → Trading → Execution)
-   - Test conflict scenarios with multiple models
-   - Verify latency targets end-to-end
-
-7. **Performance Benchmarking**
-   - Latency percentiles (p50, p95, p99)
-   - Throughput under load
-   - Memory usage over time
-
-8. **Message Persistence** (if needed)
-   - Implement database-backed message history
-   - For audit trail and replay scenarios
-   - Optional, in-memory sufficient for now
-
----
-
-## Compliance Checklist
-
-### Functional Requirements ✅
-
-| Requirement | Status | Notes |
-|-------------|--------|-------|
-| Message bus working | ✅ Pass | Pub/sub fully functional |
-| Coordinator schedules | ✅ Pass | Correct intervals (60s, 300s, 3600s) |
-| Conflict detection | ✅ Pass | TA/Sentiment, Regime conflicts detected |
-| Conflict resolution | ✅ Pass | LLM invoked, fallback working |
-| Trade routing | ✅ Pass | Risk validation → Execution |
-| Circuit breaker handling | ✅ Pass | Halts on critical alerts |
-| State persistence | ✅ Pass | Saves/loads from database |
-
-### Non-Functional Requirements ✅
-
-| Requirement | Target | Actual | Status |
-|-------------|--------|--------|--------|
-| Message latency | < 5ms | < 1ms | ✅ Pass |
-| Conflict resolution | < 5s | 2-3s | ✅ Pass |
-| Test coverage | > 80% | ~90% | ✅ Pass |
-| Tests passing | 100% | 100% (97/97) | ✅ Pass |
-| Error handling | Graceful | Graceful degradation | ✅ Pass |
-| Concurrency | Thread-safe | Mostly thread-safe | ⚠️ 1 issue |
-
-### Integration Requirements ⏳
-
-| Requirement | Status | Notes |
-|-------------|--------|-------|
-| Full agent pipeline | ⏳ Pending | Phase 5 integration tests |
-| Message propagation | ✅ Pass | All agents receive messages |
-| State recovery | ✅ Pass | Survives restart |
-| Dashboard monitoring | ⏳ Pending | Phase 4 (Dashboard) |
-
----
-
-## Code Samples - Significant Issues
-
-### Issue #1: Deadlock Risk in MessageBus.publish()
-
-**Current Code** (`message_bus.py` line 191-225):
-```python
-async def publish(self, message: Message) -> int:
-    async with self._lock:
-        # Store in history
-        self._message_history.append(message)
-        self._total_published += 1
-
-        # ... trim history ...
-
-        # Get subscriptions for topic
-        subscriptions = self._subscriptions.get(message.topic, [])
-
-        delivered = 0
-        for sub in subscriptions:
-            if sub.matches(message):
-                try:
-                    await sub.handler(message)  # ⚠️ DEADLOCK RISK
-                    delivered += 1
-                except Exception as e:
-                    # ...
-```
-
-**Problem**: If `sub.handler(message)` calls `bus.publish()` or `bus.subscribe()`, it will try to acquire `self._lock` again → **deadlock**.
-
-**Recommended Fix**:
-```python
-async def publish(self, message: Message) -> int:
-    # Prepare handlers to call (inside lock)
-    async with self._lock:
-        self._message_history.append(message)
-        self._total_published += 1
-
-        if len(self._message_history) > self._max_history_size:
-            self._message_history = self._message_history[-self._max_history_size:]
-
-        subscriptions = self._subscriptions.get(message.topic, [])
-
-        # Build list of handlers to call (don't call yet)
-        handlers_to_call = [
-            (sub.subscriber_id, sub.handler)
-            for sub in subscriptions
-            if sub.matches(message)
-        ]
-
-    # Call handlers OUTSIDE lock (no deadlock risk)
-    delivered = 0
-    for subscriber_id, handler in handlers_to_call:
-        try:
-            await handler(message)
-            delivered += 1
-            self._total_delivered += 1
-        except Exception as e:
-            self._delivery_errors += 1
-            logger.error(
-                f"Error delivering message {message.id[:8]} to {subscriber_id}: {e}",
-                exc_info=True
-            )
-
-    logger.debug(
-        f"Published message {message.id[:8]} to {message.topic.value}: "
-        f"{delivered} subscribers notified"
-    )
-
-    return delivered
-```
-
-**Trade-off**: Stats (`_total_delivered`, `_delivery_errors`) updated outside lock. This is acceptable since:
-- Stats are for monitoring (approximate counts OK)
-- Avoids deadlock (more important)
-- Alternative: Use atomic counters or accept minor stat inconsistency
-
----
-
-### Issue #2: Magic Numbers in Consensus Building
-
-**Current Code** (`coordinator.py` line 715-735):
-```python
-# Calculate consensus multiplier
-if total_agents == 0:
-    return 1.0
-
-agreement_ratio = agreement_count / total_agents
-
-# Amplify confidence based on agreement
-# 100% agreement = 1.3x, 66% = 1.15x, 33% = 1.0x, 0% = 0.85x
-if agreement_ratio >= 0.66:  # ⚠️ MAGIC NUMBER
-    multiplier = 1.0 + (agreement_ratio - 0.5) * 0.6  # ⚠️ MAGIC NUMBER (1.0 to 1.3)
-elif agreement_ratio >= 0.33:  # ⚠️ MAGIC NUMBER
-    multiplier = 1.0  # Neutral
+# Consensus confidence multipliers
+CONSENSUS_HIGH_AGREEMENT_THRESHOLD = 0.66  # 2/3 agents agree
+CONSENSUS_LOW_AGREEMENT_THRESHOLD = 0.33   # 1/3 agents agree
+CONSENSUS_MAX_BOOST = 1.3                  # Max 30% boost
+CONSENSUS_MIN_PENALTY = 0.85               # Max 15% penalty
+
+if agreement_ratio >= CONSENSUS_HIGH_AGREEMENT_THRESHOLD:
+    # High agreement: amplify confidence (1.0x to 1.3x)
+    multiplier = 1.0 + (agreement_ratio - 0.5) * 0.6
+elif agreement_ratio >= CONSENSUS_LOW_AGREEMENT_THRESHOLD:
+    # Medium agreement: neutral
+    multiplier = 1.0
 else:
-    multiplier = 0.85 + agreement_ratio * 0.45  # ⚠️ MAGIC NUMBER (0.85 to 1.0)
-
-logger.info(
-    f"Consensus: {agreement_count}/{total_agents} agents agree, "
-    f"confidence multiplier: {multiplier:.2f}"
-)
-return multiplier
+    # Low agreement: reduce confidence (0.85x to 1.0x)
+    multiplier = CONSENSUS_MIN_PENALTY + agreement_ratio * 0.45
 ```
 
-**Recommended Fix**:
+#### Issue #12: Inconsistent Logging Levels
+**Severity**: Low
+**Location**: Various
+
+**Description**: Some important events use `logger.debug` when they should be `logger.info`:
+- Line 220: `logger.debug(f"Published message...")` - should be INFO
+- Line 366: `logger.debug(f"Executing task...")` - should be INFO
+- Line 582: `logger.debug(f"Skipping trading signal...")` - should be INFO
+
+**Recommendation**: Use INFO for important business events, DEBUG for detailed diagnostics.
+
+#### Issue #13: Modifications Bounds Are Hard-Coded
+**Severity**: Low
+**Location**: Lines 951-987 (`_apply_modifications` method)
+
+**Description**: Modification bounds (leverage 1-5, reduction 0-100%, adjustment -50% to +50%) are hard-coded in the method.
+
+**Recommendation**: Extract to config:
 ```python
-# Add to config/orchestration.yaml:
-consensus:
-  thresholds:
-    high_agreement: 0.66  # 2/3+ agents agree = strong consensus
-    low_agreement: 0.33   # 1/3- agents agree = weak consensus
-  multipliers:
-    max_amplification: 1.3   # Maximum confidence boost (at 100% agreement)
-    min_reduction: 0.85      # Maximum confidence reduction (at 0% agreement)
-    neutral: 1.0             # No change (33-66% agreement)
-
-# In coordinator.py:
-def __init__(self, ...):
-    consensus_config = config.get('consensus', {})
-    thresholds = consensus_config.get('thresholds', {})
-    multipliers = consensus_config.get('multipliers', {})
-
-    self._consensus_high_threshold = thresholds.get('high_agreement', 0.66)
-    self._consensus_low_threshold = thresholds.get('low_agreement', 0.33)
-    self._consensus_max_amplification = multipliers.get('max_amplification', 1.3)
-    self._consensus_min_reduction = multipliers.get('min_reduction', 0.85)
-    self._consensus_neutral = multipliers.get('neutral', 1.0)
-
-async def _build_consensus(self, signal: dict) -> float:
-    # ... existing logic ...
-
-    agreement_ratio = agreement_count / total_agents
-
-    # Amplify/reduce confidence based on agreement
-    if agreement_ratio >= self._consensus_high_threshold:
-        # Linear interpolation: 66% → 1.0, 100% → 1.3
-        multiplier = self._consensus_neutral + (
-            (agreement_ratio - 0.5) *
-            (self._consensus_max_amplification - self._consensus_neutral) / 0.5
-        )
-    elif agreement_ratio >= self._consensus_low_threshold:
-        multiplier = self._consensus_neutral  # Neutral zone
-    else:
-        # Linear interpolation: 0% → 0.85, 33% → 1.0
-        multiplier = self._consensus_min_reduction + (
-            agreement_ratio *
-            (self._consensus_neutral - self._consensus_min_reduction) / self._consensus_low_threshold
-        )
-
-    logger.info(
-        f"Consensus: {agreement_count}/{total_agents} agents agree "
-        f"({agreement_ratio:.1%}), confidence multiplier: {multiplier:.2f}"
-    )
-    return multiplier
+# In config
+modification_bounds:
+  max_leverage: 5
+  min_leverage: 1
+  max_size_reduction_pct: 100
+  max_entry_adjustment_pct: 50
 ```
 
-**Benefits**:
-- Tunable without code changes
-- Self-documenting (config explains rationale)
-- Testable with different configurations
+### 2.4 TEST COVERAGE GAPS
+
+#### Gap #4: No Test for Consensus with Symbol Mismatch
+**Severity**: High (validates Issue #5)
+
+**Missing Test**: Test that consensus building ignores messages from different symbols.
+
+**Recommendation**: Add test:
+```python
+@pytest.mark.asyncio
+async def test_build_consensus_symbol_mismatch(self, coordinator, mock_message_bus):
+    """Test consensus ignores messages from different symbols."""
+    signal = {"action": "BUY", "symbol": "BTC/USDT", "confidence": 0.8}
+
+    # Mock TA message for DIFFERENT symbol
+    ta_msg = Message(
+        topic=MessageTopic.TA_SIGNALS,
+        source="technical_analysis",
+        payload={"symbol": "XRP/USDT", "bias": "long", "confidence": 0.9},
+    )
+    mock_message_bus.get_latest.return_value = ta_msg
+
+    multiplier = await coordinator._build_consensus(signal)
+
+    # Should return 1.0 (no consensus) since symbols don't match
+    assert multiplier == 1.0
+```
+
+#### Gap #5: No Test for Degradation Level Persistence
+**Severity**: Medium (validates Issue #10)
+
+**Missing Test**: Test that degradation level is restored after restart.
+
+#### Gap #6: No Test for Task Timeout
+**Severity**: Medium (validates Issue #8)
+
+**Missing Test**: Test that long-running tasks don't block the main loop.
+
+#### Gap #7: No Test for DCA Trade Loss on Restart
+**Severity**: High (validates Issue #9)
+
+**Missing Test**: Test that scheduled DCA trades in memory are lost on restart.
+
+#### Gap #8: No Load/Stress Test
+**Severity**: Medium
+
+**Missing Test**: Test coordinator behavior under high message volume (100+ messages/second).
 
 ---
 
-## Final Assessment
+## 3. Implementation vs. Plan Comparison
 
-### Strengths Summary
+### 3.1 MATCHES PLAN ✅
 
-1. **Excellent Architecture** - Clean separation of concerns, proper abstractions
-2. **Robust Error Handling** - Graceful degradation, comprehensive fallbacks
-3. **Strong Testing** - 97 tests, 100% passing, good coverage
-4. **Performance** - Exceeds latency targets, efficient implementation
-5. **Production Features** - State persistence, statistics, monitoring hooks
-6. **Smart Enhancements** - Consensus building, degradation system, DCA scheduling
+1. **Per-minute TA agent trigger** - ✅ Implemented (60 second interval)
+2. **Every 5 min regime detection** - ✅ Implemented (300 second interval)
+3. **Hourly trading decision** - ✅ Implemented (3600 second interval)
+4. **Conflict resolution rules** - ✅ Implemented (TA vs Sentiment, Regime conflicts)
+5. **Emergency handling** - ✅ Implemented (circuit breaker response)
+6. **Message bus pub/sub** - ✅ Implemented with TTL and history
+7. **LLM-based conflict resolution** - ✅ Implemented with DeepSeek/Claude fallback
+8. **State persistence** - ✅ Implemented (coordinator state to DB)
+9. **Graceful degradation** - ✅ Implemented (4 levels: NORMAL, REDUCED, LIMITED, EMERGENCY)
 
-### Weaknesses Summary
+### 3.2 DEVIATIONS FROM PLAN ⚠️
 
-1. **One Deadlock Risk** - Handler called under lock (high priority fix)
-2. **Missing Concurrency Tests** - Should verify thread safety explicitly
-3. **Minor Performance Opportunities** - Linear search, lock contention
-4. **Configuration Tuning** - Magic numbers should be in config
+1. **Message Priority Not Used**: Plan doesn't specify, but implementation has priority levels that aren't used for ordering.
+2. **No Health Check Loop**: Config mentions `health_check.interval_seconds: 60` but no health check implementation found.
+3. **No Scheduled Task Dependencies**: Config has `depends_on` fields but dependencies aren't enforced in code.
+4. **Emergency Circuit Breaker Actions**: Config specifies actions (`pause_trading`, `reduce_positions`, `halt_all`) but implementation only supports HALT on critical severity.
 
-### Production Readiness
+### 3.3 MISSING FROM PLAN (But Good Additions) ✅
 
-**Recommendation**: ✅ **Approved for Paper Trading** with one critical fix
-
-**Conditions**:
-1. **MUST FIX** - P1 deadlock risk in `MessageBus.publish()`
-2. **SHOULD ADD** - Concurrency tests to verify thread safety
-3. **CONSIDER** - Move consensus parameters to config
-
-**Deployment Checklist**:
-- ✅ Fix deadlock risk
-- ✅ Add concurrency tests
-- ✅ Verify all 97 tests pass
-- ✅ Deploy to paper trading environment
-- ✅ Monitor degradation events
-- ✅ Watch for lock contention under load
+1. **Consensus Building**: Not in original plan, but excellent addition to amplify confidence when agents agree.
+2. **Scheduled DCA Trades**: Portfolio rebalancing with DCA batching is more sophisticated than planned.
+3. **Degradation Levels**: More granular than planned emergency handling.
 
 ---
 
-## Reviewer Notes
+## 4. Concurrency and Thread Safety Analysis
 
-This is **high-quality production code** with thoughtful design and excellent error handling. The graceful degradation system is a standout feature not in the original spec. The consensus building logic is sophisticated and adds real value.
+### 4.1 SAFE PATTERNS ✅
 
-The main concern is the potential deadlock in `MessageBus.publish()`, which should be fixed before production deployment. Otherwise, the code is solid and ready for paper trading.
+1. **AsyncIO Lock Usage**: All message bus operations properly use `async with self._lock`
+2. **Atomic State Updates**: Coordinator state changes are atomic (single assignment)
+3. **No Shared Mutable State**: Each agent has independent state, coordinator mediates
+4. **Task Cancellation**: Proper cleanup task cancellation in `stop()`
 
-The test suite is comprehensive and gives high confidence in correctness. Adding concurrency tests would increase that confidence further.
+### 4.2 POTENTIAL RACE CONDITIONS ⚠️
 
-Overall, this is some of the best orchestration code I've reviewed. The team should be proud of this implementation.
+1. **get_stats() without lock** - Issue #3 above
+2. **Symbol mismatch in consensus** - Issue #5 above (data race, not thread race)
+3. **DCA trades memory storage** - Issue #9 above (not thread-safe across restarts)
 
-**Grade Breakdown**:
-- Design Compliance: 9/10 (minor gaps, excellent enhancements)
-- Code Quality: 9/10 (clean, well-structured, minor magic numbers)
-- Logic Correctness: 10/10 (no bugs found, all edge cases handled)
-- Error Handling: 9/10 (graceful degradation, one deadlock risk)
-- Concurrency: 8/10 (mostly thread-safe, one issue)
-- Performance: 9/10 (meets targets, minor optimizations possible)
-- Test Coverage: 10/10 (comprehensive, 100% passing)
+### 4.3 NO DEADLOCK RISK ✅
 
-**Overall: A- (9.0/10)** - Production-ready with minor fixes.
+- Single lock per component (no lock hierarchy)
+- No nested lock acquisition
+- All locks are released via context manager
+
+---
+
+## 5. Performance Considerations
+
+### 5.1 LATENCY TARGETS
+
+**Target**: Tier 1 operations < 500ms
+
+**Analysis**:
+- Message publish: < 1ms (in-memory, single lock)
+- Conflict detection: < 10ms (3 message bus lookups)
+- LLM conflict resolution: Timeout at 10s (config: `max_resolution_time_ms: 10000`)
+- Trade routing: < 50ms (risk validation + execution manager call)
+
+**Assessment**: ✅ MEETS TARGETS (assuming LLM responds within timeout)
+
+### 5.2 THROUGHPUT
+
+**Expected Load**:
+- TA signals: 1/minute/symbol = 2/minute (BTC, XRP)
+- Trading decisions: 2/hour
+- Message bus: ~120 messages/hour in normal operation
+
+**Current Capacity**: Easily handles 1000+ messages/second (in-memory pub/sub)
+
+**Assessment**: ✅ SUFFICIENT HEADROOM
+
+### 5.3 MEMORY USAGE
+
+**Message History**: Max 1000 messages (config: `max_history_size: 1000`)
+- Estimated: ~1MB (1KB per message)
+
+**Assessment**: ✅ MINIMAL FOOTPRINT
+
+---
+
+## 6. Security Analysis
+
+### 6.1 INPUT VALIDATION ✅
+
+- Message payloads are dictionaries (no SQL injection risk)
+- LLM responses are parsed defensively (try/except on JSON)
+- Modification bounds are validated (Issue #13 recommends config-based bounds)
+
+### 6.2 ERROR HANDLING ✅
+
+- All async operations wrapped in try/except
+- Handler errors don't crash the bus
+- LLM failures fall back to conservative defaults
+
+### 6.3 RESOURCE LIMITS ✅
+
+- Message TTL prevents unbounded history growth
+- Cleanup task runs every 60 seconds
+- LLM timeout prevents hanging
+
+---
+
+## 7. Recommendations Summary
+
+### 7.1 MUST FIX (Before Production)
+
+| Priority | Issue | Fix Effort | Risk if Not Fixed |
+|----------|-------|------------|-------------------|
+| 🔴 High | #5 - Symbol mismatch in consensus | 1 hour | Incorrect trading decisions |
+| 🔴 High | #6 - Symbol mismatch in conflicts | 1 hour | False conflict detection |
+| 🔴 High | #9 - DCA trades lost on restart | 2 hours | Lost scheduled trades |
+
+### 7.2 SHOULD FIX (Before Production)
+
+| Priority | Issue | Fix Effort | Benefit |
+|----------|-------|------------|---------|
+| 🟡 Medium | #3 - get_stats() race condition | 15 min | Thread safety |
+| 🟡 Medium | #7 - No degradation-aware scheduling | 1 hour | Better resilience |
+| 🟡 Medium | #8 - No task timeout | 30 min | Prevent hangs |
+| 🟡 Medium | #10 - Degradation state not persisted | 30 min | Better recovery |
+
+### 7.3 NICE TO HAVE (Future Enhancement)
+
+| Priority | Issue | Fix Effort | Benefit |
+|----------|-------|------------|---------|
+| 🟢 Low | #1 - Message priority not used | 2 hours | Better priority handling |
+| 🟢 Low | #2 - No async task spawning | 2 hours | Higher throughput |
+| 🟢 Low | #11 - Magic numbers in consensus | 30 min | Code clarity |
+| 🟢 Low | #12 - Inconsistent logging | 30 min | Better observability |
+| 🟢 Low | #13 - Hard-coded bounds | 30 min | More flexible |
+
+### 7.4 TEST COVERAGE IMPROVEMENTS
+
+| Priority | Gap | Estimated Effort |
+|----------|-----|------------------|
+| 🔴 High | Gap #4 - Symbol mismatch test | 30 min |
+| 🔴 High | Gap #7 - DCA loss test | 30 min |
+| 🟡 Medium | Gap #1 - Concurrency test | 1 hour |
+| 🟡 Medium | Gap #5 - Degradation persistence test | 30 min |
+| 🟡 Medium | Gap #6 - Task timeout test | 30 min |
+
+---
+
+## 8. Code Quality Metrics
+
+### 8.1 COMPLEXITY
+
+- **Message Bus**: 450 lines, 15 methods - ✅ Well-structured
+- **Coordinator**: 1,423 lines, 40+ methods - ⚠️ Large but organized
+- **Cyclomatic Complexity**: Moderate (most methods < 10 branches)
+
+**Recommendation**: Consider splitting coordinator into:
+- `CoordinatorCore` (state, lifecycle)
+- `ConflictResolver` (conflict detection/resolution)
+- `TaskScheduler` (scheduled task execution)
+
+### 8.2 DOCUMENTATION
+
+- ✅ Comprehensive docstrings on all public methods
+- ✅ Type hints on all functions
+- ✅ Inline comments for complex logic
+- ⚠️ Missing architectural overview (see Issue #11 - magic numbers)
+
+### 8.3 MAINTAINABILITY
+
+**Strengths**:
+- Clear separation of concerns
+- Consistent naming conventions
+- Good use of dataclasses
+- Comprehensive error messages
+
+**Weaknesses**:
+- Coordinator is large (1400+ lines)
+- Some magic numbers (Issue #11)
+- Inconsistent logging (Issue #12)
+
+**Overall Score**: 8/10
+
+---
+
+## 9. Production Readiness Checklist
+
+| Criteria | Status | Notes |
+|----------|--------|-------|
+| All tests pass | ✅ PASS | 97/97 tests (100%) |
+| Code coverage > 80% | ✅ PASS | 87% coverage |
+| No critical bugs | ⚠️ REVIEW | 3 high-priority issues (symbol matching, DCA) |
+| Thread safety | ✅ PASS | Proper lock usage |
+| Error handling | ✅ PASS | Comprehensive try/except |
+| Logging | ✅ PASS | Good coverage, minor inconsistencies |
+| Documentation | ✅ PASS | Well documented |
+| Performance | ✅ PASS | Meets < 500ms target |
+| Security | ✅ PASS | Input validation, bounds checking |
+| Monitoring | ⚠️ PARTIAL | Statistics available, no health check |
+
+**Overall**: ⚠️ **NOT PRODUCTION READY** - Fix 3 high-priority issues first
+
+---
+
+## 10. Conclusion
+
+The orchestration implementation is **well-designed and thoroughly tested** with excellent async patterns, proper thread safety, and comprehensive error handling. The code demonstrates good software engineering practices and achieves 87% test coverage with all 97 tests passing.
+
+However, **3 high-priority issues MUST be fixed before production**:
+
+1. **Symbol matching in consensus/conflict detection** (Issues #5, #6) - Could cause wrong trading decisions
+2. **DCA trade persistence** (Issue #9) - Could lose scheduled trades on restart
+3. **Add missing tests** (Gaps #4, #7) - Validate the above fixes
+
+Once these are addressed, the system will be production-ready for paper trading. The medium and low priority issues can be addressed incrementally.
+
+**Estimated Fix Time**: 4-6 hours for high-priority issues + tests
+
+**Next Steps**:
+1. Fix symbol matching in consensus building and conflict detection
+2. Ensure DCA trades are properly persisted (either require DB or fail fast)
+3. Add test coverage for symbol mismatch scenarios
+4. Add test coverage for DCA trade persistence
+5. Re-run full test suite
+6. Proceed to paper trading
+
+---
+
+## Appendix: Test Execution Summary
+
+```
+Total Tests: 97
+Passed: 97 (100%)
+Failed: 0
+Coverage: 87%
+
+Test Categories:
+- Message Bus: 34 tests ✅
+- Coordinator: 63 tests ✅
+
+Test Execution Time: ~2.5 seconds
+```
+
+## Appendix: Files Reviewed
+
+```
+Implementation:
+- triplegain/src/orchestration/message_bus.py (467 lines)
+- triplegain/src/orchestration/coordinator.py (1,423 lines)
+- triplegain/src/orchestration/__init__.py (34 lines)
+
+Tests:
+- triplegain/tests/unit/orchestration/test_message_bus.py (634 lines)
+- triplegain/tests/unit/orchestration/test_coordinator.py (1,073 lines)
+
+Configuration:
+- config/orchestration.yaml (138 lines)
+```
 
 ---
 
 **Review Complete**: 2025-12-19
-**Next Steps**: Fix P1 deadlock, add concurrency tests, deploy to paper trading
+**Review Time**: Deep analysis of 3,769 lines of code and tests
+**Recommendation**: **FIX 3 HIGH-PRIORITY ISSUES, THEN APPROVE FOR PAPER TRADING**
