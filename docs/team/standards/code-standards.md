@@ -965,6 +965,304 @@ class DistributedRateLimiter:
 
 ---
 
+## 31. Atomic State Transitions (Execution Layer Review)
+
+### Rule: Add to New Collection Before Removing from Old
+
+**Severity**: Critical
+**Rationale**: Prevents temporary object invisibility that causes race conditions
+
+**Bad**:
+```python
+# Remove from open orders
+async with self._lock:
+    del self._open_orders[order.id]
+
+# Add to history (GAP - order not findable!)
+async with self._history_lock:
+    self._order_history.append(order)
+```
+
+**Good**:
+```python
+async with self._lock:
+    # Add to history first
+    self._order_history.append(order)
+    if len(self._order_history) > self._max_history_size:
+        self._order_history = self._order_history[-self._max_history_size:]
+    # Then remove from open orders
+    if order.id in self._open_orders:
+        del self._open_orders[order.id]
+```
+
+**Applies to**: Any state transitions between collections, order/position status changes
+
+---
+
+## 32. Position State Validation (Execution Layer Review)
+
+### Rule: Always Verify Object State Before Operations
+
+**Severity**: High
+**Rationale**: Prevents double-processing, data corruption, and duplicate transactions
+
+**Pattern**:
+```python
+async def close_position(self, position_id: str, exit_price: Decimal) -> Optional[Position]:
+    """Close position with idempotency check."""
+    async with self._lock:
+        position = self._positions.get(position_id)
+
+        if not position:
+            logger.warning(f"Position not found: {position_id}")
+            return None
+
+        if position.status != PositionStatus.OPEN:
+            # Return the actual closed position, not stale reference
+            for closed_pos in self._closed_positions:
+                if closed_pos.id == position_id:
+                    return closed_pos
+            return position
+
+        # ... proceed with closing logic
+```
+
+**Required Checks**:
+1. Object exists
+2. Object is in expected state for operation
+3. Return correct version of object (not stale reference)
+4. Log state violations for debugging
+
+---
+
+## 33. Fail-Safe Default Patterns (Execution Layer Review)
+
+### Rule: Safety Checks Must Fail-Safe on Component Unavailability
+
+**Severity**: Critical
+**Rationale**: Missing dependencies should cause rejection, not bypass of safety checks
+
+**Bad**:
+```python
+async def _check_position_limits(self, symbol: str) -> dict:
+    if not self.position_tracker:
+        return {"allowed": True, "reason": None}  # DANGEROUS: Always allows
+```
+
+**Good**:
+```python
+async def _check_position_limits(self, symbol: str) -> dict:
+    if not self.position_tracker:
+        return {
+            "allowed": False,
+            "reason": "Position tracker unavailable - safety check failed"
+        }
+```
+
+**Applies to**: All risk limits, position limits, margin checks, balance validations
+
+---
+
+## 34. Lock Granularity (Execution Layer Review)
+
+### Rule: Minimize Lock Hold Time by Preparing Data Outside Locks
+
+**Severity**: Medium
+**Rationale**: Reduces lock contention, improves concurrency, prevents deadlocks
+
+**Bad**:
+```python
+async with self._lock:  # Lock held during entire calculation
+    for position in self._positions.values():
+        current_price = self._price_cache.get(position.symbol)
+        pnl, pnl_pct = position.calculate_pnl(current_price)  # Expensive
+        position.unrealized_pnl = pnl
+        position.unrealized_pnl_pct = pnl_pct
+```
+
+**Good**:
+```python
+# Snapshot positions outside lock
+async with self._lock:
+    positions_snapshot = list(self._positions.values())
+
+# Calculate P&L without lock (allows concurrent operations)
+updates = []
+for position in positions_snapshot:
+    price = self._price_cache.get(position.symbol)
+    if price:
+        pnl, pnl_pct = position.calculate_pnl(price)
+        updates.append((position.id, pnl, pnl_pct))
+
+# Quick update with lock
+async with self._lock:
+    for pos_id, pnl, pnl_pct in updates:
+        if pos_id in self._positions:
+            pos = self._positions[pos_id]
+            pos.unrealized_pnl = pnl
+            pos.unrealized_pnl_pct = pnl_pct
+```
+
+**Techniques**:
+1. Snapshot data structure under lock
+2. Process data without lock
+3. Acquire lock again for quick update
+4. Verify object still exists before updating
+
+---
+
+## 35. Configuration Enforcement (Execution Layer Review)
+
+### Rule: All Configured Constraints Must Be Validated
+
+**Severity**: High
+**Rationale**: Prevents silent failures where config exists but isn't used
+
+**Pattern**:
+```python
+# Config defines constraints
+symbols:
+  BTC/USDT:
+    min_order_size: 0.0001
+    max_order_size: 100
+    price_decimals: 2
+
+# Code MUST enforce these
+def validate_order_size(self, symbol: str, size: Decimal) -> None:
+    """Validate order size against configured limits."""
+    config = self.config.get('symbols', {}).get(symbol, {})
+    min_size = config.get('min_order_size')
+    max_size = config.get('max_order_size')
+
+    if min_size and size < min_size:
+        raise ValueError(f"Order size {size} below minimum {min_size} for {symbol}")
+
+    if max_size and size > max_size:
+        raise ValueError(f"Order size {size} exceeds maximum {max_size} for {symbol}")
+```
+
+**Validation Points**:
+- Startup: Verify all required config keys exist
+- Runtime: Check values against configured limits
+- Tests: Verify constraints are actually enforced
+
+---
+
+## 36. Collection Size Management (Execution Layer Review)
+
+### Rule: All Unbounded Collections Must Have Size Limits
+
+**Severity**: Medium
+**Rationale**: Prevents memory exhaustion from unbounded growth
+
+**Bad**:
+```python
+self._order_history: list[Order] = []  # Grows forever
+
+async def _monitor_order(...):
+    # ...
+    self._order_history.append(order)  # No limit check
+```
+
+**Good**:
+```python
+self._order_history: list[Order] = []
+self._max_history_size = config.get('max_history_size', 100)  # Reasonable default
+
+async def _monitor_order(...):
+    # ...
+    async with self._history_lock:
+        self._order_history.append(order)
+        # Enforce size limit
+        if len(self._order_history) > self._max_history_size:
+            self._order_history = self._order_history[-self._max_history_size:]
+```
+
+**Requirements**:
+1. Define maximum size in config (with sensible default)
+2. Enforce limit when adding items
+3. Use LRU or time-based eviction for caches
+4. Log when trimming occurs (at debug level)
+5. Consider persisting to database before evicting
+
+---
+
+## 37. Idempotent Operations (Execution Layer Review)
+
+### Rule: State-Changing Operations Must Be Idempotent
+
+**Severity**: High
+**Rationale**: Prevents duplicate transactions from retries, race conditions, or bugs
+
+**Pattern**:
+```python
+async def close_position(self, position_id: str, exit_price: Decimal) -> Optional[Position]:
+    """Close position (idempotent - safe to call multiple times)."""
+    async with self._lock:
+        position = self._positions.get(position_id)
+
+        if not position:
+            # Already closed or never existed
+            for closed in self._closed_positions:
+                if closed.id == position_id:
+                    return closed  # Return existing result
+            return None
+
+        if position.status != PositionStatus.OPEN:
+            # Already closed in this call
+            return position
+
+        # Proceed with closing...
+```
+
+**Idempotent Design Checklist**:
+- [ ] Check current state before applying changes
+- [ ] Return existing result if operation already completed
+- [ ] Log but don't error on duplicate attempts
+- [ ] Track operation IDs for deduplication
+- [ ] Use database transactions for atomicity
+
+---
+
+## 38. Partial Result Handling (Execution Layer Review)
+
+### Rule: Handle Partial Fills and Incomplete Operations
+
+**Severity**: High
+**Rationale**: Real exchanges return partial results; code must handle them correctly
+
+**Bad**:
+```python
+if kraken_status == "closed":
+    # Assumes order is fully filled
+    position_size = order.size  # Wrong! Could be partial fill
+```
+
+**Good**:
+```python
+if kraken_status == "closed" or kraken_status == "partially_filled":
+    filled_size = Decimal(str(order_info.get("vol_exec", 0)))
+    if filled_size < order.size:
+        logger.warning(
+            f"Partial fill: {filled_size}/{order.size} for order {order.id}"
+        )
+
+    # Create position with actual filled size
+    position_size = filled_size
+
+    # Place contingent orders for filled amount, not original
+    if proposal.stop_loss:
+        await self._place_stop_loss(order, proposal, filled_size)
+```
+
+**Scenarios to Handle**:
+1. Partial order fills (common on exchanges)
+2. Timeout with some results received
+3. Network errors after partial execution
+4. User cancellation of partially filled orders
+
+---
+
 ## Version History
 
 | Version | Date | Changes |
@@ -972,10 +1270,11 @@ class DistributedRateLimiter:
 | 1.0 | 2025-12-19 | Initial version based on Phase 3 review findings |
 | 1.1 | 2025-12-19 | Added Phase 1 review standards (async/await, validation, monitoring) |
 | 1.2 | 2025-12-19 | Added LLM Integration standards (response validation, token counting, security) |
+| 1.3 | 2025-12-19 | Added Execution Layer standards (state management, atomicity, idempotency) |
 
 ---
 
 **Approved by**: Code Review Agent
-**Last Updated**: 2025-12-19 (LLM Integration Review)
+**Last Updated**: 2025-12-19 (Execution Layer Review)
 **Next Review**: After Phase 4 completion
 
