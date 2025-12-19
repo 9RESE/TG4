@@ -90,7 +90,8 @@ Uptime   Recovery  Latency  Throughput  Risk    Audit
 | Review 4 Phase 2A | Complete | LLM client robustness | 15/15 |
 | Review 4 Phase 2B | Complete | Agent layer robustness | 12/12 |
 | Review 4 Phase 3C | Complete | Execution layer robustness | 17/17 |
-| Review 4 Phase 4-6 | Pending | - | - |
+| Review 4 Phase 4 | Complete | API security fixes | 26/27 |
+| Review 4 Phase 5 | Complete | Configuration & integration | 15/15 |
 
 See [ADRs](../09-decisions/) for detailed fix documentation.
 
@@ -116,6 +117,19 @@ See [ADRs](../09-decisions/) for detailed fix documentation.
 | Orphan Order Cleanup | SL/TP cancelled on position close | ✅ v0.3.5 |
 | Fast SL/TP Triggers | 5-second trigger check interval | ✅ v0.3.5 |
 | Fee Tracking | Order/position fee audit trail | ✅ v0.3.5 |
+
+### Configuration & Integration Quality Controls
+
+| Control | Description | Status |
+|---------|-------------|--------|
+| Migration Ordering | Sequential numbering (001-004) | ✅ v0.3.7 |
+| Config Validation | All 9 configs validated at startup | ✅ v0.3.7 |
+| Template Consistency | File extensions match references | ✅ v0.3.7 |
+| Symbol Consistency | Matching symbol lists across configs | ✅ v0.3.7 |
+| Token Budget Alignment | Consistent budgets prompts↔snapshot | ✅ v0.3.7 |
+| Shared Test Fixtures | Common fixtures in conftest.py | ✅ v0.3.7 |
+| Module Exports | Convenience re-exports for imports | ✅ v0.3.7 |
+| Environment Template | .env.example for all required vars | ✅ v0.3.7 |
 
 ### Static Analysis
 

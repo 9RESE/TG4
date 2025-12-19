@@ -57,8 +57,9 @@ uvicorn triplegain.src.api.app:app --reload         # Start API server
 | Portfolio Rebalance | DeepSeek V3 | Hourly (on deviation) |
 
 ### System Constraints
-- Max Leverage: 5x | Daily Loss Limit: 5% | Max Drawdown: 20%
+- Max Leverage: 5x | Max Exposure: 80% | Daily Loss Limit: 5% | Max Drawdown: 20%
 - Tier 1 Latency: <500ms | API Budget: ~$5/day
+- See `config/risk.yaml` for full risk management configuration
 
 ### Target Metrics
 - Annual Return: >50% | Sharpe: >1.5 | Win Rate: >50% | Uptime: >99%
@@ -87,7 +88,7 @@ triplegain/
 config/                 # agents.yaml, risk.yaml, orchestration.yaml, portfolio.yaml, execution.yaml
 data/kraken_db/         # Data collectors (operational)
 docs/development/       # Design + Implementation plans + Reviews
-migrations/             # Database migrations (001, 002, 003)
+migrations/             # Database migrations (001, 002, 003, 004)
 ```
 
 ## Documentation
@@ -99,7 +100,7 @@ migrations/             # Database migrations (001, 002, 003)
 - [Changelog](CHANGELOG.md)
 
 ## Version
-**v0.3.6** (2025-12-19) - Phase 4 API Security (26 issues resolved)
+**v0.3.7** (2025-12-19) - Phase 5 Configuration & Integration fixes (15 issues resolved)
 
 ---
 *Uses global config from ~/.claude/CLAUDE.md*

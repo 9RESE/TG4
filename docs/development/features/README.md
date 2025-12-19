@@ -26,10 +26,15 @@ This directory contains detailed documentation for each major feature, including
 | Risk Management Engine | 2 | **COMPLETE** | [phase-2-core-agents.md](./phase-2-core-agents.md#4-risk-management-engine) |
 | Trading Decision Agent | 2 | **COMPLETE** | [phase-2-core-agents.md](./phase-2-core-agents.md#5-trading-decision-agent) |
 | LLM Client Infrastructure | 2 | **COMPLETE** | [phase-2-core-agents.md](./phase-2-core-agents.md#6-llm-client-infrastructure) |
-| Agent Orchestration | 3 | Planned | Pending |
-| Sentiment Analysis | 4 | Planned | Pending |
-| Multi-LLM A/B Testing | 4 | Planned | Pending |
-| Dashboard | 4 | Planned | Pending |
+| Agent Orchestration | 3 | **COMPLETE** | [phase-3-orchestration.md](./phase-3-orchestration.md) |
+| Message Bus | 3 | **COMPLETE** | [phase-3-orchestration.md](./phase-3-orchestration.md#1-message-bus) |
+| Coordinator Agent | 3 | **COMPLETE** | [phase-3-orchestration.md](./phase-3-orchestration.md#2-coordinator-agent) |
+| Execution Engine | 3 | **COMPLETE** | [phase-3-orchestration.md](./phase-3-orchestration.md#3-execution-engine) |
+| API Security | 4 | **COMPLETE** | [phase-4-api-security.md](./phase-4-api-security.md) |
+| Configuration & Integration | 5 | **COMPLETE** | [phase-5-configuration.md](./phase-5-configuration.md) |
+| Sentiment Analysis | 6 | Planned | Pending |
+| Multi-LLM A/B Testing | 6 | Planned | Pending |
+| Dashboard | 6 | Planned | Pending |
 
 ## Archived Features (v2)
 

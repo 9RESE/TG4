@@ -95,7 +95,7 @@ schedules:
 symbols:
   - BTC/USDT
   - XRP/USDT
-  # - XRP/BTC  # Add if needed
+  - XRP/BTC
 
 # ============================================================================
 # Conflict Detection and Resolution

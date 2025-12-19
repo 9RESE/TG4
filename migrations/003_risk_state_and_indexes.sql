@@ -9,7 +9,12 @@
 -- RISK STATE TABLE
 -- Purpose: Persist risk management state across restarts
 -- Single row table with 'current' as the ID
+-- Note: This replaces the less detailed risk_state from 001_agent_tables.sql
 -- ============================================================================
+
+-- Drop the old risk_state table if it exists (migration from 001)
+-- The new schema uses JSONB for flexibility
+DROP TABLE IF EXISTS risk_state CASCADE;
 
 CREATE TABLE IF NOT EXISTS risk_state (
     id VARCHAR(20) PRIMARY KEY DEFAULT 'current',

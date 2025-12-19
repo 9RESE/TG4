@@ -48,7 +48,9 @@ snapshot_builder:
 
   # -------------------------------------------------------------------------
   # Token budget management (for prompt generation)
+  # These are the market_data portion from prompts.yaml token_budgets
+  # prompts.yaml tier1_local.market_data: 3000, tier2_api.market_data: 6000
   # -------------------------------------------------------------------------
   token_budgets:
-    tier1_local: 3500
-    tier2_api: 8000
+    tier1_local: 3000
+    tier2_api: 6000

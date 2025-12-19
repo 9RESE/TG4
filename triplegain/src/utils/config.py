@@ -205,6 +205,11 @@ class ConfigLoader:
             'snapshot': self._validate_snapshot_config,
             'database': self._validate_database_config,
             'prompts': self._validate_prompts_config,
+            'agents': self._validate_agents_config,
+            'risk': self._validate_risk_config,
+            'orchestration': self._validate_orchestration_config,
+            'portfolio': self._validate_portfolio_config,
+            'execution': self._validate_execution_config,
         }
 
         validator = validators.get(config_name)
@@ -272,15 +277,126 @@ class ConfigLoader:
 
     def _validate_prompts_config(self, config: dict) -> None:
         """Validate prompts configuration."""
-        agents = config.get('agents', {})
+        # Handle both formats: {prompts: {agents: ...}} and {agents: ...}
+        prompts = config.get('prompts', config)
+        agents = prompts.get('agents', {})
         if not agents:
             raise ConfigError("No agents configured in prompts config")
 
-        token_budgets = config.get('token_budgets', {})
+        token_budgets = prompts.get('token_budgets', {})
         if not token_budgets:
             raise ConfigError("No token budgets configured")
 
         logger.debug("Prompts config validated successfully")
+
+    def _validate_agents_config(self, config: dict) -> None:
+        """Validate agents configuration."""
+        providers = config.get('providers', {})
+        if not providers:
+            raise ConfigError("No LLM providers configured")
+
+        agents = config.get('agents', {})
+        if not agents:
+            raise ConfigError("No agents configured")
+
+        # Check that at least one agent is enabled
+        enabled_count = sum(
+            1 for agent in agents.values()
+            if isinstance(agent, dict) and agent.get('enabled', False)
+        )
+        if enabled_count == 0:
+            logger.warning("No agents are enabled in agents config")
+
+        # Validate each enabled agent has required fields
+        for name, agent in agents.items():
+            if not isinstance(agent, dict):
+                continue
+            if agent.get('enabled', False):
+                if 'template' not in agent:
+                    raise ConfigError(f"Agent '{name}' missing template")
+
+        logger.debug("Agents config validated successfully")
+
+    def _validate_risk_config(self, config: dict) -> None:
+        """Validate risk configuration."""
+        limits = config.get('limits', {})
+        if not limits:
+            raise ConfigError("No risk limits configured")
+
+        # Validate critical limits exist
+        required_limits = ['max_leverage', 'max_position_pct', 'max_total_exposure_pct']
+        for limit in required_limits:
+            if limit not in limits:
+                raise ConfigError(f"Missing required risk limit: {limit}")
+
+        # Validate max_leverage is within reasonable bounds
+        max_leverage = limits.get('max_leverage', 0)
+        if not isinstance(max_leverage, (int, float)) or max_leverage <= 0 or max_leverage > 10:
+            raise ConfigError(f"Invalid max_leverage: {max_leverage} (must be 1-10)")
+
+        # Validate circuit breakers exist
+        circuit_breakers = config.get('circuit_breakers', {})
+        if not circuit_breakers:
+            raise ConfigError("No circuit breakers configured")
+
+        logger.debug("Risk config validated successfully")
+
+    def _validate_orchestration_config(self, config: dict) -> None:
+        """Validate orchestration configuration."""
+        schedules = config.get('schedules', {})
+        if not schedules:
+            raise ConfigError("No schedules configured")
+
+        symbols = config.get('symbols', [])
+        if not symbols:
+            raise ConfigError("No symbols configured for orchestration")
+
+        # Validate LLM config for coordinator
+        llm = config.get('llm', {})
+        if not llm.get('primary', {}):
+            logger.warning("No primary LLM configured for coordinator")
+
+        logger.debug("Orchestration config validated successfully")
+
+    def _validate_portfolio_config(self, config: dict) -> None:
+        """Validate portfolio configuration."""
+        target = config.get('target_allocation', {})
+        if not target:
+            raise ConfigError("No target allocation configured")
+
+        # Validate allocation sums to ~100%
+        total = sum(
+            target.get(k, 0) for k in ['btc_pct', 'xrp_pct', 'usdt_pct']
+        )
+        if abs(total - 100) > 0.1:
+            raise ConfigError(f"Target allocation sums to {total}%, expected 100%")
+
+        rebalancing = config.get('rebalancing', {})
+        if not rebalancing:
+            logger.warning("No rebalancing settings configured")
+
+        logger.debug("Portfolio config validated successfully")
+
+    def _validate_execution_config(self, config: dict) -> None:
+        """Validate execution configuration."""
+        kraken = config.get('kraken', {})
+        if not kraken:
+            raise ConfigError("No Kraken API configuration")
+
+        symbols = config.get('symbols', {})
+        if not symbols:
+            raise ConfigError("No symbol configurations for execution")
+
+        # Validate each symbol has required fields
+        required_symbol_fields = ['kraken_pair', 'min_order_size', 'price_decimals']
+        for symbol, settings in symbols.items():
+            if not isinstance(settings, dict):
+                continue
+            for field in required_symbol_fields:
+                if field not in settings:
+                    raise ConfigError(f"Symbol '{symbol}' missing required field: {field}")
+
+        logger.debug("Execution config validated successfully")
 
 
 # Global config instance (lazy-loaded, thread-safe)
@@ -338,3 +454,53 @@ def load_config(config_name: str) -> dict:
         Configuration dictionary
     """
     return get_config_loader().load(config_name)
+
+
+def validate_all_configs_on_startup() -> dict[str, bool]:
+    """
+    Validate all configuration files at application startup.
+
+    Returns:
+        Dictionary mapping config names to validation success status
+
+    Raises:
+        ConfigError: If any critical config fails validation
+    """
+    loader = get_config_loader()
+    results: dict[str, bool] = {}
+
+    # Critical configs that must load successfully
+    critical_configs = [
+        'agents', 'risk', 'orchestration', 'execution', 'database'
+    ]
+
+    # Optional configs that log warnings on failure
+    optional_configs = [
+        'indicators', 'prompts', 'snapshot', 'portfolio'
+    ]
+
+    # Validate critical configs first
+    for config_name in critical_configs:
+        try:
+            loader.load(config_name)
+            results[config_name] = True
+            logger.info(f"Config validated: {config_name}")
+        except ConfigError as e:
+            results[config_name] = False
+            logger.error(f"Critical config validation failed: {config_name} - {e}")
+            raise
+
+    # Validate optional configs
+    for config_name in optional_configs:
+        try:
+            loader.load(config_name)
+            results[config_name] = True
+            logger.info(f"Config validated: {config_name}")
+        except ConfigError as e:
+            results[config_name] = False
+            logger.warning(f"Optional config validation failed: {config_name} - {e}")
+        except Exception as e:
+            results[config_name] = False
+            logger.warning(f"Optional config not found or invalid: {config_name} - {e}")
+
+    return results

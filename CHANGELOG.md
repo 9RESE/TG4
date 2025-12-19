@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.7] - 2025-12-19
+
+### Added
+- **Configuration Validators**: Added validators for all 9 config files (agents, risk, orchestration, portfolio, execution) with `validate_all_configs_on_startup()` function (F04, F14)
+- **Shared Test Fixtures**: Created `triplegain/tests/conftest.py` with common fixtures for configs, LLM mocks, market data, and domain objects (F09)
+- **Module Exports**: Added convenience re-exports in `llm/__init__.py` and `src/__init__.py` for simpler imports (F08, F13)
+- **Environment Template**: Created `.env.example` documenting all required environment variables (F03)
+- **Portfolio Rebalance Agent Config**: Added explicit configuration for portfolio_rebalance agent in `agents.yaml` (F15)
+
+### Fixed
+- **Migration Ordering**: Renumbered duplicate `003_*.sql` migrations to `003` and `004` for deterministic execution (F01)
+- **Template Extensions**: Fixed `.md` → `.txt` extension references in `agents.yaml` to match actual template files (F02)
+- **Symbol Consistency**: Uncommented `XRP/BTC` in `orchestration.yaml` to match other config files (F05)
+- **risk_state Duplication**: Added `DROP TABLE IF EXISTS CASCADE` in migration 003 to handle schema evolution (F10)
+- **Token Budget Alignment**: Aligned `snapshot.yaml` token budgets with `prompts.yaml` market_data values (F11)
+- **XAI Comment Cleanup**: Removed confusing OPENAI reference from XAI provider comment (F12)
+
+### Changed
+- Coordinator agent now enabled by default (Phase 3 complete) (F06)
+- `CLAUDE.md` updated to document 80% max exposure setting (F07)
+- Prompts config validator now handles both wrapped and unwrapped formats
+
+### Documentation
+- ADR-012: Configuration & Integration Fixes documenting all 15 Phase 5 findings
+
 ## [0.3.6] - 2025-12-19
 
 ### Added
