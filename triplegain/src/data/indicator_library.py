@@ -636,6 +636,9 @@ class IndicatorLibrary:
         """
         Calculate Volume Weighted Average Price.
 
+        Handles NaN values in volumes by treating them as zero.
+        If volume is NaN at an index, VWAP will carry forward the previous value.
+
         Args:
             highs: List of high prices
             lows: List of low prices
@@ -654,14 +657,30 @@ class IndicatorLibrary:
         volumes = np.array(volumes, dtype=float)
         n = len(closes)
 
-        typical_price = (highs + lows + closes) / 3
-        cumulative_tpv = np.cumsum(typical_price * volumes)
-        cumulative_vol = np.cumsum(volumes)
+        # Handle NaN values in volumes - treat as zero volume
+        volumes_clean = np.where(np.isnan(volumes), 0, volumes)
 
-        result = np.zeros(n)
+        # Handle NaN in prices - use close as fallback for typical price
+        typical_price = np.where(
+            np.isnan(highs) | np.isnan(lows),
+            closes,
+            (highs + lows + closes) / 3
+        )
+        # If close is also NaN, typical_price will be NaN - handle below
+
+        # Calculate products, treating NaN typical prices as 0 contribution
+        tp_vol = np.where(np.isnan(typical_price), 0, typical_price * volumes_clean)
+
+        cumulative_tpv = np.cumsum(tp_vol)
+        cumulative_vol = np.cumsum(volumes_clean)
+
+        result = np.full(n, np.nan)
         for i in range(n):
-            if cumulative_vol[i] != 0:
+            if cumulative_vol[i] > 0:
                 result[i] = cumulative_tpv[i] / cumulative_vol[i]
+            elif i > 0:
+                # Carry forward previous value if no volume yet
+                result[i] = result[i - 1]
 
         return result
 

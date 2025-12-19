@@ -99,7 +99,7 @@ migrations/             # Database migrations (001, 002, 003)
 - [Changelog](CHANGELOG.md)
 
 ## Version
-**v0.3.1** (2025-12-19) - Phase 1 Foundation Review Fixes
+**v0.3.2** (2025-12-19) - Phase 1 Foundation Review Complete (P1-P3 Fixes)
 
 ---
 *Uses global config from ~/.claude/CLAUDE.md*

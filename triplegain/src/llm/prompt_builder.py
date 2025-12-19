@@ -63,13 +63,29 @@ class PromptBuilder:
     Builds prompts for LLM agents.
 
     Handles template loading, context injection, token management.
+
+    Token Estimation Accuracy:
+        Token estimation uses a configurable characters-per-token ratio (default: 3.5).
+        This is a rough approximation that varies by:
+        - Model: GPT models ~4 chars/token, Claude ~3.5, some models differ
+        - Content type: Code ~3 chars/token, prose ~4-5, JSON ~3.5
+        - Language: Non-English text may have different ratios
+
+        For more accurate token counting, use the model's tokenizer directly.
+        The estimation includes a configurable safety margin (default: 10%) to
+        account for encoding variations and special tokens.
+
+        Configure via config:
+            token_estimation:
+                chars_per_token: 3.5
+                safety_margin: 1.10
     """
 
-    # Characters per token (conservative estimate for JSON)
-    CHARS_PER_TOKEN = 3.5
+    # Default characters per token (conservative estimate for JSON)
+    DEFAULT_CHARS_PER_TOKEN = 3.5
 
-    # Safety margin for token estimation (10% buffer for special tokens, formatting, etc.)
-    TOKEN_SAFETY_MARGIN = 1.10
+    # Default safety margin (10% buffer for special tokens, formatting, etc.)
+    DEFAULT_SAFETY_MARGIN = 1.10
 
     def __init__(self, config: dict):
         """
@@ -80,6 +96,16 @@ class PromptBuilder:
         """
         self.config = config
         self._templates: dict[str, str] = {}
+
+        # Load token estimation configuration
+        token_config = config.get('token_estimation', {})
+        self.chars_per_token = float(
+            token_config.get('chars_per_token', self.DEFAULT_CHARS_PER_TOKEN)
+        )
+        self.safety_margin = float(
+            token_config.get('safety_margin', self.DEFAULT_SAFETY_MARGIN)
+        )
+
         self._load_templates()
 
     def build_prompt(
@@ -172,14 +198,17 @@ class PromptBuilder:
         """
         Estimate token count for text.
 
-        Uses ~3.5 characters per token (conservative for JSON) with a 10%
-        safety margin to account for special tokens, BPE encoding variations,
-        and formatting overhead.
+        Uses configurable characters-per-token ratio (default: 3.5, conservative
+        for JSON) with a configurable safety margin (default: 10%) to account
+        for special tokens, BPE encoding variations, and formatting overhead.
+
+        Note: This is an approximation. Actual token counts vary by model
+        and content type. See class docstring for details.
         """
         if not text:
             return 0
-        base_estimate = len(text) / self.CHARS_PER_TOKEN
-        return int(base_estimate * self.TOKEN_SAFETY_MARGIN)
+        base_estimate = len(text) / self.chars_per_token
+        return int(base_estimate * self.safety_margin)
 
     def truncate_to_budget(
         self,
@@ -196,7 +225,7 @@ class PromptBuilder:
             return ""
 
         # Account for safety margin by dividing - the estimate will multiply back
-        effective_chars = int(max_tokens * self.CHARS_PER_TOKEN / self.TOKEN_SAFETY_MARGIN)
+        effective_chars = int(max_tokens * self.chars_per_token / self.safety_margin)
 
         if len(content) <= effective_chars:
             return content

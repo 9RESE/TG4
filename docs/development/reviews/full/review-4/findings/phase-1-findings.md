@@ -2,7 +2,7 @@
 
 **Review Date**: 2025-12-19
 **Reviewer**: Claude Opus 4.5
-**Status**: Complete - All P1 and P2 issues fixed
+**Status**: Complete - All issues fixed (except P1.1 - documented trade-off)
 
 ---
 
@@ -13,8 +13,8 @@
 | P0 (Critical) | 0 | - |
 | P1 (High) | 3 | 2 |
 | P2 (Medium) | 6 | 6 |
-| P3 (Low) | 5 | 0 |
-| **Total** | **14** | **8** |
+| P3 (Low) | 5 | 5 |
+| **Total** | **14** | **13** |
 
 ### Fixes Applied
 - **P1.2**: Fixed Stochastic RSI smoothing bug (indicator_library.py)
@@ -25,6 +25,11 @@
 - **P2.4**: Made template validation stricter (prompt_builder.py)
 - **P2.5**: Fixed float parsing for scientific notation (config.py)
 - **P2.6**: Added fallback for missing templates (prompt_builder.py)
+- **P3.1**: Added reconnection logic with exponential backoff (database.py)
+- **P3.2**: Added VWAP NaN handling for volumes (indicator_library.py)
+- **P3.3**: Added timestamp normalization utility (market_snapshot.py)
+- **P3.4**: Added thread safety to global ConfigLoader (config.py)
+- **P3.5**: Documented and made token estimation configurable (prompt_builder.py)
 
 **Note**: P1.1 (Float conversion for financial values) was not fixed as it would require significant refactoring of indicator calculations which expect float arrays. The trade-off is documented.
 
@@ -291,61 +296,92 @@ Added warning log and fallback to a minimal system prompt that identifies the ag
 
 ## P3 - Low Priority Issues
 
-### Finding 3.1: No Reconnection Logic
+### Finding 3.1: No Reconnection Logic ✅ FIXED
 
 **File**: `triplegain/src/data/database.py`
 **Priority**: P3
 **Category**: Quality
+**Status**: Fixed - Added reconnect() and execute_with_retry() methods with exponential backoff
 
 #### Description
 No explicit reconnection logic for dropped connections. Relies on asyncpg pool's internal reconnection handling.
 
-#### Note
-asyncpg pool handles this internally, but explicit reconnection with backoff could improve resilience.
+#### Fix Applied
+Added `reconnect()` method with exponential backoff and jitter, plus `execute_with_retry()` method for automatic retry on connection errors. Configuration supports `max_retries`, `retry_base_delay`, and `retry_max_delay` settings.
 
 ---
 
-### Finding 3.2: VWAP NaN Handling
+### Finding 3.2: VWAP NaN Handling ✅ FIXED
 
-**File**: `triplegain/src/data/indicator_library.py:661-664`
+**File**: `triplegain/src/data/indicator_library.py:629-685`
 **Priority**: P3
 **Category**: Logic
+**Status**: Fixed - Added explicit NaN handling for volumes and prices
 
 #### Description
 VWAP calculation doesn't explicitly handle NaN values in volume. If volume contains NaN, cumulative values propagate NaN.
 
+#### Fix Applied
+Updated `calculate_vwap()` to:
+- Treat NaN volumes as zero contribution
+- Use close price as fallback if high/low are NaN
+- Carry forward previous VWAP value if no volume yet
+
 ---
 
-### Finding 3.3: Inconsistent Timestamp Type Handling
+### Finding 3.3: Inconsistent Timestamp Type Handling ✅ FIXED
 
-**File**: `triplegain/src/data/market_snapshot.py:574-577`
+**File**: `triplegain/src/data/market_snapshot.py:31-77`
 **Priority**: P3
 **Category**: Quality
+**Status**: Fixed - Added normalize_timestamp() utility function
 
 #### Description
 Code checks `isinstance(snapshot_timestamp, datetime)` suggesting timestamps might not always be datetime objects.
 
+#### Fix Applied
+Added `normalize_timestamp()` function that handles:
+- datetime objects (ensures timezone-aware)
+- ISO format strings
+- Unix timestamps (int/float)
+- None values (returns default or current time)
+
+Applied consistently throughout `build_snapshot()` and `build_snapshot_from_candles()`.
+
 ---
 
-### Finding 3.4: Global Mutable State in Config Loader
+### Finding 3.4: Global Mutable State in Config Loader ✅ FIXED
 
-**File**: `triplegain/src/utils/config.py:271-295`
+**File**: `triplegain/src/utils/config.py:286-340`
 **Priority**: P3
 **Category**: Quality
+**Status**: Fixed - Added thread safety with double-checked locking
 
 #### Description
 Uses global `_config_loader` variable which can cause issues in testing and concurrent access.
 
+#### Fix Applied
+- Added `_config_lock = threading.Lock()` for thread safety
+- Implemented double-checked locking pattern in `get_config_loader()`
+- Added `reset_config_loader()` function for test isolation
+
 ---
 
-### Finding 3.5: Token Estimation Accuracy
+### Finding 3.5: Token Estimation Accuracy ✅ FIXED
 
-**File**: `triplegain/src/llm/prompt_builder.py:168-179`
+**File**: `triplegain/src/llm/prompt_builder.py:61-111`
 **Priority**: P3
 **Category**: Quality
+**Status**: Fixed - Documented limitation and made configurable
 
 #### Description
 Token estimation uses 3.5 chars/token which is a rough approximation. Actual tokenization varies significantly by model and content type (code vs prose vs JSON).
+
+#### Fix Applied
+- Added comprehensive documentation in class docstring explaining token estimation accuracy
+- Made `chars_per_token` and `safety_margin` configurable via config
+- Updated method docstrings to reference class documentation
+- Config supports `token_estimation.chars_per_token` and `token_estimation.safety_margin`
 
 ---
 
@@ -355,12 +391,12 @@ Token estimation uses 3.5 chars/token which is a rough approximation. Actual tok
 - [x] Connection pooling implemented correctly
 - [x] Connections properly closed/returned to pool
 - [x] Timeout handling for queries
-- [ ] Reconnection logic for dropped connections (P3)
+- [x] Reconnection logic for dropped connections ✅ (P3.1 fixed)
 - [x] All queries use parameterized statements
 - [x] Input validation before queries (timeframe validated)
 - [x] Proper error handling for query failures
-- [ ] Transaction management (P2)
-- [ ] Decimal used for financial values (P1 - using float)
+- [x] Transaction management ✅ (P2.1 fixed)
+- [ ] Decimal used for financial values (P1.1 - documented trade-off)
 - [x] Timezone-aware datetime handling
 - [x] UUID handling for IDs
 - [x] JSON/JSONB field handling
@@ -379,9 +415,9 @@ Token estimation uses 3.5 chars/token which is a rough approximation. Actual tok
 - [x] Handle single-element arrays
 - [x] Handle arrays shorter than period
 - [x] NaN/Inf handling
-- [ ] Zero volume handling for VWAP (P3)
+- [x] Zero volume handling for VWAP ✅ (P3.2 fixed)
 - [x] Numpy vectorized operations used
-- [ ] Stochastic RSI smoothing (P1 - bug found)
+- [x] Stochastic RSI smoothing ✅ (P1.2 fixed)
 
 ### Market Snapshot (`market_snapshot.py`)
 - [x] All required fields populated
@@ -391,21 +427,22 @@ Token estimation uses 3.5 chars/token which is a rough approximation. Actual tok
 - [x] Current price is truly current
 - [x] 24h price change calculated correctly
 - [x] MTF alignment score calculation correct
-- [ ] Order book features extracted properly (P1 - structure mismatch)
+- [x] Order book features extracted properly ✅ (P1.3 fixed)
 - [x] `to_prompt_format()` respects token budget
 - [x] Truncation prioritizes important data
 - [x] `to_compact_format()` sufficiently compact
 - [x] Database unavailable handling
 - [x] Missing candle data handling
 - [x] Order book unavailable handling
-- [ ] Timeout handling (P2)
+- [x] Timeout handling ✅ (P2.3 fixed)
+- [x] Timestamp type normalization ✅ (P3.3 fixed)
 
 ### Prompt Builder (`prompt_builder.py`)
 - [x] Templates load correctly from disk
-- [x] Missing template error handling (logged, not raised)
+- [x] Missing template error handling ✅ (P2.6 fixed - fallback with warning)
 - [x] Variable substitution works correctly
 - [x] No injection vulnerabilities in templates
-- [x] Token estimation reasonably accurate
+- [x] Token estimation reasonably accurate ✅ (P3.5 - documented and configurable)
 - [x] Token budget enforced
 - [x] Truncation maintains valid content
 - [x] Different budgets for Tier 1 vs Tier 2
@@ -414,17 +451,19 @@ Token estimation uses 3.5 chars/token which is a rough approximation. Actual tok
 - [x] Additional context handled
 - [x] System prompts clear and complete
 - [x] JSON output instructions present in templates
+- [x] Template validation stricter ✅ (P2.4 fixed)
 
 ### Config Loader (`config.py`)
 - [x] Sensitive values from env vars
 - [x] Default values appropriate
 - [x] Missing required vars handled with clear error
-- [x] Type conversion correct (mostly - P2 edge case)
+- [x] Type conversion correct ✅ (P2.5 fixed - scientific notation)
 - [x] YAML parsing error handling
 - [x] Schema validation for key configs
 - [x] Config file not found handling
 - [x] No secrets logged
 - [x] No secrets in default values
+- [x] Thread-safe global instance ✅ (P3.4 fixed)
 
 ---
 
@@ -440,7 +479,10 @@ Token estimation uses 3.5 chars/token which is a rough approximation. Actual tok
 
 5. **Type Hints**: Consistent use of type hints throughout.
 
+6. **P1.1 Trade-off**: Float conversion for financial values was intentionally not fixed as it would require significant refactoring of indicator calculations which expect float arrays. The precision loss is acceptable for indicator calculations but should be documented.
+
 ---
 
 *Phase 1 Review Complete: 2025-12-19*
-*Fixes Applied: 2025-12-19 - 8 of 14 issues fixed (all P1/P2)*
+*P1/P2 Fixes Applied: 2025-12-19 - 8 issues fixed*
+*P3 Fixes Applied: 2025-12-19 - 5 issues fixed (13 of 14 total)*

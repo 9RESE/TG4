@@ -17,7 +17,7 @@ import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import Optional, Any, TYPE_CHECKING
+from typing import Optional, Any, TYPE_CHECKING, Union
 import json
 
 from .indicator_library import IndicatorLibrary
@@ -26,6 +26,55 @@ if TYPE_CHECKING:
     from .database import DatabasePool
 
 logger = logging.getLogger(__name__)
+
+
+def normalize_timestamp(value: Any, default: Optional[datetime] = None) -> datetime:
+    """
+    Normalize a timestamp value to a timezone-aware datetime.
+
+    Handles:
+    - datetime objects (makes timezone-aware if needed)
+    - ISO format strings
+    - Unix timestamps (int/float)
+    - None (returns default or current time)
+
+    Args:
+        value: Timestamp in any supported format
+        default: Default value if value is None
+
+    Returns:
+        Timezone-aware datetime in UTC
+    """
+    if value is None:
+        return default if default is not None else datetime.now(timezone.utc)
+
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            # Assume UTC for naive datetimes
+            return value.replace(tzinfo=timezone.utc)
+        return value
+
+    if isinstance(value, str):
+        try:
+            # Try ISO format parsing
+            dt = datetime.fromisoformat(value.replace('Z', '+00:00'))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt
+        except ValueError:
+            logger.warning(f"Could not parse timestamp string: {value}")
+            return default if default is not None else datetime.now(timezone.utc)
+
+    if isinstance(value, (int, float)):
+        # Assume Unix timestamp
+        try:
+            return datetime.fromtimestamp(value, tz=timezone.utc)
+        except (ValueError, OSError):
+            logger.warning(f"Invalid Unix timestamp: {value}")
+            return default if default is not None else datetime.now(timezone.utc)
+
+    logger.warning(f"Unexpected timestamp type {type(value)}: {value}")
+    return default if default is not None else datetime.now(timezone.utc)
 
 
 @dataclass
@@ -407,12 +456,12 @@ class MarketSnapshotBuilder:
         if primary_timeframe in candles_by_tf and candles_by_tf[primary_timeframe]:
             candles = candles_by_tf[primary_timeframe]
             current_price = Decimal(str(candles[-1].get('close', 0)))
-            snapshot_timestamp = candles[-1].get('timestamp', start_time)
+            snapshot_timestamp = normalize_timestamp(candles[-1].get('timestamp'), default=start_time)
         else:
             for tf_candles in candles_by_tf.values():
                 if tf_candles:
                     current_price = Decimal(str(tf_candles[-1].get('close', 0)))
-                    snapshot_timestamp = tf_candles[-1].get('timestamp', start_time)
+                    snapshot_timestamp = normalize_timestamp(tf_candles[-1].get('timestamp'), default=start_time)
                     break
 
         # Calculate indicators from primary timeframe
@@ -435,7 +484,7 @@ class MarketSnapshotBuilder:
         for tf, candles in candles_by_tf.items():
             candle_summaries[tf] = [
                 CandleSummary(
-                    timestamp=c.get('timestamp', start_time),
+                    timestamp=normalize_timestamp(c.get('timestamp'), default=start_time),
                     open=Decimal(str(c.get('open', 0))),
                     high=Decimal(str(c.get('high', 0))),
                     low=Decimal(str(c.get('low', 0))),
@@ -525,13 +574,13 @@ class MarketSnapshotBuilder:
         if primary_timeframe in candles_by_tf and candles_by_tf[primary_timeframe]:
             latest_candles = candles_by_tf[primary_timeframe]
             current_price = Decimal(str(latest_candles[-1].get('close', 0)))
-            snapshot_timestamp = latest_candles[-1].get('timestamp', now)
+            snapshot_timestamp = normalize_timestamp(latest_candles[-1].get('timestamp'), default=now)
         else:
             for tf, candles in candles_by_tf.items():
                 if candles:
                     latest_candles = candles
                     current_price = Decimal(str(candles[-1].get('close', 0)))
-                    snapshot_timestamp = candles[-1].get('timestamp', now)
+                    snapshot_timestamp = normalize_timestamp(candles[-1].get('timestamp'), default=now)
                     break
 
         # Calculate 24h price change if we have enough data
@@ -571,7 +620,7 @@ class MarketSnapshotBuilder:
         for tf, candles in candles_by_tf.items():
             candle_summaries[tf] = [
                 CandleSummary(
-                    timestamp=c.get('timestamp', now),
+                    timestamp=normalize_timestamp(c.get('timestamp'), default=now),
                     open=Decimal(str(c.get('open', 0))),
                     high=Decimal(str(c.get('high', 0))),
                     low=Decimal(str(c.get('low', 0))),
@@ -581,11 +630,9 @@ class MarketSnapshotBuilder:
                 for c in candles
             ]
 
-        # Calculate data age
-        if isinstance(snapshot_timestamp, datetime):
-            data_age = int((now - snapshot_timestamp).total_seconds())
-        else:
-            data_age = 0
+        # Calculate data age - normalize timestamp first
+        snapshot_timestamp = normalize_timestamp(snapshot_timestamp, default=now)
+        data_age = int((now - snapshot_timestamp).total_seconds())
 
         snapshot = MarketSnapshot(
             timestamp=snapshot_timestamp,

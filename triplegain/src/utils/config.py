@@ -6,17 +6,22 @@ This module provides:
 - Environment variable substitution
 - Config validation and schema enforcement
 - Cached config access
+- Thread-safe global config instance
 """
 
 import logging
 import os
 import re
+import threading
 from pathlib import Path
 from typing import Any, Optional
 
 import yaml
 
 logger = logging.getLogger(__name__)
+
+# Thread lock for global config loader access
+_config_lock = threading.Lock()
 
 
 class ConfigError(Exception):
@@ -278,13 +283,13 @@ class ConfigLoader:
         logger.debug("Prompts config validated successfully")
 
 
-# Global config instance (lazy-loaded)
+# Global config instance (lazy-loaded, thread-safe)
 _config_loader: Optional[ConfigLoader] = None
 
 
 def get_config_loader(config_dir: str | Path | None = None) -> ConfigLoader:
     """
-    Get or create the global ConfigLoader instance.
+    Get or create the global ConfigLoader instance (thread-safe).
 
     Args:
         config_dir: Path to config directory (uses default if not provided)
@@ -294,15 +299,32 @@ def get_config_loader(config_dir: str | Path | None = None) -> ConfigLoader:
     """
     global _config_loader
 
+    # Double-checked locking pattern for thread safety
     if _config_loader is None:
-        if config_dir is None:
-            # Default to config/ relative to project root
-            project_root = Path(__file__).parent.parent.parent.parent
-            config_dir = project_root / 'config'
+        with _config_lock:
+            # Check again inside lock
+            if _config_loader is None:
+                if config_dir is None:
+                    # Default to config/ relative to project root
+                    project_root = Path(__file__).parent.parent.parent.parent
+                    config_dir = project_root / 'config'
 
-        _config_loader = ConfigLoader(config_dir)
+                _config_loader = ConfigLoader(config_dir)
 
     return _config_loader
+
+
+def reset_config_loader() -> None:
+    """
+    Reset the global ConfigLoader instance (for testing).
+
+    This allows tests to re-initialize the config loader with
+    different settings. Thread-safe.
+    """
+    global _config_loader
+    with _config_lock:
+        _config_loader = None
+        logger.debug("Global config loader reset")
 
 
 def load_config(config_name: str) -> dict:

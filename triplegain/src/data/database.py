@@ -10,6 +10,7 @@ This module provides:
 
 import asyncio
 import logging
+import random
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
@@ -26,6 +27,12 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
+# Default retry configuration
+DEFAULT_MAX_RETRIES = 3
+DEFAULT_BASE_DELAY = 0.5  # seconds
+DEFAULT_MAX_DELAY = 30.0  # seconds
+
+
 @dataclass
 class DatabaseConfig:
     """Database connection configuration."""
@@ -37,6 +44,10 @@ class DatabaseConfig:
     min_connections: int = 5
     max_connections: int = 20
     command_timeout: int = 60
+    # Retry configuration
+    max_retries: int = DEFAULT_MAX_RETRIES
+    retry_base_delay: float = DEFAULT_BASE_DELAY
+    retry_max_delay: float = DEFAULT_MAX_DELAY
 
 
 class DatabasePool:
@@ -120,6 +131,110 @@ class DatabasePool:
         async with self._pool.acquire() as connection:
             async with connection.transaction():
                 yield connection
+
+    async def reconnect(self) -> None:
+        """
+        Reconnect to the database with exponential backoff.
+
+        Closes existing pool if any, then attempts to reconnect
+        with exponential backoff on failure.
+        """
+        # Close existing pool
+        if self._pool is not None:
+            try:
+                await self._pool.close()
+            except Exception as e:
+                logger.warning(f"Error closing pool during reconnect: {e}")
+            finally:
+                self._pool = None
+                self._connected = False
+
+        # Attempt reconnection with exponential backoff
+        last_error = None
+        for attempt in range(1, self.config.max_retries + 1):
+            try:
+                await self.connect()
+                logger.info(f"Reconnected to database on attempt {attempt}")
+                return
+            except Exception as e:
+                last_error = e
+                if attempt < self.config.max_retries:
+                    # Calculate delay with exponential backoff + jitter
+                    delay = min(
+                        self.config.retry_base_delay * (2 ** (attempt - 1)),
+                        self.config.retry_max_delay
+                    )
+                    # Add jitter (0-25% of delay)
+                    jitter = delay * random.uniform(0, 0.25)
+                    total_delay = delay + jitter
+                    logger.warning(
+                        f"Reconnect attempt {attempt}/{self.config.max_retries} failed: {e}. "
+                        f"Retrying in {total_delay:.2f}s"
+                    )
+                    await asyncio.sleep(total_delay)
+
+        raise RuntimeError(
+            f"Failed to reconnect after {self.config.max_retries} attempts: {last_error}"
+        )
+
+    async def execute_with_retry(
+        self,
+        operation: str,
+        query: str,
+        *args,
+        max_retries: Optional[int] = None
+    ) -> Any:
+        """
+        Execute a database operation with automatic retry on connection errors.
+
+        Args:
+            operation: Type of operation ('fetch', 'fetchrow', 'fetchval', 'execute')
+            query: SQL query to execute
+            *args: Query arguments
+            max_retries: Override default max retries (None uses config default)
+
+        Returns:
+            Query result
+
+        Raises:
+            RuntimeError: If all retries fail
+        """
+        retries = max_retries if max_retries is not None else self.config.max_retries
+        last_error = None
+
+        for attempt in range(1, retries + 1):
+            try:
+                async with self.acquire() as conn:
+                    if operation == 'fetch':
+                        return await conn.fetch(query, *args)
+                    elif operation == 'fetchrow':
+                        return await conn.fetchrow(query, *args)
+                    elif operation == 'fetchval':
+                        return await conn.fetchval(query, *args)
+                    elif operation == 'execute':
+                        return await conn.execute(query, *args)
+                    else:
+                        raise ValueError(f"Unknown operation: {operation}")
+
+            except (asyncpg.PostgresConnectionError, asyncpg.InterfaceError) as e:
+                last_error = e
+                logger.warning(
+                    f"Database connection error on attempt {attempt}/{retries}: {e}"
+                )
+                if attempt < retries:
+                    # Try to reconnect
+                    try:
+                        await self.reconnect()
+                    except Exception as reconnect_error:
+                        logger.error(f"Reconnection failed: {reconnect_error}")
+                        # Continue to next attempt anyway
+            except Exception as e:
+                # Non-connection errors should not be retried
+                raise
+
+        raise RuntimeError(
+            f"Database operation failed after {retries} attempts: {last_error}"
+        )
 
     async def fetch_candles(
         self,
@@ -500,6 +615,7 @@ def create_pool_from_config(config: dict) -> DatabasePool:
         DatabasePool instance (not yet connected)
     """
     conn_config = config.get('connection', {})
+    retry_config = config.get('retry', {})
 
     db_config = DatabaseConfig(
         host=conn_config.get('host', 'localhost'),
@@ -510,6 +626,10 @@ def create_pool_from_config(config: dict) -> DatabasePool:
         min_connections=int(conn_config.get('min_connections', 5)),
         max_connections=int(conn_config.get('max_connections', 20)),
         command_timeout=int(conn_config.get('command_timeout', 60)),
+        # Retry configuration
+        max_retries=int(retry_config.get('max_retries', DEFAULT_MAX_RETRIES)),
+        retry_base_delay=float(retry_config.get('base_delay', DEFAULT_BASE_DELAY)),
+        retry_max_delay=float(retry_config.get('max_delay', DEFAULT_MAX_DELAY)),
     )
 
     return DatabasePool(db_config)
