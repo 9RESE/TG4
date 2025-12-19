@@ -192,12 +192,62 @@ confidence:
 
 **Rejected**: These are foundation issues that compound over time. Better to fix now.
 
+---
+
+## Addendum: Deep Audit Fixes (2025-12-18)
+
+A secondary deep audit identified additional issues that were addressed:
+
+#### 13. Model Outcome Tracking (Trading Decision)
+
+**Problem**: `model_comparisons` table stored decisions but never tracked trade outcomes (P&L), making A/B analysis impossible.
+
+**Solution**:
+- `_store_model_comparisons()` now stores `price_at_decision`
+- Added `update_comparison_outcomes()` method to populate `was_correct` and `outcome_pnl_pct` after 1h/4h/24h
+
+```python
+async def update_comparison_outcomes(
+    self, symbol: str, timestamp_from: datetime, timestamp_to: datetime,
+    price_1h: float, price_4h: float, price_24h: float
+) -> int:
+    # Updates model_comparisons with outcome data
+```
+
+#### 14. `_last_output` Attribute Declaration (Base Agent)
+
+**Problem**: `_last_output` was used in agents but never declared in `__init__`, causing potential AttributeError.
+
+**Solution**: Added `self._last_output: Optional[AgentOutput] = None` in `BaseAgent.__init__()` and added `@property last_output` getter.
+
+#### 15. Zero-Equity Drawdown Edge Case (Risk Engine)
+
+**Problem**: `update_drawdown()` could fail or produce incorrect results when `peak_equity = 0` or `current_equity < 0`.
+
+**Solution**: Enhanced `update_drawdown()` with edge case handling:
+- Zero/zero equity → 0% drawdown (initial state)
+- Negative equity → >100% drawdown calculation
+- New peak detection → Reset drawdown to 0%
+
+```python
+def update_drawdown(self):
+    if self.current_equity <= 0 and self.peak_equity <= 0:
+        self.current_drawdown_pct = 0.0
+        return
+    # ... rest of method
+```
+
+**Tests Added**: 10 new unit tests covering these edge cases (378 total tests, was 368).
+
+---
+
 ## Related
 
+- [Phase 2 Deep Audit Review](../../development/reviews/phase-2/phase-2-deep-audit-review.md)
 - [Phase 2 Code Review](../../development/reviews/phase-2/phase-2-code-logic-review.md)
 - [Phase 2 Feature Documentation](../../development/features/phase-2-core-agents.md)
 - [ADR-002: Phase 2 Core Agents Architecture](ADR-002-phase2-core-agents-architecture.md)
 
 ---
 
-*ADR-003 - December 2025*
+*ADR-003 - December 2025 (Updated with Deep Audit fixes)*

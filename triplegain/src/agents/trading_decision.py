@@ -688,6 +688,9 @@ class TradingDecisionAgent(BaseAgent):
         if self.db is None:
             return
 
+        # Get current price for outcome tracking
+        current_price = float(snapshot.current_price)
+
         try:
             for decision in output.model_decisions:
                 query = """
@@ -695,9 +698,9 @@ class TradingDecisionAgent(BaseAgent):
                         timestamp, symbol, model_name, provider,
                         action, confidence, entry_price, stop_loss, take_profit,
                         reasoning, latency_ms, tokens_used, cost_usd,
-                        consensus_action, was_consensus
+                        consensus_action, was_consensus, price_at_decision
                     ) VALUES (
-                        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15
+                        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16
                     )
                 """
                 await self.db.execute(
@@ -717,9 +720,99 @@ class TradingDecisionAgent(BaseAgent):
                     decision.cost_usd,
                     output.action,
                     decision.action == output.action,
+                    current_price,
                 )
         except Exception as e:
             logger.error(f"Failed to store model comparisons: {e}")
+
+    async def update_comparison_outcomes(
+        self,
+        symbol: str,
+        timestamp_from: datetime,
+        timestamp_to: datetime,
+        price_1h: float,
+        price_4h: float,
+        price_24h: float,
+    ) -> int:
+        """
+        Update model comparison outcomes after price data is available.
+
+        Called by the orchestrator/scheduler after 1h, 4h, and 24h to populate
+        outcome tracking data for A/B analysis.
+
+        Args:
+            symbol: Trading symbol
+            timestamp_from: Start of time window
+            timestamp_to: End of time window
+            price_1h: Price 1 hour after decisions
+            price_4h: Price 4 hours after decisions
+            price_24h: Price 24 hours after decisions
+
+        Returns:
+            Number of records updated
+        """
+        if self.db is None:
+            logger.warning("No database configured, cannot update outcomes")
+            return 0
+
+        try:
+            # Get comparisons that need outcome updates
+            select_query = """
+                SELECT id, action, price_at_decision
+                FROM model_comparisons
+                WHERE symbol = $1
+                AND timestamp BETWEEN $2 AND $3
+                AND was_correct IS NULL
+                AND price_at_decision IS NOT NULL
+            """
+            rows = await self.db.fetch(select_query, symbol, timestamp_from, timestamp_to)
+
+            if not rows:
+                return 0
+
+            updated = 0
+            for row in rows:
+                comparison_id = row['id']
+                action = row['action']
+                price_at_decision = float(row['price_at_decision'])
+
+                # Calculate if decision was correct and P&L
+                if action == 'BUY':
+                    was_correct = price_4h > price_at_decision
+                    pnl_pct = ((price_4h - price_at_decision) / price_at_decision) * 100
+                elif action == 'SELL':
+                    was_correct = price_4h < price_at_decision
+                    pnl_pct = ((price_at_decision - price_4h) / price_at_decision) * 100
+                else:
+                    # HOLD/CLOSE - correct if price stayed within 2%
+                    price_change_pct = abs((price_4h - price_at_decision) / price_at_decision)
+                    was_correct = price_change_pct < 0.02
+                    pnl_pct = 0.0
+
+                # Update the record
+                update_query = """
+                    UPDATE model_comparisons
+                    SET price_after_1h = $1,
+                        price_after_4h = $2,
+                        price_after_24h = $3,
+                        was_correct = $4,
+                        outcome_pnl_pct = $5,
+                        updated_at = NOW()
+                    WHERE id = $6
+                """
+                await self.db.execute(
+                    update_query,
+                    price_1h, price_4h, price_24h,
+                    was_correct, pnl_pct, comparison_id
+                )
+                updated += 1
+
+            logger.info(f"Updated {updated} model comparison outcomes for {symbol}")
+            return updated
+
+        except Exception as e:
+            logger.error(f"Failed to update comparison outcomes: {e}")
+            return 0
 
     def _get_decision_query(self) -> str:
         """Get the trading decision query for LLMs."""

@@ -136,3 +136,88 @@ class TestAgentOutput:
 
         assert parsed['agent_name'] == "test_agent"
         assert parsed['confidence'] == 0.75
+
+
+# =============================================================================
+# BaseAgent Tests
+# =============================================================================
+
+class TestBaseAgentAttributes:
+    """Test BaseAgent initialization and attributes."""
+
+    def test_last_output_initially_none(self):
+        """last_output should be None before process() is called."""
+        from unittest.mock import MagicMock
+        from triplegain.src.agents.base_agent import BaseAgent
+
+        # Create a concrete subclass for testing
+        class TestAgent(BaseAgent):
+            agent_name = "test"
+
+            async def process(self, snapshot, portfolio_context=None, **kwargs):
+                pass
+
+            def get_output_schema(self):
+                return {}
+
+        agent = TestAgent(
+            llm_client=MagicMock(),
+            prompt_builder=MagicMock(),
+            config={},
+            db_pool=None,
+        )
+
+        assert agent.last_output is None
+        assert agent._last_output is None
+
+    def test_stats_initialized_to_zero(self):
+        """Performance stats should start at zero."""
+        from unittest.mock import MagicMock
+        from triplegain.src.agents.base_agent import BaseAgent
+
+        class TestAgent(BaseAgent):
+            agent_name = "test"
+
+            async def process(self, snapshot, portfolio_context=None, **kwargs):
+                pass
+
+            def get_output_schema(self):
+                return {}
+
+        agent = TestAgent(
+            llm_client=MagicMock(),
+            prompt_builder=MagicMock(),
+            config={},
+            db_pool=None,
+        )
+
+        stats = agent.get_stats()
+
+        assert stats['total_invocations'] == 0
+        assert stats['total_latency_ms'] == 0
+        assert stats['total_tokens'] == 0
+        assert stats['average_latency_ms'] == 0
+
+    def test_cache_initialized_empty(self):
+        """Cache should be empty on init."""
+        from unittest.mock import MagicMock
+        from triplegain.src.agents.base_agent import BaseAgent
+
+        class TestAgent(BaseAgent):
+            agent_name = "test"
+
+            async def process(self, snapshot, portfolio_context=None, **kwargs):
+                pass
+
+            def get_output_schema(self):
+                return {}
+
+        agent = TestAgent(
+            llm_client=MagicMock(),
+            prompt_builder=MagicMock(),
+            config={'cache_ttl_seconds': 600},
+            db_pool=None,
+        )
+
+        assert agent._cache == {}
+        assert agent._cache_ttl_seconds == 600

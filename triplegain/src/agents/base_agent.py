@@ -135,6 +135,9 @@ class BaseAgent(ABC):
         self._total_latency_ms = 0
         self._total_tokens = 0
 
+        # Last output for quick access (updated on each process() call)
+        self._last_output: Optional[AgentOutput] = None
+
         # Thread-safe cache with TTL
         self._cache: dict[str, tuple[AgentOutput, datetime]] = {}
         self._cache_lock = asyncio.Lock()
@@ -352,3 +355,13 @@ class BaseAgent(ABC):
                 if self._total_invocations > 0 else 0
             ),
         }
+
+    @property
+    def last_output(self) -> Optional[AgentOutput]:
+        """
+        Get the most recent output from this agent.
+
+        Returns:
+            The last AgentOutput produced by process(), or None if not yet called
+        """
+        return self._last_output

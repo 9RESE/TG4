@@ -1,9 +1,9 @@
 # Phase 2: Core Agents - Feature Documentation
 
-**Version**: 1.1
-**Status**: COMPLETE (with Code Review Fixes)
+**Version**: 1.2
+**Status**: COMPLETE (with Deep Audit Fixes)
 **Date**: 2025-12-18
-**Updated**: 2025-12-18 - Code review fixes applied
+**Updated**: 2025-12-18 - Deep audit fixes applied
 
 ## Overview
 
@@ -399,14 +399,41 @@ All issues identified in the Phase 2 code review have been addressed:
 - `risk_state_history` table for audit
 - Additional indexes for query optimization
 
+## Deep Audit Fixes (v1.2)
+
+A comprehensive deep audit identified additional issues:
+
+### Model Outcome Tracking (Trading Decision)
+**Issue**: `model_comparisons` table stored decisions but not trade outcomes.
+**Fix**:
+- `_store_model_comparisons()` now includes `price_at_decision`
+- Added `update_comparison_outcomes()` method for A/B analysis
+- Orchestrator can call after 1h/4h/24h to populate `was_correct`, `outcome_pnl_pct`
+
+### `_last_output` Attribute (Base Agent)
+**Issue**: Attribute used but never declared in `__init__`.
+**Fix**:
+- Added `self._last_output: Optional[AgentOutput] = None` in `__init__`
+- Added `@property last_output` getter for clean access
+
+### Drawdown Edge Cases (Risk Engine)
+**Issue**: `update_drawdown()` failed with zero or negative equity.
+**Fix**: Enhanced with edge case handling:
+- Zero/zero equity → 0% drawdown
+- Negative equity → >100% drawdown
+- New peak detection → Reset drawdown to 0%
+
+**Tests Added**: 10 new unit tests (378 total, was 368)
+
 ## References
 
 - [Phase 2 Implementation Plan](../TripleGain-implementation-plan/02-phase-2-core-agents.md)
 - [Risk Management Design](../TripleGain-master-design/03-risk-management-rules-engine.md)
 - [Multi-Agent Architecture](../TripleGain-master-design/01-multi-agent-architecture.md)
 - [Phase 2 Code Review](../reviews/phase-2/phase-2-code-logic-review.md)
+- [Phase 2 Deep Audit Review](../reviews/phase-2/phase-2-deep-audit-review.md)
 - [ADR-003: Phase 2 Code Review Fixes](../../architecture/09-decisions/ADR-003-phase2-code-review-fixes.md)
 
 ---
 
-*Phase 2 Feature Documentation v1.1 - December 2025*
+*Phase 2 Feature Documentation v1.2 - December 2025*

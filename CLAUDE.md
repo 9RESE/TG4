@@ -5,7 +5,7 @@ Python trading system with TimescaleDB + 6-model LLM comparison
 
 ## Quick Commands
 ```bash
-pytest triplegain/tests/                            # Run all tests (368 passing)
+pytest triplegain/tests/                            # Run all tests (378 passing)
 pytest --cov=triplegain/src --cov-report=term       # Run with coverage (67%)
 docker-compose up -d timescaledb                    # Start database
 python -m data.kraken_db.gap_filler --db-url "$DB_URL"  # Fill data gaps

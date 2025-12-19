@@ -157,14 +157,37 @@ class RiskState:
     last_weekly_reset: Optional[datetime] = None
 
     def update_drawdown(self):
-        """Update drawdown calculations."""
+        """
+        Update drawdown calculations.
+
+        Handles edge cases:
+        - Zero peak equity: No calculation (initial state)
+        - Negative equity: Clamps to 100% drawdown
+        - Current > peak: Updates peak (no drawdown)
+        """
+        # Guard against invalid equity states
+        if self.current_equity <= 0 and self.peak_equity <= 0:
+            # Initial state or invalid - reset drawdown
+            self.current_drawdown_pct = 0.0
+            return
+
+        # Update peak if current is higher
         if self.current_equity > self.peak_equity:
             self.peak_equity = self.current_equity
+            self.current_drawdown_pct = 0.0
+            return
 
+        # Calculate drawdown only if we have valid peak equity
         if self.peak_equity > 0:
-            self.current_drawdown_pct = float(
-                (self.peak_equity - self.current_equity) / self.peak_equity * 100
-            )
+            if self.current_equity < 0:
+                # Edge case: negative equity means 100%+ drawdown
+                self.current_drawdown_pct = 100.0 + float(
+                    abs(self.current_equity) / self.peak_equity * 100
+                )
+            else:
+                self.current_drawdown_pct = float(
+                    (self.peak_equity - self.current_equity) / self.peak_equity * 100
+                )
             self.max_drawdown_pct = max(self.max_drawdown_pct, self.current_drawdown_pct)
 
     def to_dict(self) -> dict:

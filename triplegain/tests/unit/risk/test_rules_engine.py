@@ -628,3 +628,96 @@ class TestMaxAllowedLeverage:
 
         # 5 losses
         assert risk_engine.get_max_allowed_leverage("trending_bull", 0, 5) == 1
+
+
+# =============================================================================
+# Drawdown Edge Case Tests
+# =============================================================================
+
+class TestDrawdownEdgeCases:
+    """Test drawdown calculation edge cases."""
+
+    def test_zero_equity_no_drawdown(self):
+        """Zero equity should result in zero drawdown."""
+        state = RiskState()
+        state.current_equity = Decimal("0")
+        state.peak_equity = Decimal("0")
+
+        state.update_drawdown()
+
+        assert state.current_drawdown_pct == 0.0
+
+    def test_initial_equity_sets_peak(self):
+        """First positive equity should set peak."""
+        state = RiskState()
+        state.current_equity = Decimal("10000")
+        state.peak_equity = Decimal("0")
+
+        state.update_drawdown()
+
+        assert state.peak_equity == Decimal("10000")
+        assert state.current_drawdown_pct == 0.0
+
+    def test_new_high_updates_peak(self):
+        """New high should update peak equity."""
+        state = RiskState()
+        state.peak_equity = Decimal("10000")
+        state.current_equity = Decimal("12000")
+
+        state.update_drawdown()
+
+        assert state.peak_equity == Decimal("12000")
+        assert state.current_drawdown_pct == 0.0
+
+    def test_drawdown_calculated_correctly(self):
+        """Normal drawdown calculation should work."""
+        state = RiskState()
+        state.peak_equity = Decimal("10000")
+        state.current_equity = Decimal("9000")
+
+        state.update_drawdown()
+
+        assert state.current_drawdown_pct == 10.0  # 10% drawdown
+        assert state.max_drawdown_pct == 10.0
+
+    def test_negative_equity_over_100_drawdown(self):
+        """Negative equity should show >100% drawdown."""
+        state = RiskState()
+        state.peak_equity = Decimal("10000")
+        state.current_equity = Decimal("-1000")  # Lost more than we had
+
+        state.update_drawdown()
+
+        # Should be 100% + (1000/10000)*100 = 110%
+        assert state.current_drawdown_pct == 110.0
+
+    def test_max_drawdown_tracks_worst(self):
+        """Max drawdown should track the worst drawdown seen."""
+        state = RiskState()
+        state.peak_equity = Decimal("10000")
+
+        # First drawdown: 10%
+        state.current_equity = Decimal("9000")
+        state.update_drawdown()
+        assert state.max_drawdown_pct == 10.0
+
+        # Recovery
+        state.current_equity = Decimal("9500")
+        state.update_drawdown()
+        assert state.max_drawdown_pct == 10.0  # Still 10%
+
+        # Deeper drawdown: 15%
+        state.current_equity = Decimal("8500")
+        state.update_drawdown()
+        assert state.max_drawdown_pct == 15.0
+
+    def test_zero_peak_with_positive_current(self):
+        """Positive current equity with zero peak should set peak."""
+        state = RiskState()
+        state.peak_equity = Decimal("0")
+        state.current_equity = Decimal("5000")
+
+        state.update_drawdown()
+
+        assert state.peak_equity == Decimal("5000")
+        assert state.current_drawdown_pct == 0.0

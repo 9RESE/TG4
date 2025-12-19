@@ -95,13 +95,16 @@ End-user documentation following the Diataxis framework.
 | [Reviews](development/reviews/) | Code and design reviews |
 | [API](api/README.md) | API documentation |
 
-#### Phase 2 Documentation (Current)
+#### Phase 2 Documentation (Complete)
 
 | Document | Description |
 |----------|-------------|
-| [Phase 2 Core Agents](development/features/phase-2-core-agents.md) | Feature documentation |
+| [Phase 2 Core Agents](development/features/phase-2-core-agents.md) | Feature documentation (v1.2) |
 | [Implementation Plan](development/TripleGain-implementation-plan/02-phase-2-core-agents.md) | Detailed implementation spec |
 | [ADR-002](architecture/09-decisions/ADR-002-phase2-core-agents-architecture.md) | Architecture decisions |
+| [ADR-003](architecture/09-decisions/ADR-003-phase2-code-review-fixes.md) | Code review fixes |
+| [Code Review](development/reviews/phase-2/phase-2-code-logic-review.md) | Initial code review |
+| [Deep Audit](development/reviews/phase-2/phase-2-deep-audit-review.md) | Comprehensive audit (88% confidence) |
 
 #### Phase 1 Documentation
 

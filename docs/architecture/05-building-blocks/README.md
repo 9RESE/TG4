@@ -96,6 +96,14 @@
 | Regime Detection | RegimeOutput | regime, position_size_multiplier, entry_strictness |
 | Trading Decision | TradingDecisionOutput | action, consensus_strength, entry_price, stop_loss |
 
+#### Agent Features (v1.2)
+
+| Feature | Description |
+|---------|-------------|
+| `last_output` Property | Access most recent output without cache lookup |
+| Model Outcome Tracking | `update_comparison_outcomes()` for A/B analysis |
+| Thread-Safe Caching | `asyncio.Lock` protected cache with TTL |
+
 ### Risk Layer (Phase 2 - COMPLETE)
 
 | Component | Location | Status | Responsibility |
@@ -115,7 +123,7 @@
 | Correlation | Max 40% correlated exposure (BTC/XRP) |
 | Margin | Sufficient available |
 
-#### Risk Engine Features (v1.1)
+#### Risk Engine Features (v1.2)
 
 | Feature | Description |
 |---------|-------------|
@@ -124,6 +132,7 @@
 | Volatility Detection | ATR spike detection with position reduction |
 | Correlation Matrix | BTC/XRP correlation-aware exposure limits |
 | Entry Strictness | Regime-based confidence adjustment |
+| Drawdown Edge Cases | Handles zero/negative equity scenarios |
 
 ### LLM Clients (Phase 2 - COMPLETE)
 
@@ -271,4 +280,5 @@ class BaseLLMClient(ABC):
 - [ADR-003: Phase 2 Code Review Fixes](../09-decisions/ADR-003-phase2-code-review-fixes.md)
 - [Phase 1 Review](../../development/reviews/phase-1/phase-1-comprehensive-review.md)
 - [Phase 2 Review](../../development/reviews/phase-2/phase-2-code-logic-review.md)
+- [Phase 2 Deep Audit](../../development/reviews/phase-2/phase-2-deep-audit-review.md)
 - [Phase 2 Feature Documentation](../../development/features/phase-2-core-agents.md)
