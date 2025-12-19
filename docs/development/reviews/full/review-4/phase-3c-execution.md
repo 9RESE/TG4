@@ -4,6 +4,7 @@
 **Estimated Context**: ~2,500 tokens (code) + review
 **Priority**: Critical - Real money execution
 **Output**: `findings/phase-3c-findings.md`
+**DO NOT IMPLEMENT FIXES**
 
 ---
 

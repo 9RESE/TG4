@@ -328,23 +328,34 @@ class MarketSnapshotBuilder:
         data_24h_task = self.db.fetch_24h_data(symbol)
         order_book_task = self.db.fetch_order_book(symbol) if include_order_book else None
 
-        # Gather all async tasks
-        if order_book_task:
-            results = await asyncio.gather(
-                *candle_tasks, data_24h_task, order_book_task,
-                return_exceptions=True
-            )
-            candle_results = results[:len(timeframes)]
-            data_24h = results[len(timeframes)]
-            order_book_data = results[len(timeframes) + 1]
-        else:
-            results = await asyncio.gather(
-                *candle_tasks, data_24h_task,
-                return_exceptions=True
-            )
-            candle_results = results[:len(timeframes)]
-            data_24h = results[len(timeframes)]
-            order_book_data = None
+        # Gather all async tasks with timeout
+        snapshot_timeout = self.config.get('snapshot_timeout', 30.0)
+        try:
+            if order_book_task:
+                results = await asyncio.wait_for(
+                    asyncio.gather(
+                        *candle_tasks, data_24h_task, order_book_task,
+                        return_exceptions=True
+                    ),
+                    timeout=snapshot_timeout
+                )
+                candle_results = results[:len(timeframes)]
+                data_24h = results[len(timeframes)]
+                order_book_data = results[len(timeframes) + 1]
+            else:
+                results = await asyncio.wait_for(
+                    asyncio.gather(
+                        *candle_tasks, data_24h_task,
+                        return_exceptions=True
+                    ),
+                    timeout=snapshot_timeout
+                )
+                candle_results = results[:len(timeframes)]
+                data_24h = results[len(timeframes)]
+                order_book_data = None
+        except asyncio.TimeoutError:
+            logger.error(f"Snapshot building timed out after {snapshot_timeout}s for {symbol}")
+            raise RuntimeError(f"Snapshot building timed out for {symbol}")
 
         # Build candles dict by timeframe and track failures
         candles_by_tf = {}
@@ -601,8 +612,12 @@ class MarketSnapshotBuilder:
         """
         Process raw order book data into features.
 
+        Handles both:
+        1. Raw order book format: {'bids': [{'price': x, 'size': y}, ...], 'asks': [...]}
+        2. Database format: {'bid_price': x, 'ask_price': y, 'bid_volume_total': z, ...}
+
         Args:
-            order_book: Raw order book with 'bids' and 'asks' lists
+            order_book: Order book data (raw or from database)
 
         Returns:
             OrderBookFeatures extracted from the book
@@ -610,7 +625,23 @@ class MarketSnapshotBuilder:
         bids = order_book.get('bids', [])
         asks = order_book.get('asks', [])
 
-        # Calculate depth in USD
+        # Check if we have pre-computed values from database
+        # Database format has keys like 'bid_price', 'ask_price', 'imbalance', etc.
+        if not bids and not asks and 'bid_price' in order_book:
+            # Use pre-computed values from database
+            bid_price = order_book.get('bid_price') or 0
+            ask_price = order_book.get('ask_price') or 0
+            mid_price = order_book.get('mid_price') or ((bid_price + ask_price) / 2 if bid_price and ask_price else 0)
+
+            return OrderBookFeatures(
+                bid_depth_usd=Decimal(str(order_book.get('bid_volume_total', 0) or 0)),
+                ask_depth_usd=Decimal(str(order_book.get('ask_volume_total', 0) or 0)),
+                imbalance=Decimal(str(round(order_book.get('imbalance', 0) or 0, 4))),
+                spread_bps=Decimal(str(round((order_book.get('spread_pct', 0) or 0) * 100, 2))),
+                weighted_mid=Decimal(str(round(mid_price, 2))),
+            )
+
+        # Calculate from raw bid/ask lists
         bid_depth = sum(b.get('price', 0) * b.get('size', 0) for b in bids)
         ask_depth = sum(a.get('price', 0) * a.get('size', 0) for a in asks)
 

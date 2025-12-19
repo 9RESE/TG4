@@ -4,6 +4,7 @@
 **Estimated Context**: ~3,000 tokens (code) + review
 **Priority**: High - System coordination
 **Output**: `findings/phase-3b-findings.md`
+**DO NOT IMPLEMENT FIXES**
 
 ---
 

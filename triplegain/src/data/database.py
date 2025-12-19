@@ -104,6 +104,23 @@ class DatabasePool:
         async with self._pool.acquire() as connection:
             yield connection
 
+    @asynccontextmanager
+    async def transaction(self) -> AsyncIterator[asyncpg.Connection]:
+        """
+        Execute operations in an atomic transaction.
+
+        Usage:
+            async with db.transaction() as conn:
+                await conn.execute("INSERT ...")
+                await conn.execute("UPDATE ...")
+        """
+        if not self._pool:
+            raise RuntimeError("Database pool not connected")
+
+        async with self._pool.acquire() as connection:
+            async with connection.transaction():
+                yield connection
+
     async def fetch_candles(
         self,
         symbol: str,

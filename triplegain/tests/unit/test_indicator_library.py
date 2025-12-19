@@ -757,18 +757,24 @@ class TestSupertrend:
         assert len(result['direction']) == len(sample_ohlcv['close'])
 
     def test_supertrend_direction_values(self, indicator_library, sample_ohlcv):
-        """Test Supertrend direction is 1 or -1."""
+        """Test Supertrend direction is 1 or -1 after warmup, NaN during warmup."""
+        period = 10
         result = indicator_library.calculate_supertrend(
             sample_ohlcv['high'],
             sample_ohlcv['low'],
             sample_ohlcv['close'],
-            period=10,
+            period=period,
             multiplier=3.0
         )
 
-        # Direction should be 0, 1, or -1
-        for direction in result['direction']:
-            assert direction in [0, 1, -1], f"Invalid direction: {direction}"
+        # Direction should be NaN during warmup, 1 or -1 after
+        for i, direction in enumerate(result['direction']):
+            if i < period:
+                # Warmup period - direction is NaN
+                assert np.isnan(direction), f"Expected NaN during warmup at index {i}, got {direction}"
+            else:
+                # After warmup - direction should be 1 (uptrend) or -1 (downtrend)
+                assert direction in [1, -1], f"Invalid direction at index {i}: {direction}"
 
     def test_supertrend_uptrend(self, indicator_library):
         """Test Supertrend direction is positive in uptrend."""

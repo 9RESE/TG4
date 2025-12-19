@@ -4,6 +4,7 @@
 **Estimated Context**: ~3,500 tokens (code) + review
 **Priority**: High - External interface security
 **Output**: `findings/phase-4-findings.md`
+**DO NOT IMPLEMENT FIXES**
 
 ---
 

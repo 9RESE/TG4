@@ -4,6 +4,7 @@
 **Estimated Context**: ~3,000 tokens (config) + review
 **Priority**: High - System-wide consistency
 **Output**: `findings/phase-5-findings.md`
+**DO NOT IMPLEMENT FIXES**
 
 ---
 

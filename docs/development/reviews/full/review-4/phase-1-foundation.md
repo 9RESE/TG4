@@ -4,6 +4,7 @@
 **Estimated Context**: ~4,000 tokens (code) + review
 **Priority**: High - All other phases depend on this
 **Output**: `findings/phase-1-findings.md`
+**DO NOT IMPLEMENT FIXES**
 
 ---
 

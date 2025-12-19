@@ -4,6 +4,7 @@
 **Estimated Context**: ~1,500 tokens (code) + review
 **Priority**: CRITICAL - Protects capital
 **Output**: `findings/phase-3a-findings.md`
+**DO NOT IMPLEMENT FIXES**
 
 ---
 

@@ -9,6 +9,10 @@ This directory contains Architecture Decision Records (ADRs) documenting signifi
 | [ADR-001](./ADR-001-phase1-foundation-architecture.md) | Phase 1 Foundation Architecture | Accepted | 2025-12-18 |
 | [ADR-002](./ADR-002-phase2-core-agents-architecture.md) | Phase 2 Core Agents Architecture | Accepted | 2025-12-18 |
 | [ADR-003](./ADR-003-phase2-code-review-fixes.md) | Phase 2 Code Review Fixes | Accepted | 2025-12-18 |
+| [ADR-004](./ADR-004-phase3-orchestration-architecture.md) | Phase 3 Orchestration Architecture | Accepted | 2025-12-18 |
+| [ADR-005](./ADR-005-security-robustness-fixes.md) | Security & Robustness Fixes | Accepted | 2025-12-19 |
+| [ADR-006](./ADR-006-consolidated-review-fixes.md) | Consolidated Code Review Fixes | Accepted | 2025-12-19 |
+| [ADR-007](./ADR-007-phase1-foundation-review-fixes.md) | Phase 1 Foundation Review Fixes | Accepted | 2025-12-19 |
 
 ## ADR Template
 

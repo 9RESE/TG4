@@ -4,6 +4,7 @@
 **Estimated Context**: ~3,500 tokens (code) + review
 **Priority**: High - All agents depend on this
 **Output**: `findings/phase-2a-findings.md`
+**DO NOT IMPLEMENT FIXES**
 
 ---
 

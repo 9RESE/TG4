@@ -830,8 +830,8 @@ class IndicatorLibrary:
         rsi = self.calculate_rsi(closes, rsi_period)
         n = len(closes)
 
-        k = np.full(n, np.nan)
-        d = np.full(n, np.nan)
+        # Calculate raw stochastic RSI values first
+        raw_stoch = np.full(n, np.nan)
 
         for i in range(rsi_period + stoch_period - 1, n):
             rsi_window = rsi[i - stoch_period + 1:i + 1]
@@ -839,16 +839,18 @@ class IndicatorLibrary:
             rsi_max = np.nanmax(rsi_window)
 
             if rsi_max - rsi_min != 0:
-                k[i] = 100 * (rsi[i] - rsi_min) / (rsi_max - rsi_min)
+                raw_stoch[i] = 100 * (rsi[i] - rsi_min) / (rsi_max - rsi_min)
             else:
-                k[i] = 50.0
+                raw_stoch[i] = 50.0
 
-        # Smooth K to get %K (using SMA)
+        # Smooth raw stochastic to get %K (using SMA)
+        k = np.full(n, np.nan)
         for i in range(rsi_period + stoch_period + k_period - 2, n):
-            k_window = k[i - k_period + 1:i + 1]
+            k_window = raw_stoch[i - k_period + 1:i + 1]
             k[i] = np.nanmean(k_window)
 
         # Calculate %D (SMA of %K)
+        d = np.full(n, np.nan)
         for i in range(rsi_period + stoch_period + k_period + d_period - 3, n):
             d_window = k[i - d_period + 1:i + 1]
             d[i] = np.nanmean(d_window)
@@ -925,8 +927,9 @@ class IndicatorLibrary:
         upper_band = hl2 + multiplier * atr
         lower_band = hl2 - multiplier * atr
 
-        supertrend = np.zeros(n)
-        direction = np.zeros(n)  # 1 = uptrend, -1 = downtrend
+        # Initialize with NaN for warmup period, then track direction
+        supertrend = np.full(n, np.nan)
+        direction = np.full(n, np.nan)  # 1 = uptrend, -1 = downtrend
 
         # Initialize based on price position relative to midpoint (hl2)
         # Using midpoint gives a more accurate initial trend direction

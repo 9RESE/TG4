@@ -4,6 +4,7 @@
 **Estimated Context**: ~5,000 tokens (code) + review
 **Priority**: Critical - Core trading logic
 **Output**: `findings/phase-2b-findings.md`
+**DO NOT IMPLEMENT FIXES**
 
 ---
 

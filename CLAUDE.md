@@ -93,6 +93,13 @@ migrations/             # Database migrations (001, 002, 003)
 ## Documentation
 - [Master Design](docs/development/TripleGain-master-design/README.md)
 - [Implementation Plan](docs/development/TripleGain-implementation-plan/README.md)
+- [Architecture Decisions (ADRs)](docs/architecture/09-decisions/README.md)
+- [Code Reviews](docs/development/reviews/)
 - [Kraken API](docs/api/kraken/kraken-api-reference.md)
+- [Changelog](CHANGELOG.md)
+
+## Version
+**v0.3.1** (2025-12-19) - Phase 1 Foundation Review Fixes
+
 ---
 *Uses global config from ~/.claude/CLAUDE.md*

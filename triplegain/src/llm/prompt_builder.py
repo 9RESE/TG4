@@ -112,7 +112,10 @@ class PromptBuilder:
         budget = self.config['token_budgets'].get(tier, {})
 
         # Get system prompt from template
-        system_prompt = self._templates.get(agent_name, '')
+        system_prompt = self._templates.get(agent_name)
+        if not system_prompt:
+            logger.warning(f"No template found for agent {agent_name}, using minimal prompt")
+            system_prompt = f"You are the {agent_name} agent. Analyze the data and provide structured output."
 
         # Build user message components
         user_parts = []
@@ -292,7 +295,8 @@ class PromptBuilder:
             required_keywords = agent_requirements[agent_name]
             content_lower = content.lower()
             missing = [kw for kw in required_keywords if kw not in content_lower]
-            if len(missing) > len(required_keywords) // 2:
+            # Require at least 2/3 of keywords to be present (stricter validation)
+            if len(missing) > len(required_keywords) // 3:
                 errors.append(f"Template missing key concepts: {missing}")
 
         return {

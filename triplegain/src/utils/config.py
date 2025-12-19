@@ -157,23 +157,33 @@ class ConfigLoader:
         elif isinstance(value, list):
             return [self._coerce_types(item) for item in value]
         elif isinstance(value, str):
+            # Try boolean first (before numeric to avoid "true" -> error)
+            if value.lower() in ('true', 'yes', 'on'):
+                return True
+            if value.lower() in ('false', 'no', 'off'):
+                return False
+
+            # Skip special float values that shouldn't be converted
+            if value.lower() in ('inf', '-inf', 'nan', 'infinity', '-infinity'):
+                return value
+
             # Try integer
             if value.lstrip('-').isdigit():
                 try:
                     return int(value)
                 except ValueError:
                     pass
-            # Try float
+
+            # Try float (including scientific notation like 1e-5, 2.5E10)
             try:
-                if '.' in value and value.replace('.', '', 1).lstrip('-').isdigit():
-                    return float(value)
+                float_val = float(value)
+                # Verify it's a valid number (not inf/nan from string)
+                import math
+                if math.isfinite(float_val):
+                    return float_val
             except ValueError:
                 pass
-            # Try boolean
-            if value.lower() in ('true', 'yes', 'on'):
-                return True
-            if value.lower() in ('false', 'no', 'off'):
-                return False
+
             return value
         return value
 
