@@ -68,6 +68,9 @@ class PromptBuilder:
     # Characters per token (conservative estimate for JSON)
     CHARS_PER_TOKEN = 3.5
 
+    # Safety margin for token estimation (10% buffer for special tokens, formatting, etc.)
+    TOKEN_SAFETY_MARGIN = 1.10
+
     def __init__(self, config: dict):
         """
         Initialize PromptBuilder.
@@ -166,28 +169,37 @@ class PromptBuilder:
         """
         Estimate token count for text.
 
-        Uses ~3.5 characters per token (conservative for JSON).
+        Uses ~3.5 characters per token (conservative for JSON) with a 10%
+        safety margin to account for special tokens, BPE encoding variations,
+        and formatting overhead.
         """
         if not text:
             return 0
-        return int(len(text) / self.CHARS_PER_TOKEN)
+        base_estimate = len(text) / self.CHARS_PER_TOKEN
+        return int(base_estimate * self.TOKEN_SAFETY_MARGIN)
 
     def truncate_to_budget(
         self,
         content: str,
         max_tokens: int
     ) -> str:
-        """Truncate content to fit token budget."""
+        """
+        Truncate content to fit token budget.
+
+        Accounts for safety margin so truncated content will fit within
+        budget when estimate_tokens() is called on it.
+        """
         if max_tokens <= 0:
             return ""
 
-        max_chars = int(max_tokens * self.CHARS_PER_TOKEN)
+        # Account for safety margin by dividing - the estimate will multiply back
+        effective_chars = int(max_tokens * self.CHARS_PER_TOKEN / self.TOKEN_SAFETY_MARGIN)
 
-        if len(content) <= max_chars:
+        if len(content) <= effective_chars:
             return content
 
         # Truncate with ellipsis indicator
-        return content[:max_chars - 20] + "\n... [truncated]"
+        return content[:effective_chars - 20] + "\n... [truncated]"
 
     def _load_templates(self) -> None:
         """Load all prompt templates from disk with validation."""

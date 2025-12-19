@@ -297,7 +297,8 @@ class TestTAEndpoints:
 
         assert response.status_code == 200
         data = response.json()
-        assert data['symbol'] == 'BTC_USDT'
+        # Symbol is normalized to standard format (BTC/USDT instead of BTC_USDT)
+        assert data['symbol'] == 'BTC/USDT'
         assert data['cached'] is False
         assert 'output' in data
         assert 'stats' in data
@@ -343,7 +344,8 @@ class TestTAEndpoints:
 
         assert response.status_code == 200
         data = response.json()
-        assert data['symbol'] == 'BTC_USDT'
+        # Symbol is normalized to standard format (BTC/USDT instead of BTC_USDT)
+        assert data['symbol'] == 'BTC/USDT'
         assert data['fresh'] is True
 
     def test_post_ta_analysis_no_agent(self, client_minimal):
@@ -381,7 +383,8 @@ class TestTAEndpoints:
         response = client.get("/api/v1/agents/ta/BTC_USDT")
 
         assert response.status_code == 500
-        assert 'failed' in response.json()['detail']
+        # Error messages are now generic for security (no details exposed)
+        assert 'Internal server error' in response.json()['detail']
 
 
 # =============================================================================
@@ -397,7 +400,8 @@ class TestRegimeEndpoints:
 
         assert response.status_code == 200
         data = response.json()
-        assert data['symbol'] == 'BTC_USDT'
+        # Symbol is normalized to standard format (BTC/USDT instead of BTC_USDT)
+        assert data['symbol'] == 'BTC/USDT'
         assert data['cached'] is False
         assert 'output' in data
         assert 'parameters' in data
@@ -440,7 +444,8 @@ class TestTradingDecisionEndpoints:
 
         assert response.status_code == 200
         data = response.json()
-        assert data['symbol'] == 'BTC_USDT'
+        # Symbol is normalized to standard format (BTC/USDT instead of BTC_USDT)
+        assert data['symbol'] == 'BTC/USDT'
         assert 'consensus' in data
         assert data['consensus']['action'] == 'BUY'
         assert 'model_results' in data

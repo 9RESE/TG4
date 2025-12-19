@@ -289,6 +289,8 @@ class CoordinatorAgent:
                 f"(LLM failures: {self._consecutive_llm_failures}, "
                 f"API failures: {self._consecutive_api_failures})"
             )
+            # Publish degradation change event (including recovery to NORMAL)
+            asyncio.create_task(self._publish_degradation_event(old_level, new_level))
 
     def _record_llm_success(self) -> None:
         """Record successful LLM call and potentially recover from degradation."""
@@ -309,6 +311,31 @@ class CoordinatorAgent:
         """Record API failure and potentially increase degradation."""
         self._consecutive_api_failures += 1
         self._check_degradation_level()
+
+    async def _publish_degradation_event(
+        self,
+        old_level: DegradationLevel,
+        new_level: DegradationLevel,
+    ) -> None:
+        """
+        Publish degradation level change event.
+
+        This allows other components to react to degradation changes,
+        including recovery to NORMAL level.
+        """
+        event_type = "degradation_recovery" if new_level == DegradationLevel.NORMAL else "degradation_increased"
+        await self.bus.publish(create_message(
+            topic=MessageTopic.SYSTEM_EVENTS,
+            source=self.agent_name,
+            payload={
+                "event": event_type,
+                "old_level": old_level.name,
+                "new_level": new_level.name,
+                "llm_failures": self._consecutive_llm_failures,
+                "api_failures": self._consecutive_api_failures,
+            },
+            priority=MessagePriority.HIGH,
+        ))
 
     async def _main_loop(self) -> None:
         """Main coordinator loop - executes scheduled tasks."""
@@ -809,9 +836,15 @@ class CoordinatorAgent:
         # Build conflict resolution prompt
         prompt = self._build_conflict_prompt(signal, conflicts)
 
+        # Convert timeout from ms to seconds
+        timeout_seconds = self._max_resolution_time_ms / 1000.0
+
         try:
-            # Try primary model (DeepSeek V3)
-            response = await self._call_llm_for_resolution(prompt)
+            # Try primary model (DeepSeek V3) with timeout enforcement
+            response = await asyncio.wait_for(
+                self._call_llm_for_resolution(prompt),
+                timeout=timeout_seconds,
+            )
             resolution = self._parse_resolution(response)
             self._total_conflicts_resolved += 1
             self._record_llm_success()
@@ -821,6 +854,15 @@ class CoordinatorAgent:
 
             return resolution
 
+        except asyncio.TimeoutError:
+            logger.warning(f"Conflict resolution timed out after {self._max_resolution_time_ms}ms")
+            self._record_llm_failure()
+            # Default to conservative action on timeout
+            return ConflictResolution(
+                action="wait",
+                reasoning=f"Resolution timed out after {self._max_resolution_time_ms}ms",
+                confidence=0.0,
+            )
         except Exception as e:
             logger.error(f"Conflict resolution failed: {e}")
             self._record_llm_failure()

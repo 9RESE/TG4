@@ -97,7 +97,7 @@ def create_orchestration_router(
             return coordinator.get_status()
         except Exception as e:
             logger.error(f"Failed to get coordinator status: {e}", exc_info=True)
-            raise HTTPException(status_code=500, detail=str(e))
+            raise HTTPException(status_code=500, detail="Internal server error getting coordinator status")
 
     @router.post("/coordinator/pause")
     async def pause_coordinator():
@@ -119,7 +119,7 @@ def create_orchestration_router(
             }
         except Exception as e:
             logger.error(f"Failed to pause coordinator: {e}", exc_info=True)
-            raise HTTPException(status_code=500, detail=str(e))
+            raise HTTPException(status_code=500, detail="Internal server error pausing coordinator")
 
     @router.post("/coordinator/resume")
     async def resume_coordinator():
@@ -141,7 +141,7 @@ def create_orchestration_router(
             }
         except Exception as e:
             logger.error(f"Failed to resume coordinator: {e}", exc_info=True)
-            raise HTTPException(status_code=500, detail=str(e))
+            raise HTTPException(status_code=500, detail="Internal server error resuming coordinator")
 
     @router.post("/coordinator/task/{task_name}/run")
     async def force_run_task(
@@ -177,7 +177,7 @@ def create_orchestration_router(
             raise
         except Exception as e:
             logger.error(f"Failed to run task: {e}", exc_info=True)
-            raise HTTPException(status_code=500, detail=str(e))
+            raise HTTPException(status_code=500, detail="Internal server error running task")
 
     @router.post("/coordinator/task/{task_name}/enable")
     async def enable_task(task_name: str):
@@ -231,7 +231,7 @@ def create_orchestration_router(
             }
         except Exception as e:
             logger.error(f"Failed to get portfolio allocation: {e}", exc_info=True)
-            raise HTTPException(status_code=500, detail=str(e))
+            raise HTTPException(status_code=500, detail="Internal server error getting portfolio allocation")
 
     @router.post("/portfolio/rebalance")
     async def force_rebalance(
@@ -260,7 +260,7 @@ def create_orchestration_router(
             }
         except Exception as e:
             logger.error(f"Failed to rebalance portfolio: {e}", exc_info=True)
-            raise HTTPException(status_code=500, detail=str(e))
+            raise HTTPException(status_code=500, detail="Internal server error rebalancing portfolio")
 
     # -------------------------------------------------------------------------
     # Position Endpoints
@@ -300,7 +300,7 @@ def create_orchestration_router(
             }
         except Exception as e:
             logger.error(f"Failed to get positions: {e}", exc_info=True)
-            raise HTTPException(status_code=500, detail=str(e))
+            raise HTTPException(status_code=500, detail="Internal server error getting positions")
 
     @router.get("/positions/exposure")
     async def get_exposure():
@@ -318,7 +318,7 @@ def create_orchestration_router(
             }
         except Exception as e:
             logger.error(f"Failed to get exposure: {e}", exc_info=True)
-            raise HTTPException(status_code=500, detail=str(e))
+            raise HTTPException(status_code=500, detail="Internal server error getting exposure")
 
     @router.get("/positions/{position_id}")
     async def get_position(position_id: str):
@@ -335,7 +335,7 @@ def create_orchestration_router(
             raise
         except Exception as e:
             logger.error(f"Failed to get position: {e}", exc_info=True)
-            raise HTTPException(status_code=500, detail=str(e))
+            raise HTTPException(status_code=500, detail="Internal server error getting position")
 
     @router.post("/positions/{position_id}/close")
     async def close_position(
@@ -371,7 +371,7 @@ def create_orchestration_router(
             raise
         except Exception as e:
             logger.error(f"Failed to close position: {e}", exc_info=True)
-            raise HTTPException(status_code=500, detail=str(e))
+            raise HTTPException(status_code=500, detail="Internal server error closing position")
 
     @router.patch("/positions/{position_id}")
     async def modify_position(
@@ -404,7 +404,7 @@ def create_orchestration_router(
             raise
         except Exception as e:
             logger.error(f"Failed to modify position: {e}", exc_info=True)
-            raise HTTPException(status_code=500, detail=str(e))
+            raise HTTPException(status_code=500, detail="Internal server error modifying position")
 
     # -------------------------------------------------------------------------
     # Order Endpoints
@@ -434,7 +434,7 @@ def create_orchestration_router(
             }
         except Exception as e:
             logger.error(f"Failed to get orders: {e}", exc_info=True)
-            raise HTTPException(status_code=500, detail=str(e))
+            raise HTTPException(status_code=500, detail="Internal server error getting orders")
 
     @router.get("/orders/{order_id}")
     async def get_order(order_id: str):
@@ -451,7 +451,7 @@ def create_orchestration_router(
             raise
         except Exception as e:
             logger.error(f"Failed to get order: {e}", exc_info=True)
-            raise HTTPException(status_code=500, detail=str(e))
+            raise HTTPException(status_code=500, detail="Internal server error getting order")
 
     @router.post("/orders/{order_id}/cancel")
     async def cancel_order(order_id: str):
@@ -480,7 +480,7 @@ def create_orchestration_router(
             raise
         except Exception as e:
             logger.error(f"Failed to cancel order: {e}", exc_info=True)
-            raise HTTPException(status_code=500, detail=str(e))
+            raise HTTPException(status_code=500, detail="Internal server error cancelling order")
 
     @router.post("/orders/sync")
     async def sync_orders():
@@ -496,7 +496,7 @@ def create_orchestration_router(
             }
         except Exception as e:
             logger.error(f"Failed to sync orders: {e}", exc_info=True)
-            raise HTTPException(status_code=500, detail=str(e))
+            raise HTTPException(status_code=500, detail="Internal server error syncing orders")
 
     # -------------------------------------------------------------------------
     # Statistics Endpoints

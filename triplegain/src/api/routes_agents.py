@@ -23,6 +23,8 @@ except ImportError:
     APIRouter = None
     BaseModel = object
 
+from .validation import validate_symbol_or_raise
+
 logger = logging.getLogger(__name__)
 
 
@@ -104,6 +106,9 @@ def create_agent_router(
         Returns:
             TA output with trend, momentum, signals, and bias
         """
+        # Validate symbol format
+        symbol = validate_symbol_or_raise(symbol, strict=False)
+
         if not ta_agent:
             raise HTTPException(status_code=503, detail="TA Agent not initialized")
 
@@ -133,7 +138,7 @@ def create_agent_router(
 
         except Exception as e:
             logger.error(f"TA analysis failed for {symbol}: {e}", exc_info=True)
-            raise HTTPException(status_code=500, detail=f"TA analysis failed: {str(e)}")
+            raise HTTPException(status_code=500, detail="Internal server error during TA analysis")
 
     @router.post("/agents/ta/{symbol}/run")
     async def run_ta_analysis(
@@ -150,6 +155,9 @@ def create_agent_router(
         Returns:
             TA output with trend, momentum, signals, and bias
         """
+        # Validate symbol format
+        symbol = validate_symbol_or_raise(symbol, strict=False)
+
         if not ta_agent:
             raise HTTPException(status_code=503, detail="TA Agent not initialized")
 
@@ -169,7 +177,7 @@ def create_agent_router(
 
         except Exception as e:
             logger.error(f"TA analysis failed for {symbol}: {e}", exc_info=True)
-            raise HTTPException(status_code=500, detail=f"TA analysis failed: {str(e)}")
+            raise HTTPException(status_code=500, detail="Internal server error during TA analysis")
 
     # ---------------------------------------------------------------------
     # Regime Detection Endpoints
@@ -190,6 +198,9 @@ def create_agent_router(
         Returns:
             Regime classification with recommended parameters
         """
+        # Validate symbol format
+        symbol = validate_symbol_or_raise(symbol, strict=False)
+
         if not regime_agent:
             raise HTTPException(status_code=503, detail="Regime Agent not initialized")
 
@@ -226,7 +237,7 @@ def create_agent_router(
 
         except Exception as e:
             logger.error(f"Regime detection failed for {symbol}: {e}", exc_info=True)
-            raise HTTPException(status_code=500, detail=f"Regime detection failed: {str(e)}")
+            raise HTTPException(status_code=500, detail="Internal server error during regime detection")
 
     @router.post("/agents/regime/{symbol}/run")
     async def run_regime_detection(
@@ -243,6 +254,9 @@ def create_agent_router(
         Returns:
             Regime classification with recommended parameters
         """
+        # Validate symbol format
+        symbol = validate_symbol_or_raise(symbol, strict=False)
+
         if not regime_agent:
             raise HTTPException(status_code=503, detail="Regime Agent not initialized")
 
@@ -271,7 +285,7 @@ def create_agent_router(
 
         except Exception as e:
             logger.error(f"Regime detection failed for {symbol}: {e}", exc_info=True)
-            raise HTTPException(status_code=500, detail=f"Regime detection failed: {str(e)}")
+            raise HTTPException(status_code=500, detail="Internal server error during regime detection")
 
     # ---------------------------------------------------------------------
     # Trading Decision Endpoints
@@ -294,6 +308,9 @@ def create_agent_router(
         Returns:
             Consensus trading decision with all model outputs
         """
+        # Validate symbol format
+        symbol = validate_symbol_or_raise(symbol, strict=False)
+
         if not trading_agent:
             raise HTTPException(status_code=503, detail="Trading Decision Agent not initialized")
 
@@ -369,7 +386,7 @@ def create_agent_router(
 
         except Exception as e:
             logger.error(f"Trading decision failed for {symbol}: {e}", exc_info=True)
-            raise HTTPException(status_code=500, detail=f"Trading decision failed: {str(e)}")
+            raise HTTPException(status_code=500, detail="Internal server error during trading decision")
 
     # ---------------------------------------------------------------------
     # Risk Management Endpoints
@@ -440,7 +457,7 @@ def create_agent_router(
 
         except Exception as e:
             logger.error(f"Trade validation failed: {e}", exc_info=True)
-            raise HTTPException(status_code=500, detail=f"Validation failed: {str(e)}")
+            raise HTTPException(status_code=500, detail="Internal server error during trade validation")
 
     @router.get("/risk/state")
     async def get_risk_state():
@@ -498,7 +515,7 @@ def create_agent_router(
 
         except Exception as e:
             logger.error(f"Failed to get risk state: {e}", exc_info=True)
-            raise HTTPException(status_code=500, detail=f"Failed to get risk state: {str(e)}")
+            raise HTTPException(status_code=500, detail="Internal server error getting risk state")
 
     @router.post("/risk/reset")
     async def reset_risk_state(
@@ -534,7 +551,7 @@ def create_agent_router(
             raise
         except Exception as e:
             logger.error(f"Failed to reset risk state: {e}", exc_info=True)
-            raise HTTPException(status_code=500, detail=f"Reset failed: {str(e)}")
+            raise HTTPException(status_code=500, detail="Internal server error resetting risk state")
 
     # ---------------------------------------------------------------------
     # Agent Stats Endpoints

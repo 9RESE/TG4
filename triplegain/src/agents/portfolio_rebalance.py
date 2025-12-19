@@ -112,6 +112,7 @@ class RebalanceOutput(AgentOutput):
     dca_batches: int = 1  # Number of DCA batches
     dca_interval_hours: int = 0  # Hours between batches
     total_trade_value_usd: Decimal = Decimal(0)  # Total trade value
+    used_fallback_strategy: bool = False  # True if LLM failed and defaults were used
 
     def to_dict(self) -> dict:
         """Serialize to dictionary."""
@@ -124,6 +125,7 @@ class RebalanceOutput(AgentOutput):
             "dca_batches": self.dca_batches,
             "dca_interval_hours": self.dca_interval_hours,
             "total_trade_value_usd": float(self.total_trade_value_usd),
+            "used_fallback_strategy": self.used_fallback_strategy,
         })
         return base
 
@@ -169,6 +171,15 @@ class PortfolioRebalanceAgent(BaseAgent):
         self.target_btc_pct = Decimal(str(target.get('btc_pct', 33.33)))
         self.target_xrp_pct = Decimal(str(target.get('xrp_pct', 33.33)))
         self.target_usdt_pct = Decimal(str(target.get('usdt_pct', 33.34)))
+
+        # Validate target allocations sum to ~100%
+        total_allocation = self.target_btc_pct + self.target_xrp_pct + self.target_usdt_pct
+        if abs(total_allocation - 100) > Decimal('0.1'):
+            logger.warning(
+                f"Target allocations sum to {float(total_allocation):.2f}%, not 100%. "
+                f"BTC={float(self.target_btc_pct):.2f}%, XRP={float(self.target_xrp_pct):.2f}%, "
+                f"USDT={float(self.target_usdt_pct):.2f}%"
+            )
 
         # Rebalancing settings
         rebalancing = config.get('rebalancing', {})
@@ -243,6 +254,7 @@ class PortfolioRebalanceAgent(BaseAgent):
 
             # Use LLM for execution strategy if we have trades
             execution_strategy = self.default_execution_type
+            used_fallback = False
             if calculated_trades and self.llm:
                 try:
                     strategy = await self._get_execution_strategy(allocation, calculated_trades)
@@ -251,8 +263,11 @@ class PortfolioRebalanceAgent(BaseAgent):
                     # Update trades with LLM recommendations
                     if 'trades' in strategy:
                         calculated_trades = self._parse_llm_trades(strategy['trades'])
+                        # Recalculate total trade value after LLM modifications
+                        total_trade_value = sum(t.amount_usd for t in calculated_trades)
                 except Exception as e:
                     logger.warning(f"LLM strategy decision failed, using defaults: {e}")
+                    used_fallback = True
 
             # Apply DCA batching for large rebalances
             dca_trades, num_batches, interval_hours = self._create_dca_batches(calculated_trades)
@@ -272,6 +287,7 @@ class PortfolioRebalanceAgent(BaseAgent):
                     f"Deviation {float(allocation.max_deviation_pct):.1f}% "
                     f"exceeds threshold {float(self.threshold_pct)}%"
                     + (f" (DCA: {num_batches} batches)" if num_batches > 1 else "")
+                    + (" [using fallback strategy]" if used_fallback else "")
                 ),
                 action="rebalance",
                 current_allocation=allocation,
@@ -280,6 +296,7 @@ class PortfolioRebalanceAgent(BaseAgent):
                 dca_batches=num_batches,
                 dca_interval_hours=interval_hours,
                 total_trade_value_usd=total_trade_value,
+                used_fallback_strategy=used_fallback,
                 latency_ms=latency_ms,
                 model_used=self.model,
             )
@@ -324,10 +341,25 @@ class PortfolioRebalanceAgent(BaseAgent):
         available_xrp = Decimal(str(balances.get('XRP', 0))) - hodl_bags.get('XRP', Decimal(0))
         available_usdt = Decimal(str(balances.get('USDT', 0))) - hodl_bags.get('USDT', Decimal(0))
 
-        # Ensure non-negative
-        available_btc = max(available_btc, Decimal(0))
-        available_xrp = max(available_xrp, Decimal(0))
-        available_usdt = max(available_usdt, Decimal(0))
+        # Ensure non-negative (log warning if hodl bags exceed balance)
+        if available_btc < 0:
+            logger.warning(
+                f"BTC hodl bag ({float(hodl_bags.get('BTC', 0))}) exceeds balance "
+                f"({float(balances.get('BTC', 0))}), clamping to 0"
+            )
+            available_btc = Decimal(0)
+        if available_xrp < 0:
+            logger.warning(
+                f"XRP hodl bag ({float(hodl_bags.get('XRP', 0))}) exceeds balance "
+                f"({float(balances.get('XRP', 0))}), clamping to 0"
+            )
+            available_xrp = Decimal(0)
+        if available_usdt < 0:
+            logger.warning(
+                f"USDT hodl bag ({float(hodl_bags.get('USDT', 0))}) exceeds balance "
+                f"({float(balances.get('USDT', 0))}), clamping to 0"
+            )
+            available_usdt = Decimal(0)
 
         # Calculate USD values
         btc_price = prices.get('BTC/USDT', Decimal(0))
@@ -345,7 +377,11 @@ class PortfolioRebalanceAgent(BaseAgent):
             xrp_pct = (xrp_value / total * 100)
             usdt_pct = (usdt_value / total * 100)
         else:
-            btc_pct = xrp_pct = usdt_pct = Decimal(0)
+            # Zero equity - set to target allocation to avoid false positive rebalancing
+            logger.warning("Total equity is zero - no rebalancing possible")
+            btc_pct = self.target_btc_pct
+            xrp_pct = self.target_xrp_pct
+            usdt_pct = self.target_usdt_pct
 
         # Calculate max deviation from target
         max_dev = max(
@@ -413,6 +449,11 @@ class PortfolioRebalanceAgent(BaseAgent):
         """
         Split trades into DCA batches if total value exceeds threshold.
 
+        Ensures:
+        - Total DCA amount equals original trade amount (rounding handled)
+        - Each batch meets minimum trade size (reduces batch count if needed)
+        - First batch gets any rounding remainder
+
         Args:
             trades: Original trades to potentially split
 
@@ -428,19 +469,45 @@ class PortfolioRebalanceAgent(BaseAgent):
             # Below threshold - execute immediately
             return trades, 1, 0
 
-        # Split into DCA batches
+        # Determine optimal batch count - reduce if batches would be too small
         num_batches = self.dca_batches
         interval_hours = self.dca_interval_hours
+
+        # Check if batches would be too small - adjust batch count
+        for trade in trades:
+            batch_amount = trade.amount_usd / Decimal(num_batches)
+            while batch_amount < self.min_trade_usd and num_batches > 1:
+                num_batches -= 1
+                batch_amount = trade.amount_usd / Decimal(num_batches)
+
+        if num_batches == 1:
+            # All batches too small - execute immediately
+            logger.info(
+                f"DCA batches would be below minimum (${float(self.min_trade_usd):.2f}), "
+                f"executing immediately"
+            )
+            return trades, 1, 0
 
         dca_trades = []
         now = datetime.now(timezone.utc)
 
-        for batch_idx in range(num_batches):
-            scheduled_time = now + timedelta(hours=batch_idx * interval_hours)
+        for trade in trades:
+            # Calculate batch amounts with proper rounding
+            base_batch_amount = trade.amount_usd / Decimal(num_batches)
 
-            for trade in trades:
-                # Split trade amount across batches
-                batch_amount = trade.amount_usd / Decimal(num_batches)
+            # Round to 2 decimal places for consistency
+            rounded_batch_amount = base_batch_amount.quantize(Decimal('0.01'))
+
+            # Calculate remainder to add to first batch
+            remainder = trade.amount_usd - (rounded_batch_amount * num_batches)
+
+            for batch_idx in range(num_batches):
+                scheduled_time = now + timedelta(hours=batch_idx * interval_hours)
+
+                # Add remainder to first batch to ensure total equals original
+                batch_amount = rounded_batch_amount
+                if batch_idx == 0:
+                    batch_amount += remainder
 
                 if batch_amount >= self.min_trade_usd:
                     dca_trades.append(RebalanceTrade(
@@ -453,9 +520,12 @@ class PortfolioRebalanceAgent(BaseAgent):
                         scheduled_time=scheduled_time,
                     ))
 
+        # Log DCA summary
+        actual_total = sum(t.amount_usd for t in dca_trades)
         logger.info(
             f"Created {len(dca_trades)} DCA trades across {num_batches} batches "
-            f"(total: ${float(total_value):.2f}, threshold: ${float(self.dca_threshold_usd):.2f})"
+            f"(total: ${float(actual_total):.2f}, original: ${float(total_value):.2f}, "
+            f"threshold: ${float(self.dca_threshold_usd):.2f})"
         )
 
         return dca_trades, num_batches, interval_hours
