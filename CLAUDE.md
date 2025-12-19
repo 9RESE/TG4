@@ -36,6 +36,7 @@ uvicorn triplegain.src.api.app:app --reload         # Start API server
 - **Test Coverage**: 916 tests, 87% coverage
 - **Deep Review Fixes**: 12 initial + 3 minor + 3 enhancements (see docs/development/reviews/phase-3/)
 - **Comprehensive Review Fixes**: Supertrend accuracy, async error handling, truncation logging, type coercion, API validation (see docs/development/reviews/full/)
+- **Security Fixes (v1.4)**: Generic API error messages, validation module, conflict timeout, degradation events, token safety margin, portfolio edge cases
 
 ### Phase 2 Deliverables (Completed)
 - **Base Agent Class**: Abstract interface with AgentOutput dataclass, validation, serialization
@@ -105,7 +106,7 @@ triplegain/
 │   ├── execution/      # Order manager, position tracker
 │   ├── data/           # Indicator library, market snapshot, database
 │   ├── llm/            # Prompt builder, LLM clients (5 providers)
-│   ├── api/            # FastAPI endpoints, agent routes, orchestration routes
+│   ├── api/            # FastAPI endpoints, agent routes, orchestration routes, validation
 │   └── utils/          # Config loader
 ├── tests/
 │   ├── unit/           # 916 unit tests (87% coverage)

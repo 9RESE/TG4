@@ -1,6 +1,6 @@
 # Phase 3: Orchestration - Feature Documentation
 
-**Version**: 1.3
+**Version**: 1.4
 **Status**: COMPLETE (with all enhancements and review fixes)
 **Date**: 2025-12-19
 
@@ -355,7 +355,35 @@ position_tracker.enable_trailing_stop_for_position(
 )
 ```
 
-### 6. API Routes
+### 6. API Validation Module
+
+**Location**: `triplegain/src/api/validation.py`
+
+Provides centralized validation utilities for API endpoints:
+
+```python
+# Symbol format validation and normalization
+def validate_symbol(symbol: str, strict: bool = True) -> tuple[bool, str]:
+    # Accepts both BTC/USDT and BTC_USDT formats
+    # Returns (is_valid, error_message)
+
+def validate_symbol_or_raise(symbol: str, strict: bool = True) -> str:
+    # Validates and normalizes symbol (e.g., BTC_USDT -> BTC/USDT)
+    # Raises HTTPException(400) if invalid
+
+def normalize_symbol(symbol: str) -> str:
+    # Converts BTC_USDT -> BTC/USDT
+```
+
+**Supported Symbols**:
+- BTC/USDT, XRP/USDT, XRP/BTC, ETH/USDT, ETH/BTC
+
+**Features**:
+- Accepts both slash and underscore separators for URL compatibility
+- Normalizes all symbols to standard slash format internally
+- Strict mode enforces supported symbols only
+
+### 7. API Routes
 
 **Location**: `triplegain/src/api/routes_orchestration.py`
 
@@ -560,6 +588,19 @@ execution:
 
 ## Changelog
 
+### v1.4 (2025-12-19) - Security & Robustness Fixes
+- **API Security**: All 20+ endpoints now return generic error messages instead of exposing stack traces
+- **Validation Module**: New `triplegain/src/api/validation.py` with centralized symbol validation
+- **Conflict Resolution Timeout**: Added `asyncio.wait_for()` to enforce max resolution time
+- **Degradation Recovery Events**: System now publishes events when recovering from degraded state
+- **Token Estimation Safety Margin**: Added 10% safety margin to account for BPE encoding variations
+- **DCA Batch Rounding**: Batches now sum correctly to original total with remainder handling
+- **DCA Sub-Minimum Trades**: Batch count auto-reduces when individual batches would be too small
+- **Target Allocation Validation**: Warns when portfolio allocations don't sum to 100%
+- **Hodl Bag Warning**: Logs warning when hodl bags exceed available balance
+- **Zero Equity Handling**: Returns target allocation when equity is zero to prevent false rebalancing
+- **LLM Fallback Transparency**: Added `used_fallback_strategy` field to indicate default usage
+
 ### v1.3 (2025-12-19) - Comprehensive Review Fixes
 - **Supertrend Fix**: Initial direction now uses midpoint (hl2) instead of upper_band for accuracy
 - **Async Error Handling**: Added failure detection threshold in market snapshot builder (max 50% failures)
@@ -591,4 +632,4 @@ execution:
 
 ---
 
-*Phase 3 Feature Documentation v1.2 - December 2025*
+*Phase 3 Feature Documentation v1.4 - December 2025*
