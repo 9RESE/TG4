@@ -19,8 +19,13 @@ This directory contains detailed documentation for each major feature, including
 | Indicator Library | 1 | **COMPLETE** | [phase-1-foundation.md](./phase-1-foundation.md#1-indicator-library) |
 | Market Snapshot Builder | 1 | **COMPLETE** | [phase-1-foundation.md](./phase-1-foundation.md#2-market-snapshot-builder) |
 | Prompt Builder | 1 | **COMPLETE** | [phase-1-foundation.md](./phase-1-foundation.md#3-prompt-builder) |
-| Core Agents | 2 | Planned | Pending |
-| Risk Management Engine | 2 | Planned | Pending |
+| Core Agents | 2 | **COMPLETE** | [phase-2-core-agents.md](./phase-2-core-agents.md) |
+| Base Agent Framework | 2 | **COMPLETE** | [phase-2-core-agents.md](./phase-2-core-agents.md#1-base-agent-framework) |
+| Technical Analysis Agent | 2 | **COMPLETE** | [phase-2-core-agents.md](./phase-2-core-agents.md#2-technical-analysis-agent) |
+| Regime Detection Agent | 2 | **COMPLETE** | [phase-2-core-agents.md](./phase-2-core-agents.md#3-regime-detection-agent) |
+| Risk Management Engine | 2 | **COMPLETE** | [phase-2-core-agents.md](./phase-2-core-agents.md#4-risk-management-engine) |
+| Trading Decision Agent | 2 | **COMPLETE** | [phase-2-core-agents.md](./phase-2-core-agents.md#5-trading-decision-agent) |
+| LLM Client Infrastructure | 2 | **COMPLETE** | [phase-2-core-agents.md](./phase-2-core-agents.md#6-llm-client-infrastructure) |
 | Agent Orchestration | 3 | Planned | Pending |
 | Sentiment Analysis | 4 | Planned | Pending |
 | Multi-LLM A/B Testing | 4 | Planned | Pending |

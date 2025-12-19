@@ -9,12 +9,12 @@
 |                                                                    |
 |  +----------------+  +----------------+  +--------------------+   |
 |  | Data Layer     |  | LLM Layer      |  | Agent Layer        |   |
-|  | (Phase 1 DONE) |  | (Phase 1 DONE) |  | (Phase 2)          |   |
+|  | (Phase 1 DONE) |  | (Phase 1 DONE) |  | (Phase 2 DONE)     |   |
 |  +----------------+  +----------------+  +--------------------+   |
 |                                                                    |
 |  +----------------+  +----------------+  +--------------------+   |
 |  | Risk Engine    |  | Orchestration  |  | API/Dashboard      |   |
-|  | (Phase 2)      |  | (Phase 3)      |  | (Phase 1/4)        |   |
+|  | (Phase 2 DONE) |  | (Phase 3)      |  | (Phase 1/4)        |   |
 |  +----------------+  +----------------+  +--------------------+   |
 |                                                                    |
 +------------------------------------------------------------------+
@@ -79,14 +79,50 @@
 | `external_data_cache` | External API cache | Yes | 30 days |
 | `indicator_cache` | Calculated indicators | Yes | 7 days |
 
-### Agent Layer (Phase 2 - PLANNED)
+### Agent Layer (Phase 2 - COMPLETE)
 
-| Component | Responsibility |
-|-----------|----------------|
-| Technical Analysis Agent | Analyze indicators, identify signals |
-| Regime Detection Agent | Detect market regime (trending/ranging) |
-| Risk Management Engine | Rules-based risk validation |
-| Trading Decision Agent | Generate trade recommendations |
+| Component | Location | Status | Responsibility |
+|-----------|----------|--------|----------------|
+| Base Agent | `triplegain/src/agents/base_agent.py` | **Done** | Abstract interface, AgentOutput dataclass |
+| Technical Analysis Agent | `triplegain/src/agents/technical_analysis.py` | **Done** | Analyze indicators, identify signals |
+| Regime Detection Agent | `triplegain/src/agents/regime_detection.py` | **Done** | Classify market regime (7 types) |
+| Trading Decision Agent | `triplegain/src/agents/trading_decision.py` | **Done** | 6-model consensus decisions |
+
+#### Agent Outputs
+
+| Agent | Output Class | Key Fields |
+|-------|--------------|------------|
+| Technical Analysis | TAOutput | trend_direction, momentum_score, bias |
+| Regime Detection | RegimeOutput | regime, position_size_multiplier, entry_strictness |
+| Trading Decision | TradingDecisionOutput | action, consensus_strength, entry_price, stop_loss |
+
+### Risk Layer (Phase 2 - COMPLETE)
+
+| Component | Location | Status | Responsibility |
+|-----------|----------|--------|----------------|
+| Rules Engine | `triplegain/src/risk/rules_engine.py` | **Done** | Trade validation, circuit breakers, cooldowns |
+
+#### Risk Validation Layers
+
+| Layer | Check |
+|-------|-------|
+| Stop-Loss | Required, 0.5-5% distance |
+| Confidence | Dynamic threshold (0.6-0.8 based on losses) |
+| Position Size | Max 20% of equity |
+| Leverage | Regime-adjusted (1-5x) |
+| Exposure | Max 80% total |
+| Margin | Sufficient available |
+
+### LLM Clients (Phase 2 - COMPLETE)
+
+| Client | Location | Status | Provider |
+|--------|----------|--------|----------|
+| BaseLLMClient | `triplegain/src/llm/clients/base.py` | **Done** | Abstract interface |
+| OllamaClient | `triplegain/src/llm/clients/ollama.py` | **Done** | Local Ollama |
+| OpenAIClient | `triplegain/src/llm/clients/openai_client.py` | **Done** | OpenAI GPT |
+| AnthropicClient | `triplegain/src/llm/clients/anthropic_client.py` | **Done** | Claude models |
+| DeepSeekClient | `triplegain/src/llm/clients/deepseek_client.py` | **Done** | DeepSeek V3 |
+| XAIClient | `triplegain/src/llm/clients/xai_client.py` | **Done** | Grok models |
 
 ### Orchestration Layer (Phase 3 - PLANNED)
 
@@ -151,8 +187,65 @@ class IndicatorLibrary:
     ) -> dict[str, any]: ...
 ```
 
+### BaseAgent (Phase 2)
+
+```python
+class BaseAgent(ABC):
+    agent_name: str
+    llm_tier: str  # "tier1_local" | "tier2_api"
+
+    @abstractmethod
+    async def process(self, snapshot: MarketSnapshot) -> AgentOutput: ...
+
+    @abstractmethod
+    def get_output_schema(self) -> dict: ...
+```
+
+### RiskManagementEngine (Phase 2)
+
+```python
+class RiskManagementEngine:
+    def validate_trade(
+        self,
+        proposal: TradeProposal,
+        risk_state: RiskState
+    ) -> RiskValidation: ...
+
+    def calculate_position_size(
+        self,
+        equity: float,
+        entry_price: float,
+        stop_loss: float,
+        regime: str,
+        confidence: float
+    ) -> float: ...
+```
+
+### BaseLLMClient (Phase 2)
+
+```python
+class BaseLLMClient(ABC):
+    provider_name: str
+
+    @abstractmethod
+    async def generate(
+        self,
+        model: str,
+        system_prompt: str,
+        user_message: str,
+        temperature: float = 0.3,
+        max_tokens: int = 2048
+    ) -> LLMResponse: ...
+
+    @abstractmethod
+    async def health_check(self) -> bool: ...
+```
+
 ## References
 
 - [Phase 1 Implementation](../../development/TripleGain-implementation-plan/01-phase-1-foundation.md)
+- [Phase 2 Implementation](../../development/TripleGain-implementation-plan/02-phase-2-core-agents.md)
 - [ADR-001: Phase 1 Architecture](../09-decisions/ADR-001-phase1-foundation-architecture.md)
+- [ADR-002: Phase 2 Architecture](../09-decisions/ADR-002-phase2-core-agents-architecture.md)
 - [Phase 1 Review](../../development/reviews/phase-1/phase-1-comprehensive-review.md)
+- [Phase 2 Feature Documentation](../../development/features/phase-2-core-agents.md)

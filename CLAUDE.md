@@ -5,24 +5,36 @@ Python trading system with TimescaleDB + 6-model LLM comparison
 
 ## Quick Commands
 ```bash
-pytest triplegain/tests/                            # Run all tests (218 passing)
-pytest --cov=triplegain/src --cov-report=term       # Run with coverage (82%)
+pytest triplegain/tests/                            # Run all tests (368 passing)
+pytest --cov=triplegain/src --cov-report=term       # Run with coverage (67%)
 docker-compose up -d timescaledb                    # Start database
 python -m data.kraken_db.gap_filler --db-url "$DB_URL"  # Fill data gaps
 uvicorn triplegain.src.api.app:app --reload         # Start API server
 ```
 
-## Current Phase: Phase 2 Ready
+## Current Phase: Phase 2 Complete
 
-**Status**: Phase 1 COMPLETE (2025-12-18), ready for Phase 2 core agents
+**Status**: Phase 2 COMPLETE (2025-12-18), ready for Phase 3 orchestration
 
 | Phase | Status | Description |
 |-------|--------|-------------|
 | 1. Foundation | **COMPLETE** | Data pipeline, indicators, snapshots, prompts |
-| 2. Core Agents | Ready to Start | TA, Regime, Risk, Trading Decision agents |
-| 3. Orchestration | Not Started | Communication, Coordinator, Execution |
+| 2. Core Agents | **COMPLETE** | TA, Regime, Risk, Trading Decision agents |
+| 3. Orchestration | Ready to Start | Communication, Coordinator, Execution |
 | 4. Extended | Not Started | Sentiment, Hodl Bag, A/B Testing, Dashboard |
 | 5. Production | Not Started | Testing, Paper Trading, Live Deployment |
+
+### Phase 2 Deliverables (Completed)
+- **Base Agent Class**: Abstract interface with AgentOutput dataclass, validation, serialization
+- **Technical Analysis Agent**: Qwen 2.5 7B via Ollama, trend/momentum analysis, per-minute
+- **Regime Detection Agent**: Market regime classification (7 types), parameter adjustment
+- **Risk Management Engine**: Rules-based (<10ms), circuit breakers, cooldowns, no LLM
+- **Trading Decision Agent**: 6-model A/B testing with consensus calculation
+- **LLM Clients**: Ollama, OpenAI, Anthropic, DeepSeek, xAI (Grok)
+- **API Endpoints**: Agent invoke, risk state, model comparison routes
+- **Database Migration**: model_comparisons table for A/B tracking
+- **Config Files**: agents.yaml, risk.yaml with all parameters
+- **Test Coverage**: 368 tests (136 new Phase 2 tests)
 
 ### Phase 1 Deliverables (Completed)
 - **Indicator Library**: 17+ indicators (EMA, SMA, RSI, MACD, ATR, BB, ADX, OBV, VWAP, Supertrend, StochRSI, ROC, Keltner, Choppiness, Volume SMA)
@@ -31,7 +43,6 @@ uvicorn triplegain.src.api.app:app --reload         # Start API server
 - **Database Schema**: 7 tables with retention/compression policies
 - **API Endpoints**: Health, indicators, snapshots, debug routes
 - **Config System**: YAML-based with env var substitution and validation
-- **Test Coverage**: 82% (218 tests passing)
 
 ## Key Facts (Memory)
 
@@ -74,17 +85,22 @@ uvicorn triplegain.src.api.app:app --reload         # Start API server
 ```
 triplegain/
 ├── src/
+│   ├── agents/         # Base agent, TA, Regime, Trading Decision
+│   ├── risk/           # Rules engine, circuit breakers, cooldowns
 │   ├── data/           # Indicator library, market snapshot, database
-│   ├── llm/            # Prompt builder, templates
-│   ├── api/            # FastAPI endpoints
+│   ├── llm/            # Prompt builder, LLM clients (5 providers)
+│   ├── api/            # FastAPI endpoints, agent routes
 │   └── utils/          # Config loader
 ├── tests/
-│   ├── unit/           # 218 unit tests
+│   ├── unit/           # 368 unit tests
+│   │   ├── agents/     # Agent tests (88 tests)
+│   │   ├── risk/       # Risk engine tests (29 tests)
+│   │   └── llm/        # LLM client tests (19 tests)
 │   └── integration/    # Database integration tests
-config/                 # YAML configuration files
+config/                 # agents.yaml, risk.yaml, system.yaml
 data/kraken_db/         # Data collectors (operational)
 docs/development/       # Design + Implementation plans + Reviews
-migrations/             # Database migrations
+migrations/             # Database migrations (001, 002)
 ```
 
 ## Documentation

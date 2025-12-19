@@ -1,0 +1,259 @@
+# ============================================================================
+# Risk Management Configuration
+# ============================================================================
+# Deterministic, rule-based risk management - NO LLM dependency.
+# All values are hard limits that cannot be overridden.
+
+# ============================================================================
+# Position and Leverage Limits
+# ============================================================================
+limits:
+  # Absolute maximum leverage (regardless of regime)
+  max_leverage: 5
+
+  # Maximum position size as % of equity
+  max_position_pct: 20
+
+  # Maximum total exposure as % of equity
+  max_total_exposure_pct: 80
+
+  # Maximum risk per trade as % of equity
+  max_risk_per_trade_pct: 2
+
+  # Minimum signal confidence to trade
+  min_confidence: 0.60
+
+  # Maximum open positions
+  max_open_positions: 5
+
+  # Maximum margin utilization %
+  max_margin_utilization_pct: 50
+
+# ============================================================================
+# Stop-Loss Requirements
+# ============================================================================
+stop_loss:
+  # Stop-loss is mandatory for all trades
+  required: true
+
+  # Minimum stop distance (% from entry)
+  min_distance_pct: 0.5
+
+  # Maximum stop distance (% from entry)
+  max_distance_pct: 5.0
+
+  # Minimum risk/reward ratio
+  min_risk_reward: 1.5
+
+  # ATR-based stops (default multiplier)
+  atr_multiplier: 2.0
+
+  # Symbol-specific max stops
+  symbol_max_stops:
+    "BTC/USDT": 3.0
+    "XRP/USDT": 5.0
+    "XRP/BTC": 5.0
+
+# ============================================================================
+# Circuit Breakers
+# ============================================================================
+circuit_breakers:
+  # Level 1: Daily Loss Limit
+  daily_loss:
+    threshold_pct: 5.0
+    action: halt_new_trades
+    duration: until_daily_reset
+    severity: 1
+
+  # Level 2: Weekly Loss Limit
+  weekly_loss:
+    threshold_pct: 10.0
+    action: halt_and_reduce
+    position_reduction_pct: 50
+    duration: until_weekly_reset
+    severity: 2
+
+  # Level 3: Maximum Drawdown
+  max_drawdown:
+    threshold_pct: 20.0
+    action: close_all_halt
+    duration: until_manual_reset
+    severity: 3
+
+  # Level 4: Consecutive Losses
+  consecutive_losses:
+    threshold_count: 5
+    action: cooldown
+    cooldown_minutes: 30
+    size_reduction_pct: 50
+    severity: 1
+
+# ============================================================================
+# Leverage Limits by Regime
+# ============================================================================
+regime_leverage_limits:
+  trending_bull: 5
+  trending_bear: 3
+  ranging: 2
+  volatile_bull: 2
+  volatile_bear: 2
+  choppy: 1
+  breakout_potential: 3
+  unknown: 1
+
+# ============================================================================
+# Leverage Limits by Drawdown
+# ============================================================================
+drawdown_leverage_limits:
+  - drawdown_pct: 15
+    max_leverage: 1
+  - drawdown_pct: 10
+    max_leverage: 2
+  - drawdown_pct: 5
+    max_leverage: 3
+
+# ============================================================================
+# Confidence Thresholds
+# ============================================================================
+confidence:
+  # Base minimum confidence
+  base_minimum: 0.60
+
+  # Elevated after consecutive losses
+  after_3_losses: 0.70
+  after_5_losses: 0.80
+
+  # Confidence tiers for position sizing
+  tiers:
+    very_high:
+      min: 0.85
+      position_multiplier: 1.0
+      max_leverage: 5
+    high:
+      min: 0.75
+      position_multiplier: 0.75
+      max_leverage: 4
+    medium:
+      min: 0.65
+      position_multiplier: 0.50
+      max_leverage: 3
+    low:
+      min: 0.60
+      position_multiplier: 0.25
+      max_leverage: 2
+    insufficient:
+      min: 0.0
+      position_multiplier: 0.0
+      max_leverage: 0
+
+# ============================================================================
+# Cooldown Periods
+# ============================================================================
+cooldowns:
+  # After opening any position
+  post_trade_minutes: 5
+
+  # After a losing trade
+  post_loss_minutes: 10
+
+  # After 3 consecutive losses
+  consecutive_loss_3_minutes: 30
+
+  # After 5 consecutive losses
+  consecutive_loss_5_minutes: 60
+
+  # After volatility spike (>3% in 5 min)
+  volatility_spike_minutes: 15
+
+  # After unusual price movement
+  unusual_movement_minutes: 10
+
+  # After portfolio rebalance
+  post_rebalance_minutes: 30
+
+# ============================================================================
+# Hodl Bag Allocation
+# ============================================================================
+hodl_bag:
+  # Percentage of realized profit to allocate
+  profit_allocation_pct: 10
+
+  # Minimum allocation to trigger
+  min_allocation_usd: 10
+
+  # Distribution
+  allocation:
+    btc_pct: 33.33
+    xrp_pct: 33.33
+    usdt_pct: 33.34
+
+  # DCA threshold (if allocation > this, DCA over 24h)
+  dca_threshold_usd: 100
+
+# ============================================================================
+# Position Management
+# ============================================================================
+position_management:
+  # Trailing stop configuration
+  trailing_stop:
+    activation_profit_pct: 1.0
+    trail_distance_pct: 1.5
+    trail_distance_atr: 1.5
+    use_atr: true
+    update_frequency_seconds: 60
+
+  # Break-even stop
+  break_even:
+    activation_profit_pct: 1.0
+    buffer_pct: 0.1
+
+  # Time-based exits
+  max_position_hours: 48
+
+# ============================================================================
+# Portfolio Rebalancing
+# ============================================================================
+rebalancing:
+  # Target allocation
+  target:
+    btc_pct: 33
+    xrp_pct: 33
+    usdt_pct: 34
+
+  # Rebalance when deviation exceeds this
+  deviation_threshold_pct: 5
+
+  # Minimum rebalance frequency
+  min_interval_hours: 24
+
+  # Exclude hodl bag from rebalancing
+  exclude_hodl_bag: true
+
+# ============================================================================
+# Alert Thresholds
+# ============================================================================
+alerts:
+  # Portfolio P&L alerts
+  daily_loss_warn_pct: 3.0
+  daily_profit_notify_pct: 5.0
+
+  # Position alerts
+  position_loss_warn_pct: 2.0
+  stop_proximity_warn_pct: 0.5
+
+  # Exposure alerts
+  exposure_warn_pct: 70
+
+  # Margin alerts
+  margin_utilization_warn_pct: 40
+
+# ============================================================================
+# Trading Windows (Optional)
+# ============================================================================
+trading_windows:
+  enabled: false
+  # Avoid trading during low liquidity
+  restricted_hours_utc:
+    - start: "22:00"
+      end: "02:00"
+      reason: "Weekend rollover period"

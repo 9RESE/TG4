@@ -6,15 +6,15 @@
 
 TripleGain is an LLM-assisted cryptocurrency trading platform designed to accumulate BTC (33%), XRP (33%), and USDT (34%) through strategic trading. The system uses a multi-agent architecture with 6-model LLM comparison (GPT, Grok, DeepSeek V3, Claude Sonnet, Claude Opus, Qwen 2.5 7B).
 
-**Current Phase**: Phase 1 COMPLETE - Ready for Phase 2 (Core Agents)
+**Current Phase**: Phase 2 COMPLETE - Ready for Phase 3 (Orchestration)
 
 ### Phase Status
 
 | Phase | Status | Description |
 |-------|--------|-------------|
 | **1. Foundation** | **COMPLETE** | Data pipeline, indicators, snapshots, prompts |
-| 2. Core Agents | Ready | TA, Regime, Risk, Trading Decision agents |
-| 3. Orchestration | Planned | Communication, Coordinator, Execution |
+| **2. Core Agents** | **COMPLETE** | TA, Regime, Risk, Trading Decision agents |
+| 3. Orchestration | Ready | Communication, Coordinator, Execution |
 | 4. Extended | Planned | Sentiment, Hodl Bag, A/B Testing, Dashboard |
 | 5. Production | Planned | Testing, Paper Trading, Live Deployment |
 
@@ -95,6 +95,14 @@ End-user documentation following the Diataxis framework.
 | [Reviews](development/reviews/) | Code and design reviews |
 | [API](api/README.md) | API documentation |
 
+#### Phase 2 Documentation (Current)
+
+| Document | Description |
+|----------|-------------|
+| [Phase 2 Core Agents](development/features/phase-2-core-agents.md) | Feature documentation |
+| [Implementation Plan](development/TripleGain-implementation-plan/02-phase-2-core-agents.md) | Detailed implementation spec |
+| [ADR-002](architecture/09-decisions/ADR-002-phase2-core-agents-architecture.md) | Architecture decisions |
+
 #### Phase 1 Documentation
 
 | Document | Description |
@@ -102,6 +110,7 @@ End-user documentation following the Diataxis framework.
 | [Phase 1 Foundation](development/features/phase-1-foundation.md) | Feature documentation |
 | [Implementation Plan](development/TripleGain-implementation-plan/01-phase-1-foundation.md) | Detailed implementation spec |
 | [Comprehensive Review](development/reviews/phase-1/phase-1-comprehensive-review.md) | Post-completion review |
+| [ADR-001](architecture/09-decisions/ADR-001-phase1-foundation-architecture.md) | Architecture decisions |
 
 ### Research
 

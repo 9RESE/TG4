@@ -1,0 +1,191 @@
+# ============================================================================
+# Agent Configuration
+# ============================================================================
+# Configuration for all LLM agents in the TripleGain system.
+
+# ============================================================================
+# LLM Provider Configuration
+# ============================================================================
+providers:
+  ollama:
+    base_url: "http://localhost:11434"
+    timeout_seconds: 30
+    default_model: "qwen2.5:7b"
+    default_options:
+      temperature: 0.3
+      top_p: 0.9
+      top_k: 40
+      num_predict: 1024
+      num_ctx: 8192
+      repeat_penalty: 1.1
+
+  openai:
+    # API key from OPENAI_API_KEY env var
+    base_url: "https://api.openai.com/v1"
+    timeout_seconds: 60
+    default_model: "gpt-4-turbo"
+
+  anthropic:
+    # API key from ANTHROPIC_API_KEY env var
+    base_url: "https://api.anthropic.com/v1"
+    api_version: "2023-06-01"
+    timeout_seconds: 60
+    default_model: "claude-3-5-sonnet-20241022"
+
+  deepseek:
+    # API key from DEEPSEEK_API_KEY env var
+    base_url: "https://api.deepseek.com/v1"
+    timeout_seconds: 60
+    default_model: "deepseek-chat"
+
+  xai:
+    # API key from XAI_API_KEY env var
+    base_url: "https://api.x.ai/v1"
+    timeout_seconds: 60
+    default_model: "grok-2-1212"
+
+# ============================================================================
+# Agent Definitions
+# ============================================================================
+agents:
+  # --------------------------------------------------------------------------
+  # Technical Analysis Agent
+  # --------------------------------------------------------------------------
+  technical_analysis:
+    enabled: true
+    tier: tier1_local
+    provider: ollama
+    model: "qwen2.5:7b"
+    invocation:
+      frequency: per_minute
+      on_candle_close: true
+    timeout_ms: 5000
+    retry_count: 2
+    template: "technical_analysis.md"
+    latency_target_ms: 500
+
+  # --------------------------------------------------------------------------
+  # Regime Detection Agent
+  # --------------------------------------------------------------------------
+  regime_detection:
+    enabled: true
+    tier: tier1_local
+    provider: ollama
+    model: "qwen2.5:7b"
+    invocation:
+      frequency: every_5_minutes
+      on_significant_change: true
+    timeout_ms: 5000
+    retry_count: 2
+    template: "regime_detection.md"
+    latency_target_ms: 500
+
+  # --------------------------------------------------------------------------
+  # Sentiment Analysis Agent (Phase 4)
+  # --------------------------------------------------------------------------
+  sentiment_analysis:
+    enabled: false  # Phase 4
+    tier: tier2_api
+    providers:
+      - xai  # Grok for X/Twitter
+      - openai  # GPT for news
+    invocation:
+      frequency: every_30_minutes
+    template: "sentiment_analysis.md"
+
+  # --------------------------------------------------------------------------
+  # Trading Decision Agent
+  # --------------------------------------------------------------------------
+  trading_decision:
+    enabled: true
+    tier: multi_model
+    invocation:
+      frequency: hourly
+      on_signal: true
+    timeout_seconds: 30
+    models:
+      qwen:
+        provider: ollama
+        model: "qwen2.5:7b"
+      gpt4:
+        provider: openai
+        model: "gpt-4-turbo"
+      grok:
+        provider: xai
+        model: "grok-2-1212"
+      deepseek:
+        provider: deepseek
+        model: "deepseek-chat"
+      sonnet:
+        provider: anthropic
+        model: "claude-3-5-sonnet-20241022"
+      opus:
+        provider: anthropic
+        model: "claude-3-opus-20240229"
+    consensus:
+      min_agreement: 0.50  # 50% must agree
+      high_agreement: 0.67  # 2/3 for high confidence
+      fallback_on_tie: "HOLD"
+    template: "trading_decision.md"
+
+  # --------------------------------------------------------------------------
+  # Coordinator Agent (Phase 3)
+  # --------------------------------------------------------------------------
+  coordinator:
+    enabled: false  # Phase 3
+    tier: tier2_api
+    provider: deepseek
+    model: "deepseek-chat"
+    fallback_provider: anthropic
+    fallback_model: "claude-3-5-sonnet-20241022"
+    invocation:
+      on_conflict: true
+    template: "coordinator.md"
+
+# ============================================================================
+# Token Budget Configuration
+# ============================================================================
+token_budgets:
+  tier1_local:
+    total: 8192
+    input: 6000
+    output: 2000
+    buffer: 500
+
+  tier2_api:
+    total: 16384
+    input: 12000
+    output: 4000
+    buffer: 1000
+
+  multi_model:
+    total: 8192  # Per model
+    input: 6000
+    output: 2000
+    buffer: 500
+
+# ============================================================================
+# Cost Budget Configuration
+# ============================================================================
+cost_budget:
+  daily_limit_usd: 5.00
+  warn_threshold_usd: 4.00
+  per_decision_limit_usd: 0.50
+  model_cost_tracking: true
+
+# ============================================================================
+# Performance Targets
+# ============================================================================
+performance:
+  tier1_latency_ms: 500
+  tier2_latency_ms: 3000
+  decision_latency_ms: 10000
+
+# ============================================================================
+# Output Storage
+# ============================================================================
+storage:
+  store_all_outputs: true
+  store_model_comparisons: true
+  retention_days: 90
+  compression_after_days: 7
