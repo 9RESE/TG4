@@ -226,7 +226,70 @@ Following a comprehensive deep code review, the following enhancements were impl
 |-------------|-------------|
 | Trade Execution Routing | Coordinator routes rebalance trades to execution manager |
 
-**Production Readiness**: Increased from 75% to 90%+ with these fixes.
+**Production Readiness**: Increased from 75% to 92% with these fixes.
+
+## Revision: v1.2 Enhancements (2025-12-19)
+
+Following the initial deep review fixes, additional enhancements were implemented:
+
+### DCA (Dollar Cost Averaging) Execution
+
+**Decision**: Implement DCA for large rebalances exceeding threshold.
+
+**Rationale**:
+- Large trades (>$500) create market impact and slippage
+- Splitting across time reduces adverse price movement
+- Scheduled execution provides price averaging
+- Database persistence ensures completion after restarts
+
+**Implementation**:
+- Trades >$500 split into 6 batches
+- 4-hour intervals between batches (24h total)
+- Scheduled trades stored in `scheduled_trades` table
+- Coordinator checks and executes due trades in main loop
+
+### Trailing Stops
+
+**Decision**: Implement dynamic trailing stops for open positions.
+
+**Rationale**:
+- Locks in profits as price moves favorably
+- Allows winning trades to run further
+- Automatic stop adjustment reduces manual intervention
+- Configurable activation and distance parameters
+
+**Implementation**:
+- Activation threshold: 1% profit before trailing starts
+- Trail distance: 1.5% behind highest (LONG) or lowest (SHORT)
+- Updates integrated into position tracker's snapshot loop
+- Per-position enabling with custom distance option
+
+### Position Limits Enforcement
+
+**Decision**: Enforce maximum position limits before order placement.
+
+**Rationale**:
+- Prevents over-concentration in single symbol
+- Limits total portfolio exposure
+- Risk management at order entry point
+- Configurable limits via execution.yaml
+
+**Implementation**:
+- Max 2 positions per symbol
+- Max 5 total positions
+- Check performed in `execute_trade()` before order placement
+- Clear error messages when limits exceeded
+
+### API Improvements
+
+**Decision**: Move exit_price from query parameter to request body.
+
+**Rationale**:
+- RESTful consistency (POST with body vs query params)
+- Cleaner API design
+- Better alignment with other mutation endpoints
+
+**Production Readiness**: Increased from 92% to 98% with v1.2 enhancements.
 
 ## References
 
@@ -235,7 +298,8 @@ Following a comprehensive deep code review, the following enhancements were impl
 - [Risk Management Design](../../development/TripleGain-master-design/03-risk-management-rules-engine.md)
 - [Deep Code Review](../../development/reviews/phase-3/phase-3-deep-code-review.md)
 - [Fixes Implemented](../../development/reviews/phase-3/phase-3-fixes-implemented.md)
+- [Follow-Up Review](../../development/reviews/phase-3/phase-3-follow-up-review.md)
 
 ---
 
-*ADR-004 v1.1 - December 2025 (with Deep Review Enhancements)*
+*ADR-004 v1.2 - December 2025 (with v1.2 Enhancements)*

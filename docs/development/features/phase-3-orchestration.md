@@ -1,7 +1,7 @@
 # Phase 3: Orchestration - Feature Documentation
 
-**Version**: 1.1
-**Status**: COMPLETE (with deep review fixes)
+**Version**: 1.2
+**Status**: COMPLETE (with all enhancements)
 **Date**: 2025-12-19
 
 ## Overview
@@ -148,11 +148,23 @@ portfolio:
     threshold_pct: 5.0      # Trigger when deviation exceeds
     min_trade_usd: 10.0     # Minimum trade size
     execution_type: limit   # Default order type
+    dca:
+      enabled: true
+      threshold_usd: 500    # DCA for trades > $500
+      batches: 6            # Split into 6 batches
+      interval_hours: 4     # 4 hours between batches
 
   hodl_bags:
     enabled: true
     allocation_pct: 10      # % of profits to hodl
 ```
+
+**DCA (Dollar Cost Averaging) Execution** (v1.2):
+For large rebalances exceeding the threshold (default $500):
+- Trades split into configurable number of batches (default 6)
+- Each batch executed at scheduled intervals (default 4 hours)
+- Reduces market impact and slippage for large trades
+- Scheduled trades stored in database for persistence
 
 **Output Schema**:
 ```python
@@ -234,6 +246,22 @@ Applied to: `_place_order()`, `_monitor_order()`, `cancel_order()`, `sync_with_e
 - Automatic cleanup when limit exceeded
 - Separate lock for history to avoid race conditions
 
+**Position Limits Enforcement** (v1.2):
+Before placing any order, the system checks:
+```python
+position_limits:
+  max_per_symbol: 2    # Max 2 open positions per symbol
+  max_total: 5         # Max 5 total open positions
+```
+- Returns `ExecutionResult` with error message when limits exceeded
+- Only enforced for buy orders (position opening)
+- Graceful handling when position tracker unavailable
+
+**Mock Mode Price Improvements** (v1.2):
+- Uses position tracker's price cache for current market prices
+- Symbol-specific fallback prices (BTC: $45000, XRP: $0.60, etc.)
+- More realistic paper trading simulation
+
 **Key Methods**:
 ```python
 async def execute_trade(proposal: TradeProposal) -> ExecutionResult
@@ -302,6 +330,31 @@ def __post_init__(self):
 - All Decimal values stored as strings in database
 - Preserves full precision through database round-trip
 
+**Trailing Stops** (v1.2):
+Dynamic stop-loss that follows favorable price movements:
+```yaml
+trailing_stop:
+  enabled: true
+  activation_pct: 1.0      # Activate when profit >= 1%
+  trail_distance_pct: 1.5  # Trail 1.5% behind highest/lowest
+  update_interval_seconds: 60
+```
+
+**Trailing Stop Logic**:
+- **Activation**: Stop activates when unrealized profit reaches threshold
+- **LONG positions**: Tracks highest price, stop at (highest - trail_distance%)
+- **SHORT positions**: Tracks lowest price, stop at (lowest + trail_distance%)
+- **Stop-loss update**: Only moves in favorable direction (never against trade)
+- Integrated into snapshot loop for automatic updates
+
+```python
+# Enable trailing stop for specific position
+position_tracker.enable_trailing_stop_for_position(
+    position_id="pos-123",
+    distance_pct=Decimal("2.0")  # Optional custom distance
+)
+```
+
 ### 6. API Routes
 
 **Location**: `triplegain/src/api/routes_orchestration.py`
@@ -327,9 +380,17 @@ def __post_init__(self):
 |----------|--------|-------------|
 | `/positions` | GET | List positions (filter by status/symbol) |
 | `/positions/{id}` | GET | Get specific position |
-| `/positions/{id}/close` | POST | Close position |
+| `/positions/{id}/close` | POST | Close position (v1.2: exit_price in body) |
 | `/positions/{id}` | PATCH | Modify SL/TP |
 | `/positions/exposure` | GET | Get total exposure |
+
+**Close Position Request Body** (v1.2):
+```json
+{
+  "exit_price": 46000.0,
+  "reason": "take_profit"
+}
+```
 
 **Order Endpoints**:
 | Endpoint | Method | Description |
@@ -441,6 +502,7 @@ execution:
 | `rebalancing_history` | Rebalancing trades |
 | `conflict_resolution_log` | Conflict decisions |
 | `execution_events` | Execution audit log |
+| `scheduled_trades` | DCA scheduled trades (v1.2) |
 
 ## Testing
 
@@ -452,8 +514,8 @@ execution:
 - `tests/unit/agents/test_portfolio_rebalance.py` - 30 tests
 - `tests/unit/api/test_routes_orchestration.py` - 43 tests
 
-**Total Phase 3 Tests**: 227 new tests
-**Total Project Tests**: 916 (was 689)
+**Total Phase 3 Tests**: 227 tests
+**Total Project Tests**: 902
 **Coverage**: 87%
 
 ## Integration Points
@@ -493,8 +555,16 @@ execution:
 - [Multi-Agent Architecture](../TripleGain-master-design/01-multi-agent-architecture.md)
 - [Deep Code Review](../reviews/phase-3/phase-3-deep-code-review.md)
 - [Fixes Implemented](../reviews/phase-3/phase-3-fixes-implemented.md)
+- [Follow-Up Review](../reviews/phase-3/phase-3-follow-up-review.md)
 
 ## Changelog
+
+### v1.2 (2025-12-19) - Enhancements
+- **DCA Execution**: Large rebalances (>$500) split into batches over 24h
+- **Trailing Stops**: Dynamic stop-loss that follows favorable price movements
+- **Position Limits**: Enforces max positions per symbol and total
+- **Mock Mode Prices**: Uses price cache for realistic paper trading
+- **API Improvement**: Exit price moved to request body for RESTful consistency
 
 ### v1.1 (2025-12-19) - Deep Review Fixes
 - **Coordinator**: Added consensus building, state persistence, graceful degradation
@@ -512,4 +582,4 @@ execution:
 
 ---
 
-*Phase 3 Feature Documentation v1.1 - December 2025*
+*Phase 3 Feature Documentation v1.2 - December 2025*
