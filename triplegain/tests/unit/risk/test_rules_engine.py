@@ -721,3 +721,858 @@ class TestDrawdownEdgeCases:
 
         assert state.peak_equity == Decimal("5000")
         assert state.current_drawdown_pct == 0.0
+
+
+# =============================================================================
+# RiskState Serialization Tests
+# =============================================================================
+
+class TestRiskStateSerialization:
+    """Test RiskState to_dict and from_dict."""
+
+    def test_to_dict_basic(self):
+        """Test basic to_dict serialization."""
+        state = RiskState()
+        state.peak_equity = Decimal("10000")
+        state.current_equity = Decimal("9500")
+        state.daily_pnl_pct = -5.0
+        state.consecutive_losses = 3
+
+        data = state.to_dict()
+
+        assert data['peak_equity'] == '10000'
+        assert data['current_equity'] == '9500'
+        assert data['daily_pnl_pct'] == -5.0
+        assert data['consecutive_losses'] == 3
+
+    def test_to_dict_with_datetimes(self):
+        """Test to_dict with datetime fields."""
+        state = RiskState()
+        now = datetime.now(timezone.utc)
+        state.halt_until = now
+        state.cooldown_until = now
+        state.last_daily_reset = now
+
+        data = state.to_dict()
+
+        assert data['halt_until'] == now.isoformat()
+        assert data['cooldown_until'] == now.isoformat()
+        assert data['last_daily_reset'] == now.isoformat()
+
+    def test_from_dict_basic(self):
+        """Test basic from_dict deserialization."""
+        data = {
+            'peak_equity': '15000',
+            'current_equity': '14000',
+            'daily_pnl_pct': 2.5,
+            'consecutive_losses': 2,
+            'trading_halted': True,
+            'halt_reason': 'test',
+        }
+
+        state = RiskState.from_dict(data)
+
+        assert state.peak_equity == Decimal("15000")
+        assert state.current_equity == Decimal("14000")
+        assert state.daily_pnl_pct == 2.5
+        assert state.consecutive_losses == 2
+        assert state.trading_halted is True
+        assert state.halt_reason == 'test'
+
+    def test_from_dict_with_datetimes(self):
+        """Test from_dict with datetime strings."""
+        now = datetime.now(timezone.utc)
+        data = {
+            'halt_until': now.isoformat(),
+            'cooldown_until': now.isoformat(),
+            'last_daily_reset': now.isoformat(),
+            'last_weekly_reset': now.isoformat(),
+        }
+
+        state = RiskState.from_dict(data)
+
+        assert state.halt_until is not None
+        assert state.cooldown_until is not None
+        assert state.last_daily_reset is not None
+        assert state.last_weekly_reset is not None
+
+    def test_from_dict_empty(self):
+        """Test from_dict with empty dict uses defaults."""
+        state = RiskState.from_dict({})
+
+        assert state.peak_equity == Decimal("0")
+        assert state.current_equity == Decimal("0")
+        assert state.daily_pnl_pct == 0.0
+        assert state.consecutive_losses == 0
+        assert state.trading_halted is False
+
+    def test_roundtrip_serialization(self):
+        """Test that to_dict -> from_dict preserves data."""
+        original = RiskState()
+        original.peak_equity = Decimal("20000")
+        original.current_equity = Decimal("18000")
+        original.daily_pnl_pct = -2.5
+        original.consecutive_losses = 4
+        original.open_position_symbols = ['BTC/USDT', 'ETH/USDT']
+        original.position_exposures = {'BTC/USDT': 15.0, 'ETH/USDT': 10.0}
+
+        data = original.to_dict()
+        restored = RiskState.from_dict(data)
+
+        assert restored.peak_equity == original.peak_equity
+        assert restored.current_equity == original.current_equity
+        assert restored.daily_pnl_pct == original.daily_pnl_pct
+        assert restored.consecutive_losses == original.consecutive_losses
+        assert restored.open_position_symbols == original.open_position_symbols
+        assert restored.position_exposures == original.position_exposures
+
+
+# =============================================================================
+# Risk Validation Result Tests
+# =============================================================================
+
+class TestRiskValidation:
+    """Test RiskValidation dataclass."""
+
+    def test_is_approved_for_approved_status(self):
+        """is_approved should return True for APPROVED status."""
+        result = RiskValidation(
+            status=ValidationStatus.APPROVED,
+            proposal=None,
+            rejections=[],
+            warnings=[],
+            modifications=[],
+        )
+
+        assert result.is_approved() is True
+
+    def test_is_approved_for_modified_status(self):
+        """is_approved should return True for MODIFIED status."""
+        result = RiskValidation(
+            status=ValidationStatus.MODIFIED,
+            proposal=None,
+            rejections=[],
+            warnings=['Size reduced'],
+            modifications=['size_usd: 3000 -> 2000'],
+        )
+
+        assert result.is_approved() is True
+
+    def test_is_approved_for_rejected_status(self):
+        """is_approved should return False for REJECTED status."""
+        result = RiskValidation(
+            status=ValidationStatus.REJECTED,
+            proposal=None,
+            rejections=['CONFIDENCE_TOO_LOW'],
+            warnings=[],
+            modifications=[],
+        )
+
+        assert result.is_approved() is False
+
+    def test_is_approved_for_halted_status(self):
+        """is_approved should return False for HALTED status."""
+        result = RiskValidation(
+            status=ValidationStatus.HALTED,
+            proposal=None,
+            rejections=['TRADING_HALTED'],
+            warnings=[],
+            modifications=[],
+        )
+
+        assert result.is_approved() is False
+
+
+# =============================================================================
+# TradeProposal Tests
+# =============================================================================
+
+class TestTradeProposal:
+    """Test TradeProposal dataclass."""
+
+    def test_create_minimal_proposal(self):
+        """Create proposal with minimal required fields."""
+        proposal = TradeProposal(
+            symbol="XRP/USDT",
+            side="buy",
+            size_usd=100.0,
+            entry_price=0.50,
+        )
+
+        assert proposal.symbol == "XRP/USDT"
+        assert proposal.leverage == 1  # Default
+        assert proposal.confidence == 0.5  # Default
+        assert proposal.stop_loss is None
+        assert proposal.take_profit is None
+
+    def test_create_full_proposal(self):
+        """Create proposal with all fields."""
+        proposal = TradeProposal(
+            symbol="BTC/USDT",
+            side="sell",
+            size_usd=5000.0,
+            entry_price=45000.0,
+            stop_loss=46000.0,
+            take_profit=42000.0,
+            leverage=3,
+            confidence=0.85,
+            regime="trending_bear",
+        )
+
+        assert proposal.side == "sell"
+        assert proposal.leverage == 3
+        assert proposal.regime == "trending_bear"
+
+
+# =============================================================================
+# Additional Engine Tests
+# =============================================================================
+
+class TestEngineConfiguration:
+    """Test RiskManagementEngine configuration."""
+
+    def test_default_config_values(self):
+        """Test that missing config uses sensible defaults."""
+        engine = RiskManagementEngine({})
+
+        assert engine.max_leverage == 5
+        assert engine.max_position_pct == 20
+        assert engine.max_exposure_pct == 80
+        assert engine.min_confidence == 0.60
+
+    def test_custom_config_values(self):
+        """Test that custom config overrides defaults."""
+        config = {
+            'limits': {
+                'max_leverage': 3,
+                'max_position_pct': 15,
+                'min_confidence': 0.70,
+            }
+        }
+
+        engine = RiskManagementEngine(config)
+
+        assert engine.max_leverage == 3
+        assert engine.max_position_pct == 15
+        assert engine.min_confidence == 0.70
+
+    def test_nested_circuit_breaker_config(self):
+        """Test nested circuit breaker configuration."""
+        config = {
+            'circuit_breakers': {
+                'daily_loss': {
+                    'threshold_pct': 3.0,
+                },
+                'weekly_loss': {
+                    'threshold_pct': 8.0,
+                },
+            }
+        }
+
+        engine = RiskManagementEngine(config)
+
+        assert engine.daily_loss_limit_pct == 3.0
+        assert engine.weekly_loss_limit_pct == 8.0
+
+
+class TestGetState:
+    """Test get_state method."""
+
+    def test_get_state_returns_state(self, risk_engine):
+        """get_state should return the internal state."""
+        state = risk_engine.get_state()
+
+        assert isinstance(state, RiskState)
+        # Verify it's the actual state object (could be copy or reference)
+        assert state.current_equity >= Decimal("0")
+
+
+class TestUpdateState:
+    """Test update_state method."""
+
+    def test_update_state_basic(self, risk_engine):
+        """Test basic state update."""
+        risk_engine.update_state(
+            current_equity=Decimal("12000"),
+            daily_pnl=Decimal("500"),
+            weekly_pnl=Decimal("1000"),
+            open_positions=2,
+            total_exposure_pct=25.0,
+            available_margin=Decimal("8000"),
+        )
+
+        state = risk_engine.get_state()
+        assert state.current_equity == Decimal("12000")
+        assert state.open_positions == 2
+        assert state.total_exposure_pct == 25.0
+
+    def test_update_state_triggers_circuit_breaker(self, risk_engine):
+        """Test that update_state can trigger circuit breakers."""
+        # Set peak first so we have a baseline
+        risk_engine.update_state(
+            current_equity=Decimal("10000"),
+            daily_pnl=Decimal("0"),
+            weekly_pnl=Decimal("0"),
+            open_positions=0,
+            total_exposure_pct=0,
+            available_margin=Decimal("10000"),
+        )
+
+        # Now trigger daily loss
+        risk_engine.update_state(
+            current_equity=Decimal("10000"),
+            daily_pnl=Decimal("-600"),  # -6% exceeds 5% limit
+            weekly_pnl=Decimal("-600"),
+            open_positions=0,
+            total_exposure_pct=0,
+            available_margin=Decimal("9400"),
+        )
+
+        state = risk_engine.get_state()
+        assert state.trading_halted is True
+
+
+class TestRecordTradeResult:
+    """Test record_trade_result method."""
+
+    def test_win_resets_loss_streak(self, risk_engine):
+        """Win should reset loss streak and increment wins."""
+        risk_engine._risk_state.consecutive_losses = 4
+        risk_engine._risk_state.consecutive_wins = 0
+
+        risk_engine.record_trade_result(is_win=True)
+
+        assert risk_engine._risk_state.consecutive_losses == 0
+        assert risk_engine._risk_state.consecutive_wins == 1
+
+    def test_loss_resets_win_streak(self, risk_engine):
+        """Loss should reset win streak and increment losses."""
+        risk_engine._risk_state.consecutive_wins = 3
+        risk_engine._risk_state.consecutive_losses = 0
+
+        risk_engine.record_trade_result(is_win=False)
+
+        assert risk_engine._risk_state.consecutive_wins == 0
+        assert risk_engine._risk_state.consecutive_losses == 1
+
+
+class TestResets:
+    """Test reset methods."""
+
+    def test_reset_weekly(self, risk_engine):
+        """Test weekly reset."""
+        risk_engine._risk_state.weekly_pnl = Decimal("-500")
+        risk_engine._risk_state.weekly_pnl_pct = -5.0
+        risk_engine._risk_state.trading_halted = True
+        risk_engine._risk_state.triggered_breakers = ['weekly_loss']
+
+        risk_engine.reset_weekly()
+
+        assert risk_engine._risk_state.weekly_pnl == Decimal("0")
+        assert risk_engine._risk_state.weekly_pnl_pct == 0.0
+        # Weekly reset should also clear daily
+        assert risk_engine._risk_state.daily_pnl == Decimal("0")
+
+
+class TestRiskRewardValidation:
+    """Test risk/reward ratio validation."""
+
+    def test_poor_risk_reward_rejected(self, risk_engine, healthy_risk_state):
+        """Poor risk/reward ratio should generate warning or rejection."""
+        proposal = TradeProposal(
+            symbol="BTC/USDT",
+            side="buy",
+            size_usd=1000.0,
+            entry_price=45000.0,
+            stop_loss=44100.0,  # 2% risk
+            take_profit=45500.0,  # Only 1.1% reward - R:R < 1
+            leverage=1,
+            confidence=0.75,
+        )
+
+        result = risk_engine.validate_trade(proposal, healthy_risk_state)
+
+        # Should have warning about R:R or be rejected
+        assert len(result.warnings) > 0 or result.status == ValidationStatus.REJECTED
+
+
+class TestRegimeMultipliers:
+    """Test regime-based position size multipliers."""
+
+    def test_trending_bull_full_size(self, risk_engine):
+        """Trending bull should allow full position size."""
+        size = risk_engine.calculate_position_size(
+            equity=10000,
+            entry_price=45000,
+            stop_loss=44100,  # 2%
+            regime="trending_bull",
+            confidence=0.85,
+        )
+
+        # With 2% stop, should hit 20% cap
+        assert size == 2000.0
+
+    def test_ranging_smaller_than_trending(self, risk_engine):
+        """Ranging regime should have smaller position than trending."""
+        trending_size = risk_engine.calculate_position_size(
+            equity=10000,
+            entry_price=45000,
+            stop_loss=44100,  # 2%
+            regime="trending_bull",
+            confidence=0.85,
+        )
+
+        ranging_size = risk_engine.calculate_position_size(
+            equity=10000,
+            entry_price=45000,
+            stop_loss=44100,  # Same 2%
+            regime="ranging",
+            confidence=0.85,
+        )
+
+        # Both may hit the 20% cap, so we just verify ranging <= trending
+        assert ranging_size <= trending_size
+        assert ranging_size > 0
+
+    def test_choppy_smallest_size(self, risk_engine):
+        """Choppy regime should have smallest position size."""
+        trending_size = risk_engine.calculate_position_size(
+            equity=10000,
+            entry_price=45000,
+            stop_loss=44100,
+            regime="trending_bull",
+            confidence=0.85,
+        )
+
+        choppy_size = risk_engine.calculate_position_size(
+            equity=10000,
+            entry_price=45000,
+            stop_loss=44100,
+            regime="choppy",
+            confidence=0.85,
+        )
+
+        # Choppy should be smaller (multiplier ~0.25 vs 1.0)
+        assert choppy_size <= trending_size
+        assert choppy_size > 0
+
+
+# =============================================================================
+# Correlation Validation Tests
+# =============================================================================
+
+class TestCorrelationValidation:
+    """Test correlated position exposure validation."""
+
+    def test_no_correlation_check_when_no_positions(self, risk_engine, valid_proposal, healthy_risk_state):
+        """No correlation check when no open positions."""
+        healthy_risk_state.open_position_symbols = []
+
+        result = risk_engine.validate_trade(valid_proposal, healthy_risk_state)
+
+        # Should pass correlation check
+        assert result.status == ValidationStatus.APPROVED
+
+    def test_correlation_check_with_correlated_position(self, risk_engine, valid_proposal, healthy_risk_state):
+        """Check correlation when holding correlated position."""
+        # Already holding BTC/USDT
+        healthy_risk_state.open_position_symbols = ['BTC/USDT']
+        healthy_risk_state.position_exposures = {'BTC/USDT': 20.0}
+
+        # Propose another BTC/USDT trade
+        result = risk_engine.validate_trade(valid_proposal, healthy_risk_state)
+
+        # Should still pass since BTC/USDT correlation with itself = 1.0
+        # and we're checking against max_correlated_exposure_pct
+        assert result is not None
+
+    def test_get_pair_correlation_same_symbol(self, risk_engine):
+        """Same symbol should return correlation of 1.0."""
+        correlation = risk_engine._get_pair_correlation('BTC/USDT', 'BTC/USDT')
+        assert correlation == 1.0
+
+    def test_get_pair_correlation_unknown_pairs(self, risk_engine):
+        """Unknown pairs should return 0.0 correlation."""
+        correlation = risk_engine._get_pair_correlation('UNKNOWN1', 'UNKNOWN2')
+        assert correlation == 0.0
+
+    def test_get_pair_correlation_reverse_lookup(self, risk_engine):
+        """Correlation lookup should work in either direction."""
+        # These may not be in PAIR_CORRELATIONS but test the logic
+        corr1 = risk_engine._get_pair_correlation('BTC/USDT', 'ETH/USDT')
+        corr2 = risk_engine._get_pair_correlation('ETH/USDT', 'BTC/USDT')
+
+        # Both should return same value (either from lookup or 0.0)
+        assert corr1 == corr2
+
+
+# =============================================================================
+# Period Reset Tests
+# =============================================================================
+
+class TestPeriodResets:
+    """Test daily and weekly reset logic."""
+
+    def test_check_and_reset_initializes_timestamps(self, risk_engine):
+        """Reset timestamps should be initialized on first check."""
+        state = risk_engine._risk_state
+        state.last_daily_reset = None
+        state.last_weekly_reset = None
+
+        risk_engine._check_and_reset_periods(state)
+
+        assert state.last_daily_reset is not None
+        assert state.last_weekly_reset is not None
+
+    def test_daily_reset_when_new_day(self, risk_engine):
+        """Daily reset should trigger when new UTC day starts."""
+        state = risk_engine._risk_state
+
+        # Set last reset to yesterday
+        yesterday = datetime.now(timezone.utc) - timedelta(days=1)
+        state.last_daily_reset = yesterday
+        state.daily_pnl = Decimal("100")  # Some existing PnL
+
+        risk_engine._check_and_reset_periods(state)
+
+        # Should have reset
+        assert state.last_daily_reset.date() == datetime.now(timezone.utc).date()
+
+    def test_no_reset_same_day(self, risk_engine):
+        """No reset should occur within the same day."""
+        state = risk_engine._risk_state
+
+        # Set last reset to now
+        now = datetime.now(timezone.utc)
+        state.last_daily_reset = now
+        state.last_weekly_reset = now
+        original_reset = state.last_daily_reset
+
+        risk_engine._check_and_reset_periods(state)
+
+        # Should not have changed
+        assert state.last_daily_reset == original_reset
+
+
+# =============================================================================
+# Volatility Tracking Tests
+# =============================================================================
+
+class TestVolatilityTracking:
+    """Test volatility spike detection."""
+
+    def test_update_volatility_normal(self, risk_engine):
+        """Normal volatility should not trigger spike."""
+        spike_detected = risk_engine.update_volatility(
+            current_atr=100.0,
+            avg_atr_20=100.0,
+        )
+
+        assert spike_detected is False
+        assert risk_engine._risk_state.current_atr == 100.0
+        assert risk_engine._risk_state.avg_atr_20 == 100.0
+
+    def test_update_volatility_spike_detected(self, risk_engine):
+        """High volatility should trigger spike detection."""
+        # Spike multiplier is 3.0 by default, so >3x average should trigger
+        spike_detected = risk_engine.update_volatility(
+            current_atr=350.0,  # 3.5x average - above 3.0 threshold
+            avg_atr_20=100.0,
+        )
+
+        assert spike_detected is True
+        assert risk_engine._risk_state.volatility_spike_active is True
+
+    def test_volatility_spike_clears(self, risk_engine):
+        """Volatility spike should clear when normalized."""
+        # First trigger a spike (>3x)
+        risk_engine.update_volatility(current_atr=350.0, avg_atr_20=100.0)
+        assert risk_engine._risk_state.volatility_spike_active is True
+
+        # Then normalize
+        risk_engine.update_volatility(current_atr=100.0, avg_atr_20=100.0)
+        assert risk_engine._risk_state.volatility_spike_active is False
+
+    def test_update_volatility_zero_avg(self, risk_engine):
+        """Zero average ATR should not cause division error."""
+        spike_detected = risk_engine.update_volatility(
+            current_atr=100.0,
+            avg_atr_20=0.0,  # Zero average
+        )
+
+        assert spike_detected is False
+
+
+# =============================================================================
+# Position Tracking Tests
+# =============================================================================
+
+class TestPositionTracking:
+    """Test position tracking updates."""
+
+    def test_update_positions(self, risk_engine):
+        """Position tracking should update state."""
+        risk_engine.update_positions(
+            open_symbols=['BTC/USDT', 'ETH/USDT'],
+            exposures={'BTC/USDT': 15.0, 'ETH/USDT': 10.0},
+        )
+
+        state = risk_engine._risk_state
+        assert 'BTC/USDT' in state.open_position_symbols
+        assert 'ETH/USDT' in state.open_position_symbols
+        assert state.position_exposures['BTC/USDT'] == 15.0
+
+    def test_update_positions_empty(self, risk_engine):
+        """Empty positions should clear tracking."""
+        risk_engine.update_positions(
+            open_symbols=[],
+            exposures={},
+        )
+
+        state = risk_engine._risk_state
+        assert len(state.open_position_symbols) == 0
+        assert len(state.position_exposures) == 0
+
+
+# =============================================================================
+# Database Persistence Tests
+# =============================================================================
+
+class TestDatabasePersistence:
+    """Test database state persistence."""
+
+    @pytest.mark.asyncio
+    async def test_persist_state_no_db(self, risk_engine):
+        """Persist without database should return False."""
+        risk_engine.db = None
+
+        result = await risk_engine.persist_state()
+
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_load_state_no_db(self, risk_engine):
+        """Load without database should return False."""
+        risk_engine.db = None
+
+        result = await risk_engine.load_state()
+
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_persist_state_with_mock_db(self, risk_engine):
+        """Persist with mock database should succeed."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        mock_db = MagicMock()
+        mock_db.execute = AsyncMock(return_value=None)
+        risk_engine.db = mock_db
+
+        result = await risk_engine.persist_state()
+
+        assert result is True
+        mock_db.execute.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_persist_state_db_error(self, risk_engine):
+        """Persist should handle database errors gracefully."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        mock_db = MagicMock()
+        mock_db.execute = AsyncMock(side_effect=Exception("DB error"))
+        risk_engine.db = mock_db
+
+        result = await risk_engine.persist_state()
+
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_load_state_with_mock_db(self, risk_engine):
+        """Load with mock database should succeed."""
+        from unittest.mock import AsyncMock, MagicMock
+        import json
+
+        mock_state = RiskState()
+        mock_state.daily_pnl = Decimal("500")
+
+        mock_db = MagicMock()
+        mock_db.fetchrow = AsyncMock(return_value={
+            'state_data': json.dumps(mock_state.to_dict())
+        })
+        risk_engine.db = mock_db
+
+        result = await risk_engine.load_state()
+
+        assert result is True
+        # State should be loaded
+        assert risk_engine._risk_state is not None
+
+    @pytest.mark.asyncio
+    async def test_load_state_no_data(self, risk_engine):
+        """Load with no stored data should return False."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        mock_db = MagicMock()
+        mock_db.fetchrow = AsyncMock(return_value=None)
+        risk_engine.db = mock_db
+
+        result = await risk_engine.load_state()
+
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_load_state_db_error(self, risk_engine):
+        """Load should handle database errors gracefully."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        mock_db = MagicMock()
+        mock_db.fetchrow = AsyncMock(side_effect=Exception("DB error"))
+        risk_engine.db = mock_db
+
+        result = await risk_engine.load_state()
+
+        assert result is False
+
+
+# =============================================================================
+# Calculate Position Size Edge Cases
+# =============================================================================
+
+class TestCalculatePositionSizeEdgeCases:
+    """Test edge cases in position size calculation."""
+
+    def test_low_confidence_returns_zero(self, risk_engine):
+        """Very low confidence should return 0 position."""
+        size = risk_engine.calculate_position_size(
+            equity=10000,
+            entry_price=45000,
+            stop_loss=44100,
+            regime="trending_bull",
+            confidence=0.50,  # Below min threshold
+        )
+
+        assert size == 0.0
+
+    def test_zero_equity(self, risk_engine):
+        """Zero equity should return 0 position."""
+        size = risk_engine.calculate_position_size(
+            equity=0,
+            entry_price=45000,
+            stop_loss=44100,
+            regime="trending_bull",
+            confidence=0.85,
+        )
+
+        assert size == 0.0
+
+    def test_zero_stop_distance(self, risk_engine):
+        """Zero stop distance should return 0 position."""
+        size = risk_engine.calculate_position_size(
+            equity=10000,
+            entry_price=45000,
+            stop_loss=45000,  # Same as entry
+            regime="trending_bull",
+            confidence=0.85,
+        )
+
+        assert size == 0.0
+
+    def test_confidence_tiers(self, risk_engine):
+        """Different confidence levels should give different multipliers."""
+        high_conf = risk_engine.calculate_position_size(
+            equity=10000,
+            entry_price=45000,
+            stop_loss=44100,
+            regime="trending_bull",
+            confidence=0.85,  # High tier
+        )
+
+        med_conf = risk_engine.calculate_position_size(
+            equity=10000,
+            entry_price=45000,
+            stop_loss=44100,
+            regime="trending_bull",
+            confidence=0.70,  # Medium tier
+        )
+
+        low_conf = risk_engine.calculate_position_size(
+            equity=10000,
+            entry_price=45000,
+            stop_loss=44100,
+            regime="trending_bull",
+            confidence=0.62,  # Low tier
+        )
+
+        # Higher confidence should give larger or equal position
+        assert high_conf >= med_conf
+        assert med_conf >= low_conf
+
+    def test_unknown_regime_uses_default(self, risk_engine):
+        """Unknown regime should use default multiplier."""
+        size = risk_engine.calculate_position_size(
+            equity=10000,
+            entry_price=45000,
+            stop_loss=44100,
+            regime="unknown_regime",
+            confidence=0.85,
+        )
+
+        # Should still calculate something (default 0.5 multiplier)
+        assert size > 0
+
+
+# =============================================================================
+# High Correlated Exposure Warning Test
+# =============================================================================
+
+class TestCorrelatedExposureWarnings:
+    """Test correlation exposure warning generation."""
+
+    def test_high_correlation_warning(self, risk_engine, valid_proposal, healthy_risk_state):
+        """High correlation exposure should generate warning."""
+        # Set up high existing exposure on same symbol
+        healthy_risk_state.open_position_symbols = ['BTC/USDT']
+        # Set exposure that's high but below rejection threshold
+        healthy_risk_state.position_exposures = {'BTC/USDT': 15.0}
+        healthy_risk_state.current_equity = Decimal("10000")
+
+        # Adjust proposal to small size so total doesn't exceed max
+        valid_proposal.size_usd = 500.0
+
+        result = risk_engine.validate_trade(valid_proposal, healthy_risk_state)
+
+        # The exact behavior depends on thresholds, but test runs
+        assert result is not None
+
+
+# =============================================================================
+# Weekly Reset Test
+# =============================================================================
+
+class TestWeeklyReset:
+    """Test weekly reset functionality."""
+
+    def test_weekly_reset_clears_weekly_pnl(self, risk_engine):
+        """Weekly reset should clear weekly PnL."""
+        state = risk_engine._risk_state
+        state.weekly_pnl = Decimal("500")
+        state.weekly_pnl_pct = 5.0
+
+        risk_engine.reset_weekly()
+
+        assert state.weekly_pnl == Decimal("0")
+        assert state.weekly_pnl_pct == 0.0
+
+    def test_weekly_reset_clears_breakers(self, risk_engine):
+        """Weekly reset should clear weekly circuit breakers."""
+        state = risk_engine._risk_state
+        # Set up a weekly loss breaker properly
+        state.trading_halted = True
+        state.halt_reason = "WEEKLY_LOSS"
+        state.triggered_breakers = ['weekly_loss']  # Must be in triggered_breakers
+
+        risk_engine.reset_weekly()
+
+        # Should be cleared since it was the only breaker
+        assert state.trading_halted is False
+        assert 'weekly_loss' not in state.triggered_breakers

@@ -515,3 +515,306 @@ class TestOutputSchema:
         assert 'volatility' in chars_required
         assert 'trend_strength' in chars_required
         assert 'volume_profile' in chars_required
+
+
+# =============================================================================
+# Process Method Tests (with mocked LLM)
+# =============================================================================
+
+class TestProcessMethod:
+    """Test the process method with mocked LLM calls."""
+
+    from unittest.mock import AsyncMock
+
+    @pytest.fixture
+    def mock_llm_response(self):
+        """Create a standard mock LLM response."""
+        from unittest.mock import MagicMock
+        response = MagicMock()
+        response.text = '''
+        {
+            "regime": "trending_bull",
+            "confidence": 0.85,
+            "characteristics": {
+                "volatility": "normal",
+                "trend_strength": 0.75,
+                "volume_profile": "increasing",
+                "choppiness": 35.0,
+                "adx_value": 32.0
+            },
+            "recommended_adjustments": {
+                "position_size_multiplier": 1.0,
+                "stop_loss_multiplier": 1.2,
+                "take_profit_multiplier": 2.0,
+                "entry_strictness": "normal"
+            },
+            "reasoning": "Strong uptrend confirmed"
+        }
+        '''
+        response.tokens_used = 120
+        response.cost_usd = 0.0
+        return response
+
+    @pytest.fixture
+    def regime_agent_with_mock(self, mock_llm_response):
+        """Create regime agent with mocked LLM."""
+        from unittest.mock import MagicMock, AsyncMock as AM
+
+        mock_llm = MagicMock()
+        mock_llm.generate = AM(return_value=mock_llm_response)
+
+        mock_prompt_builder = MagicMock()
+        mock_prompt = MagicMock()
+        mock_prompt.system_prompt = "You are a regime detection assistant."
+        mock_prompt.user_message = "Classify the current market regime."
+        mock_prompt_builder.build_prompt.return_value = mock_prompt
+
+        config = {'model': 'qwen2.5:7b', 'timeout_ms': 5000, 'retry_count': 2}
+
+        return RegimeDetectionAgent(mock_llm, mock_prompt_builder, config)
+
+    @pytest.mark.asyncio
+    async def test_process_returns_valid_output(self, regime_agent_with_mock, mock_snapshot):
+        """Process should return valid RegimeOutput."""
+        output = await regime_agent_with_mock.process(mock_snapshot)
+
+        assert output is not None
+        assert isinstance(output, RegimeOutput)
+        assert output.symbol == "BTC/USDT"
+        assert output.regime == "trending_bull"
+        assert output.confidence == 0.85
+
+    @pytest.mark.asyncio
+    async def test_process_applies_regime_parameters(self, regime_agent_with_mock, mock_snapshot):
+        """Process should apply regime parameters to output."""
+        output = await regime_agent_with_mock.process(mock_snapshot)
+
+        assert output.position_size_multiplier == 1.0
+        assert output.entry_strictness == "normal"
+
+    @pytest.mark.asyncio
+    async def test_process_stores_output(self, regime_agent_with_mock, mock_snapshot):
+        """Process should store output in cache."""
+        output = await regime_agent_with_mock.process(mock_snapshot)
+
+        assert regime_agent_with_mock._last_output == output
+
+    @pytest.mark.asyncio
+    async def test_process_handles_llm_error(self, mock_snapshot):
+        """Process should return fallback on LLM error."""
+        from unittest.mock import MagicMock, AsyncMock as AM
+
+        mock_llm = MagicMock()
+        mock_llm.generate = AM(side_effect=Exception("Connection refused"))
+
+        mock_prompt_builder = MagicMock()
+        mock_prompt = MagicMock()
+        mock_prompt.system_prompt = "System"
+        mock_prompt.user_message = "User"
+        mock_prompt_builder.build_prompt.return_value = mock_prompt
+
+        config = {'model': 'test', 'retry_count': 1}
+
+        agent = RegimeDetectionAgent(mock_llm, mock_prompt_builder, config)
+        output = await agent.process(mock_snapshot)
+
+        assert output.confidence == 0.0
+        assert output.regime == "choppy"  # Conservative fallback
+        assert "LLM error" in output.reasoning
+
+    @pytest.mark.asyncio
+    async def test_process_retries_on_failure(self, mock_snapshot):
+        """Process should retry on LLM failure."""
+        from unittest.mock import MagicMock, AsyncMock as AM
+
+        response = MagicMock()
+        response.text = '{"regime": "ranging", "confidence": 0.7, "reasoning": "test"}'
+        response.tokens_used = 100
+
+        mock_llm = MagicMock()
+        mock_llm.generate = AM(side_effect=[Exception("Timeout"), response])
+
+        mock_prompt_builder = MagicMock()
+        mock_prompt = MagicMock()
+        mock_prompt.system_prompt = "System"
+        mock_prompt.user_message = "User"
+        mock_prompt_builder.build_prompt.return_value = mock_prompt
+
+        config = {'model': 'test', 'retry_count': 2}
+
+        agent = RegimeDetectionAgent(mock_llm, mock_prompt_builder, config)
+        output = await agent.process(mock_snapshot)
+
+        assert output.regime == "ranging"
+        assert mock_llm.generate.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_process_with_parse_error(self, mock_snapshot):
+        """Process should handle JSON parse errors."""
+        from unittest.mock import MagicMock, AsyncMock as AM
+
+        response = MagicMock()
+        response.text = "This is not valid JSON at all"
+        response.tokens_used = 50
+
+        mock_llm = MagicMock()
+        mock_llm.generate = AM(return_value=response)
+
+        mock_prompt_builder = MagicMock()
+        mock_prompt = MagicMock()
+        mock_prompt.system_prompt = "System"
+        mock_prompt.user_message = "User"
+        mock_prompt_builder.build_prompt.return_value = mock_prompt
+
+        config = {'model': 'test', 'retry_count': 0}
+
+        agent = RegimeDetectionAgent(mock_llm, mock_prompt_builder, config)
+        output = await agent.process(mock_snapshot)
+
+        # Should use indicator-based fallback
+        assert output is not None
+        assert output.symbol == "BTC/USDT"
+        assert output.confidence == 0.4  # Fallback confidence
+
+
+# =============================================================================
+# Additional Normalization Tests
+# =============================================================================
+
+class TestNormalizationEdgeCases:
+    """Test edge cases in normalization."""
+
+    def test_normalize_missing_characteristics(self, regime_agent, mock_snapshot):
+        """Missing characteristics should get defaults."""
+        parsed = {'regime': 'trending_bull', 'confidence': 0.7}
+        normalized = regime_agent._normalize_parsed_output(parsed, mock_snapshot)
+
+        assert 'characteristics' in normalized
+        assert normalized['characteristics']['volatility'] == 'normal'
+        assert normalized['characteristics']['trend_strength'] == 0.5
+
+    def test_normalize_missing_adjustments(self, regime_agent, mock_snapshot):
+        """Missing adjustments should get defaults from regime."""
+        parsed = {'regime': 'trending_bull', 'confidence': 0.7, 'characteristics': {}}
+        normalized = regime_agent._normalize_parsed_output(parsed, mock_snapshot)
+
+        assert 'recommended_adjustments' in normalized
+        assert normalized['recommended_adjustments']['position_size_multiplier'] == 1.0
+
+    def test_normalize_clamps_stop_loss_multiplier(self, regime_agent, mock_snapshot):
+        """Stop loss multiplier should be clamped."""
+        parsed = {
+            'regime': 'trending_bull',
+            'confidence': 0.5,
+            'recommended_adjustments': {'stop_loss_multiplier': 5.0}
+        }
+        normalized = regime_agent._normalize_parsed_output(parsed, mock_snapshot)
+
+        assert normalized['recommended_adjustments']['stop_loss_multiplier'] == 2.0
+
+    def test_normalize_clamps_take_profit_multiplier(self, regime_agent, mock_snapshot):
+        """Take profit multiplier should be clamped."""
+        parsed = {
+            'regime': 'trending_bull',
+            'confidence': 0.5,
+            'recommended_adjustments': {'take_profit_multiplier': 10.0}
+        }
+        normalized = regime_agent._normalize_parsed_output(parsed, mock_snapshot)
+
+        assert normalized['recommended_adjustments']['take_profit_multiplier'] == 3.0  # Max is 3.0
+
+    def test_normalize_invalid_entry_strictness(self, regime_agent, mock_snapshot):
+        """Invalid entry strictness should be normalized."""
+        parsed = {
+            'regime': 'trending_bull',
+            'confidence': 0.5,
+            'recommended_adjustments': {'entry_strictness': 'invalid'}
+        }
+        normalized = regime_agent._normalize_parsed_output(parsed, mock_snapshot)
+
+        assert normalized['recommended_adjustments']['entry_strictness'] == 'normal'
+
+    def test_normalize_invalid_volume_profile(self, regime_agent, mock_snapshot):
+        """Invalid volume profile should be normalized."""
+        parsed = {
+            'regime': 'trending_bull',
+            'confidence': 0.5,
+            'characteristics': {'volume_profile': 'invalid'}
+        }
+        normalized = regime_agent._normalize_parsed_output(parsed, mock_snapshot)
+
+        assert normalized['characteristics']['volume_profile'] == 'stable'  # Default is stable
+
+
+# =============================================================================
+# Agent Configuration Tests
+# =============================================================================
+
+class TestAgentConfiguration:
+    """Test agent configuration."""
+
+    def test_default_config(self):
+        """Test default configuration values."""
+        mock_llm = MagicMock()
+        mock_prompt_builder = MagicMock()
+        config = {}
+
+        agent = RegimeDetectionAgent(mock_llm, mock_prompt_builder, config)
+
+        assert agent.model == 'qwen2.5:7b'
+        assert agent.timeout_ms == 5000
+        assert agent.retry_count == 2
+
+    def test_custom_config(self):
+        """Test custom configuration values."""
+        mock_llm = MagicMock()
+        mock_prompt_builder = MagicMock()
+        config = {
+            'model': 'custom-model',
+            'timeout_ms': 10000,
+            'retry_count': 5,
+        }
+
+        agent = RegimeDetectionAgent(mock_llm, mock_prompt_builder, config)
+
+        assert agent.model == 'custom-model'
+        assert agent.timeout_ms == 10000
+        assert agent.retry_count == 5
+
+    def test_get_output_schema(self, regime_agent):
+        """get_output_schema should return the regime schema."""
+        schema = regime_agent.get_output_schema()
+
+        assert schema == REGIME_OUTPUT_SCHEMA
+
+# =============================================================================
+# Indicator Fallback Edge Cases
+# =============================================================================
+
+class TestIndicatorFallbackEdgeCases:
+    """Test edge cases in indicator-based fallback."""
+
+    def test_missing_all_indicators(self, regime_agent):
+        """Missing indicators should give defaults."""
+        snapshot = MagicMock()
+        snapshot.indicators = {}
+        snapshot.current_price = Decimal("45000")
+
+        output = regime_agent._create_output_from_indicators(snapshot)
+
+        assert output['regime'] == 'ranging'
+        assert output['confidence'] == 0.4
+
+    def test_high_volatility_regime(self, regime_agent, mock_snapshot):
+        """Very high volatility should give high_volatility regime."""
+        mock_snapshot.indicators = {
+            'adx_14': 40.0,  # Strong trend
+            'rsi_14': 60.0,  # Bullish
+            'atr_14': 2700.0,  # 6% volatility
+            'choppiness_14': 35.0,
+        }
+
+        output = regime_agent._create_output_from_indicators(mock_snapshot)
+
+        # Should get volatile_bull due to high ATR and bullish RSI
+        assert 'volatile' in output['regime'] or output['characteristics']['volatility'] == 'extreme'

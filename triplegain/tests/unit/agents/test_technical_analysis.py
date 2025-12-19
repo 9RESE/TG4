@@ -303,3 +303,358 @@ class TestFallbackOutput:
         output = ta_agent._create_fallback_output(mock_snapshot, "Connection timeout")
 
         assert "LLM call failed" in output.warnings
+
+
+# =============================================================================
+# Process Method Tests (with mocked LLM)
+# =============================================================================
+
+class TestProcessMethod:
+    """Test the process method with mocked LLM calls."""
+
+    @pytest.fixture
+    def mock_llm_response(self):
+        """Create a standard mock LLM response."""
+        response = MagicMock()
+        response.text = '''
+        {
+            "trend": {"direction": "bullish", "strength": 0.75},
+            "momentum": {"score": 0.5, "rsi_signal": "neutral", "macd_signal": "bullish"},
+            "key_levels": {"resistance": [46000], "support": [44000], "current_position": "mid_range"},
+            "signals": {"primary": "EMA cross up", "secondary": ["RSI rising"], "warnings": []},
+            "bias": "long",
+            "confidence": 0.8,
+            "reasoning": "Strong bullish momentum"
+        }
+        '''
+        response.tokens_used = 150
+        response.cost_usd = 0.0  # Local LLM
+        return response
+
+    @pytest.fixture
+    def ta_agent_with_mock(self, mock_llm_response):
+        """Create a TA agent with mocked LLM client."""
+        mock_llm = MagicMock()
+        mock_llm.generate = AsyncMock(return_value=mock_llm_response)
+
+        mock_prompt_builder = MagicMock()
+        mock_prompt = MagicMock()
+        mock_prompt.system_prompt = "You are a technical analysis assistant."
+        mock_prompt.user_message = "Analyze BTC/USDT."
+        mock_prompt_builder.build_prompt.return_value = mock_prompt
+
+        config = {'model': 'qwen2.5:7b', 'timeout_ms': 5000, 'retry_count': 2}
+
+        return TechnicalAnalysisAgent(mock_llm, mock_prompt_builder, config)
+
+    @pytest.mark.asyncio
+    async def test_process_returns_valid_output(self, ta_agent_with_mock, mock_snapshot):
+        """Process should return valid TAOutput."""
+        output = await ta_agent_with_mock.process(mock_snapshot)
+
+        assert output is not None
+        assert isinstance(output, TAOutput)
+        assert output.symbol == "BTC/USDT"
+        assert output.trend_direction == "bullish"
+        assert output.bias == "long"
+        assert output.confidence == 0.8
+
+    @pytest.mark.asyncio
+    async def test_process_stores_output(self, ta_agent_with_mock, mock_snapshot):
+        """Process should store output in cache."""
+        output = await ta_agent_with_mock.process(mock_snapshot)
+
+        assert ta_agent_with_mock._last_output == output
+
+    @pytest.mark.asyncio
+    async def test_process_handles_llm_error(self, mock_snapshot):
+        """Process should return fallback on LLM error."""
+        mock_llm = MagicMock()
+        mock_llm.generate = AsyncMock(side_effect=Exception("Connection refused"))
+
+        mock_prompt_builder = MagicMock()
+        mock_prompt = MagicMock()
+        mock_prompt.system_prompt = "System"
+        mock_prompt.user_message = "User"
+        mock_prompt_builder.build_prompt.return_value = mock_prompt
+
+        config = {'model': 'test', 'retry_count': 1}
+
+        agent = TechnicalAnalysisAgent(mock_llm, mock_prompt_builder, config)
+        output = await agent.process(mock_snapshot)
+
+        assert output.confidence == 0.0
+        assert output.bias == "neutral"
+        assert "LLM error" in output.reasoning
+
+    @pytest.mark.asyncio
+    async def test_process_retries_on_failure(self, mock_snapshot):
+        """Process should retry on LLM failure."""
+        response = MagicMock()
+        response.text = '{"trend": {"direction": "bullish"}, "bias": "long", "confidence": 0.7, "reasoning": "test"}'
+        response.tokens_used = 100
+
+        mock_llm = MagicMock()
+        # Fail first time, succeed second time
+        mock_llm.generate = AsyncMock(side_effect=[Exception("Timeout"), response])
+
+        mock_prompt_builder = MagicMock()
+        mock_prompt = MagicMock()
+        mock_prompt.system_prompt = "System"
+        mock_prompt.user_message = "User"
+        mock_prompt_builder.build_prompt.return_value = mock_prompt
+
+        config = {'model': 'test', 'retry_count': 2}
+
+        agent = TechnicalAnalysisAgent(mock_llm, mock_prompt_builder, config)
+        output = await agent.process(mock_snapshot)
+
+        # Should have retried and succeeded
+        assert output.bias == "long"
+        assert mock_llm.generate.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_process_with_parse_error(self, mock_snapshot):
+        """Process should handle JSON parse errors."""
+        response = MagicMock()
+        response.text = "This is not valid JSON at all"
+        response.tokens_used = 50
+
+        mock_llm = MagicMock()
+        mock_llm.generate = AsyncMock(return_value=response)
+
+        mock_prompt_builder = MagicMock()
+        mock_prompt = MagicMock()
+        mock_prompt.system_prompt = "System"
+        mock_prompt.user_message = "User"
+        mock_prompt_builder.build_prompt.return_value = mock_prompt
+
+        config = {'model': 'test', 'retry_count': 0}
+
+        agent = TechnicalAnalysisAgent(mock_llm, mock_prompt_builder, config)
+        output = await agent.process(mock_snapshot)
+
+        # Should use indicator-based fallback
+        assert output is not None
+        assert output.symbol == "BTC/USDT"
+        assert output.confidence == 0.4  # Fallback confidence
+
+
+# =============================================================================
+# Additional Parsing Edge Cases
+# =============================================================================
+
+class TestParsingEdgeCases:
+    """Test edge cases in response parsing."""
+
+    @pytest.fixture
+    def ta_agent(self):
+        """Create a TA agent for testing parsing."""
+        mock_llm = MagicMock()
+        mock_prompt_builder = MagicMock()
+        config = {'model': 'test-model'}
+        return TechnicalAnalysisAgent(mock_llm, mock_prompt_builder, config)
+
+    def test_normalize_missing_trend(self, ta_agent, mock_snapshot):
+        """Missing trend should get defaults."""
+        parsed = {'bias': 'long', 'confidence': 0.7}
+        normalized = ta_agent._normalize_parsed_output(parsed, mock_snapshot)
+
+        assert normalized['trend']['direction'] == 'neutral'
+        assert normalized['trend']['strength'] == 0.5
+
+    def test_normalize_missing_momentum(self, ta_agent, mock_snapshot):
+        """Missing momentum should get defaults."""
+        parsed = {'trend': {'direction': 'bullish'}}
+        normalized = ta_agent._normalize_parsed_output(parsed, mock_snapshot)
+
+        assert normalized['momentum']['score'] == 0.0
+
+    def test_normalize_invalid_rsi_signal(self, ta_agent, mock_snapshot):
+        """Invalid RSI signal should be normalized."""
+        parsed = {'momentum': {'rsi_signal': 'invalid'}}
+        normalized = ta_agent._normalize_parsed_output(parsed, mock_snapshot)
+
+        assert normalized['momentum']['rsi_signal'] == 'neutral'
+
+    def test_normalize_invalid_macd_signal(self, ta_agent, mock_snapshot):
+        """Invalid MACD signal should be normalized."""
+        parsed = {'momentum': {'macd_signal': 'invalid'}}
+        normalized = ta_agent._normalize_parsed_output(parsed, mock_snapshot)
+
+        assert normalized['momentum']['macd_signal'] == 'neutral'
+
+    def test_normalize_truncates_long_reasoning(self, ta_agent, mock_snapshot):
+        """Long reasoning should be truncated."""
+        parsed = {'reasoning': 'x' * 600}
+        normalized = ta_agent._normalize_parsed_output(parsed, mock_snapshot)
+
+        assert len(normalized['reasoning']) <= 500
+        assert normalized['reasoning'].endswith('...')
+
+    def test_normalize_adds_default_reasoning(self, ta_agent, mock_snapshot):
+        """Missing reasoning should get default."""
+        parsed = {}
+        normalized = ta_agent._normalize_parsed_output(parsed, mock_snapshot)
+
+        assert 'BTC/USDT' in normalized['reasoning']
+
+    def test_normalize_negative_strength(self, ta_agent, mock_snapshot):
+        """Negative strength should be clamped to 0."""
+        parsed = {'trend': {'strength': -0.5}}
+        normalized = ta_agent._normalize_parsed_output(parsed, mock_snapshot)
+
+        assert normalized['trend']['strength'] == 0.0
+
+    def test_normalize_momentum_score_clamping(self, ta_agent, mock_snapshot):
+        """Momentum score should be clamped to [-1, 1]."""
+        parsed = {'momentum': {'score': 2.0}}
+        normalized = ta_agent._normalize_parsed_output(parsed, mock_snapshot)
+
+        assert normalized['momentum']['score'] == 1.0
+
+        parsed = {'momentum': {'score': -2.0}}
+        normalized = ta_agent._normalize_parsed_output(parsed, mock_snapshot)
+
+        assert normalized['momentum']['score'] == -1.0
+
+
+# =============================================================================
+# Indicator-Based Fallback Tests
+# =============================================================================
+
+class TestIndicatorFallback:
+    """Test indicator-based fallback logic."""
+
+    @pytest.fixture
+    def ta_agent(self):
+        """Create a TA agent for testing."""
+        mock_llm = MagicMock()
+        mock_prompt_builder = MagicMock()
+        config = {'model': 'test-model'}
+        return TechnicalAnalysisAgent(mock_llm, mock_prompt_builder, config)
+
+    def test_long_bias_from_indicators(self, ta_agent):
+        """RSI > 60 and positive MACD should give long bias."""
+        snapshot = MagicMock()
+        snapshot.indicators = {
+            'rsi_14': 65.0,
+            'macd': {'histogram': 100.0},
+        }
+
+        parsed = ta_agent._create_output_from_indicators(snapshot)
+
+        assert parsed['bias'] == 'long'
+        assert parsed['trend']['direction'] == 'bullish'
+
+    def test_short_bias_from_indicators(self, ta_agent):
+        """RSI < 40 and negative MACD should give short bias."""
+        snapshot = MagicMock()
+        snapshot.indicators = {
+            'rsi_14': 35.0,
+            'macd': {'histogram': -100.0},
+        }
+
+        parsed = ta_agent._create_output_from_indicators(snapshot)
+
+        assert parsed['bias'] == 'short'
+        assert parsed['trend']['direction'] == 'bearish'
+
+    def test_neutral_bias_from_indicators(self, ta_agent):
+        """Mixed signals should give neutral bias."""
+        snapshot = MagicMock()
+        snapshot.indicators = {
+            'rsi_14': 50.0,
+            'macd': {'histogram': 0.0},
+        }
+
+        parsed = ta_agent._create_output_from_indicators(snapshot)
+
+        assert parsed['bias'] == 'neutral'
+
+    def test_oversold_rsi_signal(self, ta_agent):
+        """RSI < 30 should give oversold signal."""
+        snapshot = MagicMock()
+        snapshot.indicators = {'rsi_14': 25.0}
+
+        parsed = ta_agent._create_output_from_indicators(snapshot)
+
+        assert parsed['momentum']['rsi_signal'] == 'oversold'
+
+    def test_overbought_rsi_signal(self, ta_agent):
+        """RSI > 70 should give overbought signal."""
+        snapshot = MagicMock()
+        snapshot.indicators = {'rsi_14': 75.0}
+
+        parsed = ta_agent._create_output_from_indicators(snapshot)
+
+        assert parsed['momentum']['rsi_signal'] == 'overbought'
+
+    def test_missing_indicators(self, ta_agent):
+        """Missing indicators should give defaults."""
+        snapshot = MagicMock()
+        snapshot.indicators = {}
+
+        parsed = ta_agent._create_output_from_indicators(snapshot)
+
+        assert parsed['bias'] == 'neutral'
+        assert parsed['confidence'] == 0.4
+
+
+# =============================================================================
+# Agent Configuration Tests
+# =============================================================================
+
+class TestAgentConfiguration:
+    """Test agent configuration."""
+
+    def test_default_config(self):
+        """Test default configuration values."""
+        mock_llm = MagicMock()
+        mock_prompt_builder = MagicMock()
+        config = {}
+
+        agent = TechnicalAnalysisAgent(mock_llm, mock_prompt_builder, config)
+
+        assert agent.model == 'qwen2.5:7b'
+        assert agent.timeout_ms == 5000
+        assert agent.retry_count == 2
+
+    def test_custom_config(self):
+        """Test custom configuration values."""
+        mock_llm = MagicMock()
+        mock_prompt_builder = MagicMock()
+        config = {
+            'model': 'custom-model',
+            'timeout_ms': 10000,
+            'retry_count': 5,
+        }
+
+        agent = TechnicalAnalysisAgent(mock_llm, mock_prompt_builder, config)
+
+        assert agent.model == 'custom-model'
+        assert agent.timeout_ms == 10000
+        assert agent.retry_count == 5
+
+    def test_get_output_schema(self):
+        """get_output_schema should return the TA schema."""
+        mock_llm = MagicMock()
+        mock_prompt_builder = MagicMock()
+        agent = TechnicalAnalysisAgent(mock_llm, mock_prompt_builder, {})
+
+        schema = agent.get_output_schema()
+
+        assert schema == TA_OUTPUT_SCHEMA
+
+    def test_get_analysis_query(self):
+        """get_analysis_query should return a query string."""
+        mock_llm = MagicMock()
+        mock_prompt_builder = MagicMock()
+        agent = TechnicalAnalysisAgent(mock_llm, mock_prompt_builder, {})
+
+        query = agent._get_analysis_query()
+
+        assert 'JSON' in query
+        assert 'trend' in query
+        assert 'momentum' in query
+        assert 'bias' in query

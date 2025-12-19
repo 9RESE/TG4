@@ -10,9 +10,9 @@ Tests validate:
 """
 
 import pytest
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from decimal import Decimal
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, AsyncMock
 
 from triplegain.src.agents.trading_decision import (
     TradingDecisionAgent,
@@ -581,3 +581,435 @@ class TestAgentStats:
         assert 'qwen' in stats['models_configured']
         assert 'gpt4' in stats['models_configured']
         assert 'sonnet' in stats['models_configured']
+
+
+# =============================================================================
+# Process Method Tests (with mocked LLMs)
+# =============================================================================
+
+class TestProcessMethod:
+    """Test the process method with mocked LLM calls."""
+
+    @pytest.fixture
+    def mock_llm_response(self):
+        """Create a standard mock LLM response."""
+        response = MagicMock()
+        response.text = '''
+        {
+            "action": "BUY",
+            "confidence": 0.8,
+            "entry_price": 45000,
+            "stop_loss": 44100,
+            "take_profit": 48000,
+            "reasoning": "Strong bullish trend"
+        }
+        '''
+        response.tokens_used = 200
+        response.cost_usd = 0.01
+        response.latency_ms = 500
+        return response
+
+    @pytest.fixture
+    def trading_agent_with_mocks(self, mock_llm_response):
+        """Create a trading agent with mocked LLM clients."""
+        from unittest.mock import AsyncMock
+
+        # Create async mocks for generate method
+        mock_clients = {}
+        for provider in ['ollama', 'openai', 'anthropic', 'deepseek', 'xai']:
+            mock_client = MagicMock()
+            mock_client.generate = AsyncMock(return_value=mock_llm_response)
+            mock_clients[provider] = mock_client
+
+        mock_prompt_builder = MagicMock()
+        mock_prompt = MagicMock()
+        mock_prompt.system_prompt = "You are a trading assistant."
+        mock_prompt.user_message = "Analyze BTC/USDT."
+        mock_prompt_builder.build_prompt.return_value = mock_prompt
+
+        config = {
+            'models': {
+                'qwen': {'provider': 'ollama', 'model': 'qwen2.5:7b'},
+                'gpt4': {'provider': 'openai', 'model': 'gpt-4-turbo'},
+                'grok': {'provider': 'xai', 'model': 'grok-2'},
+                'deepseek': {'provider': 'deepseek', 'model': 'deepseek-chat'},
+                'sonnet': {'provider': 'anthropic', 'model': 'claude-3-5-sonnet'},
+                'opus': {'provider': 'anthropic', 'model': 'claude-3-opus'},
+            },
+            'min_consensus': 0.5,
+            'high_consensus': 0.67,
+            'timeout_seconds': 30,
+        }
+
+        return TradingDecisionAgent(mock_clients, mock_prompt_builder, config)
+
+    @pytest.mark.asyncio
+    async def test_process_builds_consensus(self, trading_agent_with_mocks, mock_snapshot):
+        """Process should return consensus decision."""
+        output = await trading_agent_with_mocks.process(mock_snapshot)
+
+        assert output is not None
+        assert output.action == "BUY"
+        assert output.symbol == "BTC/USDT"
+        assert output.consensus_strength > 0
+        assert output.agreeing_models > 0
+
+    @pytest.mark.asyncio
+    async def test_process_tracks_costs(self, trading_agent_with_mocks, mock_snapshot):
+        """Process should track costs from all models."""
+        output = await trading_agent_with_mocks.process(mock_snapshot)
+
+        # With 6 models at 0.01 each
+        assert output.latency_ms >= 0
+        assert output.tokens_used > 0
+
+    @pytest.mark.asyncio
+    async def test_process_handles_mixed_responses(self, mock_snapshot):
+        """Process should handle models returning different actions."""
+        from unittest.mock import AsyncMock
+
+        responses = {
+            'ollama': '{"action": "BUY", "confidence": 0.8}',
+            'openai': '{"action": "BUY", "confidence": 0.75}',
+            'anthropic': '{"action": "SELL", "confidence": 0.7}',
+            'deepseek': '{"action": "BUY", "confidence": 0.85}',
+            'xai': '{"action": "HOLD", "confidence": 0.6}',
+        }
+
+        mock_clients = {}
+        for provider, resp_text in responses.items():
+            resp = MagicMock()
+            resp.text = resp_text
+            resp.tokens_used = 150
+            resp.cost_usd = 0.01
+            resp.latency_ms = 100  # Add latency_ms to fix comparison
+            mock_client = MagicMock()
+            mock_client.generate = AsyncMock(return_value=resp)
+            mock_clients[provider] = mock_client
+
+        mock_prompt_builder = MagicMock()
+        mock_prompt = MagicMock()
+        mock_prompt.system_prompt = "You are a trading assistant."
+        mock_prompt.user_message = "Analyze."
+        mock_prompt_builder.build_prompt.return_value = mock_prompt
+
+        config = {
+            'models': {
+                'qwen': {'provider': 'ollama', 'model': 'qwen2.5:7b'},
+                'gpt4': {'provider': 'openai', 'model': 'gpt-4-turbo'},
+                'grok': {'provider': 'xai', 'model': 'grok-2'},
+                'deepseek': {'provider': 'deepseek', 'model': 'deepseek-chat'},
+                'sonnet': {'provider': 'anthropic', 'model': 'claude-3-5-sonnet'},
+            },
+            'min_consensus': 0.5,
+        }
+
+        agent = TradingDecisionAgent(mock_clients, mock_prompt_builder, config)
+        output = await agent.process(mock_snapshot)
+
+        # BUY should win with 3/5 models
+        assert output.action == "BUY"
+        assert output.votes["BUY"] == 3
+
+    @pytest.mark.asyncio
+    async def test_process_handles_llm_errors(self, mock_snapshot):
+        """Process should handle LLM errors gracefully."""
+        from unittest.mock import AsyncMock
+
+        mock_clients = {}
+        for provider in ['ollama', 'openai', 'anthropic', 'deepseek', 'xai']:
+            mock_client = MagicMock()
+            mock_client.generate = AsyncMock(side_effect=Exception("LLM Error"))
+            mock_clients[provider] = mock_client
+
+        mock_prompt_builder = MagicMock()
+        mock_prompt = MagicMock()
+        mock_prompt.system_prompt = "System"
+        mock_prompt.user_message = "User"
+        mock_prompt_builder.build_prompt.return_value = mock_prompt
+
+        config = {
+            'models': {
+                'qwen': {'provider': 'ollama', 'model': 'qwen2.5:7b'},
+            },
+            'min_consensus': 0.5,
+        }
+
+        agent = TradingDecisionAgent(mock_clients, mock_prompt_builder, config)
+        output = await agent.process(mock_snapshot)
+
+        # Should return HOLD with no consensus
+        assert output.action == "HOLD"
+        assert output.consensus_strength == 0.0
+
+
+# =============================================================================
+# Output Schema Tests
+# =============================================================================
+
+class TestOutputSchema:
+    """Test output schema method."""
+
+    def test_get_output_schema(self, trading_agent):
+        """get_output_schema should return valid JSON schema."""
+        schema = trading_agent.get_output_schema()
+
+        assert isinstance(schema, dict)
+        assert 'type' in schema
+        assert 'properties' in schema
+        assert 'action' in schema['properties']
+        assert 'confidence' in schema['properties']
+
+
+# =============================================================================
+# TradingDecisionOutput Serialization Tests
+# =============================================================================
+
+class TestTradingDecisionOutputSerialization:
+    """Test TradingDecisionOutput serialization."""
+
+    def test_to_dict(self, trading_output):
+        """to_dict should serialize all fields."""
+        result = trading_output.to_dict()
+
+        assert result['action'] == 'BUY'
+        assert result['consensus_strength'] == 0.83
+        assert result['votes'] == {'BUY': 5, 'HOLD': 1}
+        assert result['entry_price'] == 45000.0
+        assert result['stop_loss'] == 44100.0
+
+    def test_to_json(self, trading_output):
+        """to_json should produce valid JSON."""
+        import json
+
+        json_str = trading_output.to_json()
+        parsed = json.loads(json_str)
+
+        assert parsed['action'] == 'BUY'
+        assert 'timestamp' in parsed
+
+
+# =============================================================================
+# Database Methods Tests
+# =============================================================================
+
+class TestDatabaseMethods:
+    """Test database persistence methods."""
+
+    @pytest.fixture
+    def trading_output_with_decisions(self):
+        """Create trading output with model decisions."""
+        return TradingDecisionOutput(
+            agent_name="trading_decision",
+            timestamp=datetime.now(timezone.utc),
+            symbol="BTC/USDT",
+            action="BUY",
+            confidence=0.85,
+            consensus_strength=0.83,
+            votes={"BUY": 5, "HOLD": 1},
+            total_models=6,
+            agreeing_models=5,
+            reasoning="Strong consensus for BUY",
+            model_decisions=[
+                ModelDecision(
+                    model_name="gpt4",
+                    provider="openai",
+                    action="BUY",
+                    confidence=0.85,
+                    entry_price=45000.0,
+                    stop_loss=44100.0,
+                    take_profit=48000.0,
+                    reasoning="Bullish trend",
+                    latency_ms=150,
+                    tokens_used=500,
+                    cost_usd=0.02
+                ),
+            ],
+            entry_price=45000.0,
+            stop_loss=44100.0,
+            take_profit=48000.0,
+            position_size_pct=10.0,
+            total_cost_usd=0.12,
+        )
+
+    @pytest.mark.asyncio
+    async def test_store_model_comparisons_no_db(
+        self, trading_agent, trading_output_with_decisions, mock_snapshot
+    ):
+        """Store should handle no database gracefully."""
+        trading_agent.db = None
+
+        # Should not raise
+        await trading_agent._store_model_comparisons(
+            trading_output_with_decisions, mock_snapshot
+        )
+
+    @pytest.mark.asyncio
+    async def test_store_model_comparisons_with_db(
+        self, trading_agent, trading_output_with_decisions, mock_snapshot
+    ):
+        """Store should insert records to database."""
+        mock_db = MagicMock()
+        mock_db.execute = AsyncMock(return_value=None)
+        trading_agent.db = mock_db
+
+        await trading_agent._store_model_comparisons(
+            trading_output_with_decisions, mock_snapshot
+        )
+
+        # Should have called execute once per model decision
+        assert mock_db.execute.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_store_model_comparisons_db_error(
+        self, trading_agent, trading_output_with_decisions, mock_snapshot
+    ):
+        """Store should handle database errors gracefully."""
+        mock_db = MagicMock()
+        mock_db.execute = AsyncMock(side_effect=Exception("DB error"))
+        trading_agent.db = mock_db
+
+        # Should not raise
+        await trading_agent._store_model_comparisons(
+            trading_output_with_decisions, mock_snapshot
+        )
+
+    @pytest.mark.asyncio
+    async def test_update_comparison_outcomes_no_db(self, trading_agent):
+        """Update should return 0 when no database."""
+        trading_agent.db = None
+
+        result = await trading_agent.update_comparison_outcomes(
+            symbol="BTC/USDT",
+            timestamp_from=datetime.now(timezone.utc) - timedelta(hours=4),
+            timestamp_to=datetime.now(timezone.utc),
+            price_1h=45100.0,
+            price_4h=45500.0,
+            price_24h=46000.0,
+        )
+
+        assert result == 0
+
+    @pytest.mark.asyncio
+    async def test_update_comparison_outcomes_no_rows(self, trading_agent):
+        """Update should return 0 when no matching rows."""
+        mock_db = MagicMock()
+        mock_db.fetch = AsyncMock(return_value=[])
+        trading_agent.db = mock_db
+
+        result = await trading_agent.update_comparison_outcomes(
+            symbol="BTC/USDT",
+            timestamp_from=datetime.now(timezone.utc) - timedelta(hours=4),
+            timestamp_to=datetime.now(timezone.utc),
+            price_1h=45100.0,
+            price_4h=45500.0,
+            price_24h=46000.0,
+        )
+
+        assert result == 0
+
+    @pytest.mark.asyncio
+    async def test_update_comparison_outcomes_buy_correct(self, trading_agent):
+        """Update should calculate BUY as correct when price went up."""
+        mock_db = MagicMock()
+        mock_db.fetch = AsyncMock(return_value=[
+            {'id': 1, 'action': 'BUY', 'price_at_decision': 45000.0}
+        ])
+        mock_db.execute = AsyncMock(return_value=None)
+        trading_agent.db = mock_db
+
+        result = await trading_agent.update_comparison_outcomes(
+            symbol="BTC/USDT",
+            timestamp_from=datetime.now(timezone.utc) - timedelta(hours=4),
+            timestamp_to=datetime.now(timezone.utc),
+            price_1h=45100.0,
+            price_4h=46000.0,  # Price went up (correct for BUY)
+            price_24h=47000.0,
+        )
+
+        assert result == 1
+        mock_db.execute.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_update_comparison_outcomes_sell_correct(self, trading_agent):
+        """Update should calculate SELL as correct when price went down."""
+        mock_db = MagicMock()
+        mock_db.fetch = AsyncMock(return_value=[
+            {'id': 1, 'action': 'SELL', 'price_at_decision': 45000.0}
+        ])
+        mock_db.execute = AsyncMock(return_value=None)
+        trading_agent.db = mock_db
+
+        result = await trading_agent.update_comparison_outcomes(
+            symbol="BTC/USDT",
+            timestamp_from=datetime.now(timezone.utc) - timedelta(hours=4),
+            timestamp_to=datetime.now(timezone.utc),
+            price_1h=44800.0,
+            price_4h=44000.0,  # Price went down (correct for SELL)
+            price_24h=43000.0,
+        )
+
+        assert result == 1
+
+    @pytest.mark.asyncio
+    async def test_update_comparison_outcomes_hold_correct(self, trading_agent):
+        """Update should calculate HOLD as correct when price stayed flat."""
+        mock_db = MagicMock()
+        mock_db.fetch = AsyncMock(return_value=[
+            {'id': 1, 'action': 'HOLD', 'price_at_decision': 45000.0}
+        ])
+        mock_db.execute = AsyncMock(return_value=None)
+        trading_agent.db = mock_db
+
+        result = await trading_agent.update_comparison_outcomes(
+            symbol="BTC/USDT",
+            timestamp_from=datetime.now(timezone.utc) - timedelta(hours=4),
+            timestamp_to=datetime.now(timezone.utc),
+            price_1h=45050.0,
+            price_4h=45100.0,  # Price within 2% (correct for HOLD)
+            price_24h=45200.0,
+        )
+
+        assert result == 1
+
+    @pytest.mark.asyncio
+    async def test_update_comparison_outcomes_db_error(self, trading_agent):
+        """Update should handle database errors gracefully."""
+        mock_db = MagicMock()
+        mock_db.fetch = AsyncMock(side_effect=Exception("DB error"))
+        trading_agent.db = mock_db
+
+        result = await trading_agent.update_comparison_outcomes(
+            symbol="BTC/USDT",
+            timestamp_from=datetime.now(timezone.utc) - timedelta(hours=4),
+            timestamp_to=datetime.now(timezone.utc),
+            price_1h=45100.0,
+            price_4h=46000.0,
+            price_24h=47000.0,
+        )
+
+        assert result == 0
+
+    @pytest.mark.asyncio
+    async def test_update_multiple_records(self, trading_agent):
+        """Update should process multiple records."""
+        mock_db = MagicMock()
+        mock_db.fetch = AsyncMock(return_value=[
+            {'id': 1, 'action': 'BUY', 'price_at_decision': 45000.0},
+            {'id': 2, 'action': 'SELL', 'price_at_decision': 45000.0},
+            {'id': 3, 'action': 'HOLD', 'price_at_decision': 45000.0},
+        ])
+        mock_db.execute = AsyncMock(return_value=None)
+        trading_agent.db = mock_db
+
+        result = await trading_agent.update_comparison_outcomes(
+            symbol="BTC/USDT",
+            timestamp_from=datetime.now(timezone.utc) - timedelta(hours=4),
+            timestamp_to=datetime.now(timezone.utc),
+            price_1h=45100.0,
+            price_4h=46000.0,
+            price_24h=47000.0,
+        )
+
+        assert result == 3
+        assert mock_db.execute.call_count == 3

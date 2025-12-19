@@ -5,8 +5,8 @@ Python trading system with TimescaleDB + 6-model LLM comparison
 
 ## Quick Commands
 ```bash
-pytest triplegain/tests/                            # Run all tests (378 passing)
-pytest --cov=triplegain/src --cov-report=term       # Run with coverage (67%)
+pytest triplegain/tests/                            # Run all tests (689 passing)
+pytest --cov=triplegain/src --cov-report=term       # Run with coverage (90%)
 docker-compose up -d timescaledb                    # Start database
 python -m data.kraken_db.gap_filler --db-url "$DB_URL"  # Fill data gaps
 uvicorn triplegain.src.api.app:app --reload         # Start API server
@@ -34,7 +34,7 @@ uvicorn triplegain.src.api.app:app --reload         # Start API server
 - **API Endpoints**: Agent invoke, risk state, model comparison routes
 - **Database Migration**: model_comparisons table for A/B tracking
 - **Config Files**: agents.yaml, risk.yaml with all parameters
-- **Test Coverage**: 368 tests (136 new Phase 2 tests)
+- **Test Coverage**: 689 tests, 90% coverage (comprehensive mocked tests)
 
 ### Phase 1 Deliverables (Completed)
 - **Indicator Library**: 17+ indicators (EMA, SMA, RSI, MACD, ATR, BB, ADX, OBV, VWAP, Supertrend, StochRSI, ROC, Keltner, Choppiness, Volume SMA)
@@ -92,10 +92,11 @@ triplegain/
 │   ├── api/            # FastAPI endpoints, agent routes
 │   └── utils/          # Config loader
 ├── tests/
-│   ├── unit/           # 368 unit tests
-│   │   ├── agents/     # Agent tests (88 tests)
-│   │   ├── risk/       # Risk engine tests (29 tests)
-│   │   └── llm/        # LLM client tests (19 tests)
+│   ├── unit/           # 689 unit tests (90% coverage)
+│   │   ├── agents/     # Agent tests (185 tests)
+│   │   ├── risk/       # Risk engine tests (90 tests)
+│   │   ├── llm/        # LLM client tests (105 tests)
+│   │   └── api/        # API endpoint tests (67 tests)
 │   └── integration/    # Database integration tests
 config/                 # agents.yaml, risk.yaml, system.yaml
 data/kraken_db/         # Data collectors (operational)

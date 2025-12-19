@@ -39,7 +39,7 @@ providers:
     default_model: "deepseek-chat"
 
   xai:
-    # API key from XAI_API_KEY env var
+    # API key from XAI_BEARER_API_KEY env var OPENAI Project ID from OPENAI_PROJECT_ID env var
     base_url: "https://api.x.ai/v1"
     timeout_seconds: 60
     default_model: "grok-2-1212"

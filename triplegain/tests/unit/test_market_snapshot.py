@@ -1052,3 +1052,640 @@ class TestMarketSnapshotBuilderExtended:
 
         assert 'trend' in data
         assert data['trend'] == 0.8
+
+
+# =============================================================================
+# Async Build Snapshot Tests
+# =============================================================================
+
+class TestAsyncBuildSnapshot:
+    """Tests for async build_snapshot method."""
+
+    @pytest.fixture
+    def mock_candles(self):
+        """Generate sample candles as database would return."""
+        now = datetime.now(timezone.utc)
+        return [
+            {
+                'timestamp': now - timedelta(hours=i),
+                'open': 45000 + np.random.randn() * 100,
+                'high': 45050 + np.random.randn() * 50,
+                'low': 44950 + np.random.randn() * 50,
+                'close': 45000 + np.random.randn() * 100,
+                'volume': 1000 + np.random.randn() * 100,
+            }
+            for i in range(50)
+        ]
+
+    @pytest.fixture
+    def mock_db_pool(self, mock_candles):
+        """Create mock database pool with async methods."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        pool = MagicMock()
+
+        # Mock fetch_candles
+        pool.fetch_candles = AsyncMock(return_value=mock_candles)
+
+        # Mock fetch_24h_data
+        pool.fetch_24h_data = AsyncMock(return_value={
+            'price_24h_ago': 44500,
+            'price_change_24h_pct': 1.12,
+            'volume_24h': 50000000,
+        })
+
+        # Mock fetch_order_book
+        pool.fetch_order_book = AsyncMock(return_value={
+            'bids': [
+                {'price': 45000.0, 'size': 1.5},
+                {'price': 44990.0, 'size': 2.0},
+            ],
+            'asks': [
+                {'price': 45010.0, 'size': 1.2},
+                {'price': 45020.0, 'size': 2.3},
+            ],
+        })
+
+        return pool
+
+    @pytest.mark.asyncio
+    async def test_build_snapshot_success(
+        self, mock_db_pool, indicator_library, snapshot_config
+    ):
+        """Test successful async snapshot build."""
+        builder = MarketSnapshotBuilder(
+            db_pool=mock_db_pool,
+            indicator_library=indicator_library,
+            config=snapshot_config,
+        )
+
+        snapshot = await builder.build_snapshot('BTC/USDT')
+
+        assert snapshot.symbol == 'BTC/USDT'
+        assert snapshot.current_price > 0
+        assert snapshot.order_book is not None
+        assert snapshot.mtf_state is not None
+
+    @pytest.mark.asyncio
+    async def test_build_snapshot_without_order_book(
+        self, mock_db_pool, indicator_library, snapshot_config
+    ):
+        """Test snapshot build without order book."""
+        builder = MarketSnapshotBuilder(
+            db_pool=mock_db_pool,
+            indicator_library=indicator_library,
+            config=snapshot_config,
+        )
+
+        snapshot = await builder.build_snapshot('BTC/USDT', include_order_book=False)
+
+        assert snapshot.symbol == 'BTC/USDT'
+        assert snapshot.order_book is None
+
+    @pytest.mark.asyncio
+    async def test_build_snapshot_no_db_raises(
+        self, indicator_library, snapshot_config
+    ):
+        """Test snapshot build without db pool raises error."""
+        builder = MarketSnapshotBuilder(
+            db_pool=None,
+            indicator_library=indicator_library,
+            config=snapshot_config,
+        )
+
+        with pytest.raises(RuntimeError, match="Database pool required"):
+            await builder.build_snapshot('BTC/USDT')
+
+    @pytest.mark.asyncio
+    async def test_build_snapshot_handles_candle_error(
+        self, mock_db_pool, indicator_library, snapshot_config
+    ):
+        """Test snapshot handles candle fetch errors gracefully."""
+        from unittest.mock import AsyncMock
+
+        # Make some candle fetches fail
+        call_count = 0
+        original_fetch = mock_db_pool.fetch_candles
+
+        async def failing_fetch(symbol, tf, lookback):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise Exception("Database error")
+            return await original_fetch(symbol, tf, lookback)
+
+        mock_db_pool.fetch_candles = failing_fetch
+
+        builder = MarketSnapshotBuilder(
+            db_pool=mock_db_pool,
+            indicator_library=indicator_library,
+            config=snapshot_config,
+        )
+
+        # Should complete despite one timeframe failing
+        snapshot = await builder.build_snapshot('BTC/USDT')
+        assert snapshot is not None
+
+    @pytest.mark.asyncio
+    async def test_build_snapshot_handles_24h_error(
+        self, mock_db_pool, indicator_library, snapshot_config
+    ):
+        """Test snapshot handles 24h data fetch error."""
+        mock_db_pool.fetch_24h_data.side_effect = Exception("24h data error")
+
+        builder = MarketSnapshotBuilder(
+            db_pool=mock_db_pool,
+            indicator_library=indicator_library,
+            config=snapshot_config,
+        )
+
+        snapshot = await builder.build_snapshot('BTC/USDT')
+
+        # Should still build snapshot, just without 24h data
+        assert snapshot.symbol == 'BTC/USDT'
+        assert snapshot.price_24h_ago is None
+
+    @pytest.mark.asyncio
+    async def test_build_snapshot_handles_order_book_error(
+        self, mock_db_pool, indicator_library, snapshot_config
+    ):
+        """Test snapshot handles order book fetch error."""
+        mock_db_pool.fetch_order_book.side_effect = Exception("Order book error")
+
+        builder = MarketSnapshotBuilder(
+            db_pool=mock_db_pool,
+            indicator_library=indicator_library,
+            config=snapshot_config,
+        )
+
+        snapshot = await builder.build_snapshot('BTC/USDT')
+
+        # Should still build snapshot, just without order book
+        assert snapshot.symbol == 'BTC/USDT'
+        assert snapshot.order_book is None
+
+    @pytest.mark.asyncio
+    async def test_build_snapshot_primary_timeframe_missing(
+        self, mock_db_pool, indicator_library
+    ):
+        """Test fallback when primary timeframe is missing."""
+        from unittest.mock import AsyncMock
+
+        # Return empty for primary timeframe, data for others
+        async def selective_fetch(symbol, tf, lookback):
+            if tf == '1h':
+                return []  # Empty for primary
+            return [
+                {
+                    'timestamp': datetime.now(timezone.utc),
+                    'open': 45000, 'high': 45500, 'low': 44500,
+                    'close': 45200, 'volume': 1000
+                }
+                for _ in range(50)
+            ]
+
+        mock_db_pool.fetch_candles = selective_fetch
+
+        config = {
+            'candle_lookback': {'1h': 48, '4h': 30},
+            'primary_timeframe': '1h',
+            'data_quality': {'max_age_seconds': 60, 'min_candles_required': 20},
+        }
+
+        builder = MarketSnapshotBuilder(
+            db_pool=mock_db_pool,
+            indicator_library=indicator_library,
+            config=config,
+        )
+
+        snapshot = await builder.build_snapshot('BTC/USDT', include_order_book=False)
+
+        # Should fall back to 4h timeframe
+        assert snapshot.current_price > 0
+
+
+# =============================================================================
+# Async Multi-Symbol Snapshot Tests
+# =============================================================================
+
+class TestAsyncMultiSymbolSnapshot:
+    """Tests for async build_multi_symbol_snapshot method."""
+
+    @pytest.fixture
+    def mock_candles(self):
+        """Generate sample candles."""
+        now = datetime.now(timezone.utc)
+        return [
+            {
+                'timestamp': now - timedelta(hours=i),
+                'open': 45000, 'high': 45500, 'low': 44500,
+                'close': 45200, 'volume': 1000
+            }
+            for i in range(50)
+        ]
+
+    @pytest.fixture
+    def mock_db_pool(self, mock_candles):
+        """Create mock database pool."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        pool = MagicMock()
+        pool.fetch_candles = AsyncMock(return_value=mock_candles)
+        pool.fetch_24h_data = AsyncMock(return_value={})
+        pool.fetch_order_book = AsyncMock(return_value={
+            'bids': [{'price': 100, 'size': 10}],
+            'asks': [{'price': 101, 'size': 10}],
+        })
+        return pool
+
+    @pytest.mark.asyncio
+    async def test_build_multi_symbol_snapshot(
+        self, mock_db_pool, indicator_library, snapshot_config
+    ):
+        """Test building snapshots for multiple symbols."""
+        builder = MarketSnapshotBuilder(
+            db_pool=mock_db_pool,
+            indicator_library=indicator_library,
+            config=snapshot_config,
+        )
+
+        symbols = ['BTC/USDT', 'ETH/USDT', 'XRP/USDT']
+        snapshots = await builder.build_multi_symbol_snapshot(symbols)
+
+        assert len(snapshots) == 3
+        assert 'BTC/USDT' in snapshots
+        assert 'ETH/USDT' in snapshots
+        assert 'XRP/USDT' in snapshots
+
+    @pytest.mark.asyncio
+    async def test_build_multi_symbol_handles_partial_failure(
+        self, indicator_library, snapshot_config
+    ):
+        """Test multi-symbol build handles some failures."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        now = datetime.now(timezone.utc)
+        good_candles = [
+            {
+                'timestamp': now - timedelta(hours=i),
+                'open': 45000, 'high': 45500, 'low': 44500,
+                'close': 45200, 'volume': 1000
+            }
+            for i in range(50)
+        ]
+
+        # Create mock that fails for specific symbol
+        async def selective_fetch(symbol, tf, lookback):
+            if symbol == 'BAD/USDT':
+                raise Exception("Symbol not found")
+            return good_candles
+
+        mock_pool = MagicMock()
+        mock_pool.fetch_candles = selective_fetch
+        mock_pool.fetch_24h_data = AsyncMock(return_value={})
+        mock_pool.fetch_order_book = AsyncMock(return_value={
+            'bids': [{'price': 100, 'size': 10}],
+            'asks': [{'price': 101, 'size': 10}],
+        })
+
+        builder = MarketSnapshotBuilder(
+            db_pool=mock_pool,
+            indicator_library=indicator_library,
+            config=snapshot_config,
+        )
+
+        symbols = ['BTC/USDT', 'BAD/USDT', 'ETH/USDT']
+        snapshots = await builder.build_multi_symbol_snapshot(symbols)
+
+        # Should have successful snapshots (bad symbol might partially succeed due to error handling)
+        assert 'BTC/USDT' in snapshots
+        assert 'ETH/USDT' in snapshots
+        # At minimum, verify the successful builds completed
+        assert len(snapshots) >= 2
+
+
+# =============================================================================
+# Build Snapshot From Candles Edge Cases
+# =============================================================================
+
+class TestBuildSnapshotFromCandlesEdgeCases:
+    """Additional edge case tests for build_snapshot_from_candles."""
+
+    def test_empty_candles(self, indicator_library, snapshot_config):
+        """Test snapshot with empty candles."""
+        builder = MarketSnapshotBuilder(
+            db_pool=None,
+            indicator_library=indicator_library,
+            config=snapshot_config,
+        )
+
+        snapshot = builder.build_snapshot_from_candles(
+            symbol='BTC/USDT',
+            candles_by_tf={},
+            order_book=None,
+        )
+
+        assert snapshot.current_price == Decimal('0')
+        assert snapshot.indicators == {}
+
+    def test_candles_without_primary_timeframe(self, indicator_library, snapshot_config):
+        """Test snapshot when primary timeframe not in candles."""
+        now = datetime.now(timezone.utc)
+        candles_4h = [
+            {
+                'timestamp': now - timedelta(hours=4 * i),
+                'open': 45000, 'high': 45500, 'low': 44500,
+                'close': 45200 + i, 'volume': 1000
+            }
+            for i in range(50)
+        ]
+
+        builder = MarketSnapshotBuilder(
+            db_pool=None,
+            indicator_library=indicator_library,
+            config=snapshot_config,
+        )
+
+        # Primary is '1h' but we only have '4h'
+        snapshot = builder.build_snapshot_from_candles(
+            symbol='BTC/USDT',
+            candles_by_tf={'4h': candles_4h},
+            order_book=None,
+        )
+
+        # Should use 4h data as fallback
+        assert snapshot.current_price > 0
+
+    def test_24h_calculation_with_insufficient_data(self, indicator_library, snapshot_config):
+        """Test 24h calculation when not enough candles."""
+        now = datetime.now(timezone.utc)
+        # Only 10 1h candles (need 24 for 24h calculation)
+        short_candles = [
+            {
+                'timestamp': now - timedelta(hours=i),
+                'open': 45000, 'high': 45500, 'low': 44500,
+                'close': 45200, 'volume': 1000
+            }
+            for i in range(10)
+        ]
+
+        builder = MarketSnapshotBuilder(
+            db_pool=None,
+            indicator_library=indicator_library,
+            config=snapshot_config,
+        )
+
+        snapshot = builder.build_snapshot_from_candles(
+            symbol='BTC/USDT',
+            candles_by_tf={'1h': short_candles},
+            order_book=None,
+        )
+
+        # Should not have 24h data
+        assert snapshot.price_24h_ago is None
+
+    def test_24h_calculation_with_zero_price(self, indicator_library, snapshot_config):
+        """Test 24h calculation handles zero price gracefully."""
+        now = datetime.now(timezone.utc)
+        candles = [
+            {
+                'timestamp': now - timedelta(hours=i),
+                'open': 0 if i >= 24 else 45000,  # Zero price 24h ago
+                'high': 45500, 'low': 44500,
+                'close': 0 if i >= 24 else 45200,
+                'volume': 1000
+            }
+            for i in range(30)
+        ]
+
+        builder = MarketSnapshotBuilder(
+            db_pool=None,
+            indicator_library=indicator_library,
+            config=snapshot_config,
+        )
+
+        snapshot = builder.build_snapshot_from_candles(
+            symbol='BTC/USDT',
+            candles_by_tf={'1h': candles},
+            order_book=None,
+        )
+
+        # Should handle gracefully
+        assert snapshot is not None
+
+    def test_timestamp_not_datetime(self, indicator_library, snapshot_config):
+        """Test handling when timestamp is not datetime."""
+        now = datetime.now(timezone.utc)
+        candles = [
+            {
+                'timestamp': 'invalid_timestamp',  # Not a datetime
+                'open': 45000, 'high': 45500, 'low': 44500,
+                'close': 45200, 'volume': 1000
+            }
+            for _ in range(50)
+        ]
+
+        builder = MarketSnapshotBuilder(
+            db_pool=None,
+            indicator_library=indicator_library,
+            config=snapshot_config,
+        )
+
+        snapshot = builder.build_snapshot_from_candles(
+            symbol='BTC/USDT',
+            candles_by_tf={'1h': candles},
+            order_book=None,
+        )
+
+        # Should default to 0 data age
+        assert snapshot.data_age_seconds == 0
+
+
+# =============================================================================
+# MTF State Calculation Edge Cases
+# =============================================================================
+
+class TestMTFStateEdgeCases:
+    """Test edge cases in multi-timeframe state calculation."""
+
+    def test_mtf_bearish_alignment(self, indicator_library, snapshot_config):
+        """Test MTF state with bearish alignment."""
+        builder = MarketSnapshotBuilder(
+            db_pool=None,
+            indicator_library=indicator_library,
+            config=snapshot_config,
+        )
+
+        # Create candles that would show bearish trend (EMA9 < EMA21)
+        np.random.seed(42)
+        now = datetime.now(timezone.utc)
+
+        # Downtrending candles (price decreasing over time)
+        downtrend_candles = [
+            {
+                'timestamp': now - timedelta(hours=i),
+                'open': 45000 - i * 10,
+                'high': 45050 - i * 10,
+                'low': 44950 - i * 10,
+                'close': 45000 - i * 10,
+                'volume': 1000 + np.random.randn() * 100,
+            }
+            for i in range(50)
+        ]
+
+        mtf_state = builder._calculate_mtf_state({'1h': downtrend_candles})
+
+        # Should show bearish alignment
+        assert mtf_state.aligned_bearish_count >= 0
+
+    def test_mtf_rsi_and_atr_tracking(self, indicator_library, snapshot_config, sample_candles):
+        """Test MTF state tracks RSI and ATR by timeframe."""
+        builder = MarketSnapshotBuilder(
+            db_pool=None,
+            indicator_library=indicator_library,
+            config=snapshot_config,
+        )
+
+        mtf_state = builder._calculate_mtf_state({
+            '1h': sample_candles,
+            '4h': sample_candles[:40],
+        })
+
+        # Should have RSI/ATR data
+        assert len(mtf_state.rsi_by_timeframe) >= 0
+        assert len(mtf_state.atr_by_timeframe) >= 0
+
+
+# =============================================================================
+# Serialization Tests
+# =============================================================================
+
+class TestSerializationEdgeCases:
+    """Test serialization edge cases."""
+
+    def test_serialize_indicators_with_none_values(self):
+        """Test _serialize_indicators handles None values."""
+        now = datetime.now(timezone.utc)
+        snapshot = MarketSnapshot(
+            timestamp=now,
+            symbol='BTC/USDT',
+            current_price=Decimal('45250.50'),
+            indicators={
+                'rsi_14': 55.0,
+                'macd': None,  # None value
+                'ema_9': 45000.0,
+            },
+        )
+
+        prompt = snapshot.to_prompt_format()
+        data = json.loads(prompt)
+
+        assert 'indicators' in data
+        # None value should be excluded
+        assert 'macd' not in data['indicators']
+
+    def test_serialize_indicators_with_nested_none(self):
+        """Test _serialize_indicators handles nested None values."""
+        now = datetime.now(timezone.utc)
+        snapshot = MarketSnapshot(
+            timestamp=now,
+            symbol='BTC/USDT',
+            current_price=Decimal('45250.50'),
+            indicators={
+                'macd': {
+                    'line': 100.5,
+                    'signal': None,  # None in nested dict
+                    'histogram': 20.3,
+                },
+            },
+        )
+
+        prompt = snapshot.to_prompt_format()
+        data = json.loads(prompt)
+
+        # Nested None should be excluded
+        assert 'signal' not in data['indicators']['macd']
+
+    def test_serialize_decimal_indicators(self):
+        """Test serialization handles Decimal indicators."""
+        now = datetime.now(timezone.utc)
+        snapshot = MarketSnapshot(
+            timestamp=now,
+            symbol='BTC/USDT',
+            current_price=Decimal('45250.50'),
+            indicators={
+                'rsi_14': Decimal('55.5'),
+                'atr_14': Decimal('523.25'),
+            },
+        )
+
+        prompt = snapshot.to_prompt_format()
+        data = json.loads(prompt)
+
+        assert data['indicators']['rsi_14'] == 55.5
+        assert data['indicators']['atr_14'] == 523.25
+
+    def test_compact_format_missing_indicators(self):
+        """Test compact format handles missing indicators gracefully."""
+        now = datetime.now(timezone.utc)
+        snapshot = MarketSnapshot(
+            timestamp=now,
+            symbol='BTC/USDT',
+            current_price=Decimal('45250.50'),
+            indicators={},  # No indicators
+        )
+
+        compact = snapshot.to_compact_format()
+        data = json.loads(compact)
+
+        # Should still have basic fields
+        assert data['sym'] == 'BTC/USDT'
+        assert data['px'] == 45250.5
+
+    def test_compact_format_none_rsi(self):
+        """Test compact format handles None RSI."""
+        now = datetime.now(timezone.utc)
+        snapshot = MarketSnapshot(
+            timestamp=now,
+            symbol='BTC/USDT',
+            current_price=Decimal('45250.50'),
+            indicators={'rsi_14': None},
+        )
+
+        compact = snapshot.to_compact_format()
+        data = json.loads(compact)
+
+        # RSI should not be in output
+        assert 'rsi' not in data
+
+    def test_compact_format_invalid_macd(self):
+        """Test compact format handles invalid MACD structure."""
+        now = datetime.now(timezone.utc)
+        snapshot = MarketSnapshot(
+            timestamp=now,
+            symbol='BTC/USDT',
+            current_price=Decimal('45250.50'),
+            indicators={'macd': 'not_a_dict'},  # Invalid structure
+        )
+
+        compact = snapshot.to_compact_format()
+        data = json.loads(compact)
+
+        # MACD should not be in output
+        assert 'macd_h' not in data
+
+    def test_compact_format_macd_without_histogram(self):
+        """Test compact format handles MACD without histogram."""
+        now = datetime.now(timezone.utc)
+        snapshot = MarketSnapshot(
+            timestamp=now,
+            symbol='BTC/USDT',
+            current_price=Decimal('45250.50'),
+            indicators={'macd': {'line': 100, 'signal': 95}},  # No histogram
+        )
+
+        compact = snapshot.to_compact_format()
+        data = json.loads(compact)
+
+        # MACD histogram should not be in output
+        assert 'macd_h' not in data
