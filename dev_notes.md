@@ -6,8 +6,8 @@ prepare a plan to do a deep thorough code and logic review of the implementation
 
 do a deep code and logic review of the implementation of phase 3 in docs/development/TripleGain-implementation-plan/ of the docs/development/TripleGain-master-design/ Provide a document of your findings and recommendations in this folder docs/development/reviews/phase-3/. ultrathink    
 
-address all issues and implement all fixes and recommendations in docs/development/reviews/full/review-2/FINAL-REPORT-CONSOLIDATED.md    
+address all issues and implement all fixes and recommendations in docs/development/reviews/full/review-4/findings/phase-2a-findings.md    
 
 do a deep code and logic review of the implementation of phase 3 in docs/development/TripleGain-implementation-plan/ of the docs/development/TripleGain-master-design/ and the implementation of the fixes from the reviews in docs/development/reviews/phase-3/ Provide a document of your findings and recommendations in this folder docs/development/reviews/phase-3/. ultrathink
 
-Implement the review outlined in docs/development/reviews/full/review-4/phase-2a-llm-integration.md Do not implement the fixes. ultrathink
+Implement the review outlined in docs/development/reviews/full/review-4/phase-6-summary.md Do not implement the fixes. ultrathink
