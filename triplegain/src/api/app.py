@@ -5,21 +5,28 @@ This module provides:
 - Health check endpoints
 - Indicator endpoints for testing
 - Snapshot endpoints for testing
-- Debug endpoints for prompt inspection
+- Debug endpoints for prompt inspection (protected in production)
 
 SECURITY: All endpoints (except health) require authentication.
 See security.py for rate limiting, CORS, and other protections.
+
+Security Fixes Applied (Phase 4 Review):
+- Finding 15: Global exception handler added
+- Finding 16: Debug endpoints require authentication in production
+- Finding 22: Exception handling order fixed (HTTPException before generic Exception)
 """
 
 import logging
-import re
+import traceback
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Optional
 
 try:
-    from fastapi import FastAPI, HTTPException, Query, Depends
+    from fastapi import FastAPI, HTTPException, Query, Depends, Request
     from fastapi.responses import JSONResponse
+    from fastapi.exceptions import RequestValidationError
+    from pydantic import ValidationError
     FASTAPI_AVAILABLE = True
 except ImportError:
     FASTAPI_AVAILABLE = False
@@ -30,7 +37,18 @@ from ..data.indicator_library import IndicatorLibrary
 from ..data.market_snapshot import MarketSnapshotBuilder
 from ..llm.prompt_builder import PromptBuilder
 from ..utils.config import get_config_loader, ConfigError
-from .security import setup_security, get_security_config
+from .security import (
+    setup_security,
+    get_security_config,
+    get_current_user,
+    require_role,
+    User,
+    UserRole,
+)
+from .validation import (
+    validate_symbol_or_raise,
+    validate_timeframe_or_raise,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -40,56 +58,8 @@ _indicator_library: Optional[IndicatorLibrary] = None
 _snapshot_builder: Optional[MarketSnapshotBuilder] = None
 _prompt_builder: Optional[PromptBuilder] = None
 
-# Symbol validation regex: BASE/QUOTE or BASE_QUOTE format (e.g., BTC/USDT, XRP_BTC)
-# Allows alphanumeric symbols with optional numbers (e.g., USDT, 1INCH)
-# Underscore variant is URL-safe and commonly used in API paths
-SYMBOL_PATTERN = re.compile(r'^[A-Z0-9]{2,10}[/_][A-Z0-9]{2,10}$')
-
-# Valid timeframes
-VALID_TIMEFRAMES = {'1m', '5m', '15m', '30m', '1h', '4h', '12h', '1d', '1w'}
-
-
-def validate_symbol(symbol: str) -> str:
-    """
-    Validate trading symbol format.
-
-    Args:
-        symbol: Trading pair (e.g., "BTC/USDT")
-
-    Returns:
-        Validated symbol (uppercase)
-
-    Raises:
-        HTTPException: If symbol format is invalid
-    """
-    symbol = symbol.upper()
-    if not SYMBOL_PATTERN.match(symbol):
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid symbol format: '{symbol}'. Expected format: BASE/QUOTE (e.g., BTC/USDT)"
-        )
-    return symbol
-
-
-def validate_timeframe(timeframe: str) -> str:
-    """
-    Validate timeframe format.
-
-    Args:
-        timeframe: Candle timeframe (e.g., "1h")
-
-    Returns:
-        Validated timeframe
-
-    Raises:
-        HTTPException: If timeframe is invalid
-    """
-    if timeframe not in VALID_TIMEFRAMES:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid timeframe: '{timeframe}'. Valid: {', '.join(sorted(VALID_TIMEFRAMES))}"
-        )
-    return timeframe
+# NOTE: Symbol and timeframe validation moved to validation.py (Finding 26)
+# Use validate_symbol_or_raise() and validate_timeframe_or_raise() from validation module
 
 
 @asynccontextmanager
@@ -153,13 +123,82 @@ def create_app() -> FastAPI:
     security_config = get_security_config()
     setup_security(app, security_config)
 
+    # Finding 15: Add global exception handlers
+    _register_exception_handlers(app)
+
     # Register routes
     register_health_routes(app)
     register_indicator_routes(app)
     register_snapshot_routes(app)
-    register_debug_routes(app)
+    register_debug_routes(app, debug_mode=security_config.debug_mode)
 
     return app
+
+
+def _register_exception_handlers(app: FastAPI) -> None:
+    """Register global exception handlers (Finding 15)."""
+
+    @app.exception_handler(RequestValidationError)
+    async def validation_exception_handler(request: Request, exc: RequestValidationError):
+        """Handle Pydantic validation errors with detailed messages."""
+        errors = []
+        for error in exc.errors():
+            location = " -> ".join(str(loc) for loc in error["loc"])
+            errors.append({
+                "field": location,
+                "message": error["msg"],
+                "type": error["type"],
+            })
+
+        return JSONResponse(
+            status_code=422,
+            content={
+                "detail": "Validation error",
+                "errors": errors,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+
+    @app.exception_handler(HTTPException)
+    async def http_exception_handler(request: Request, exc: HTTPException):
+        """Handle HTTP exceptions consistently."""
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={
+                "detail": exc.detail,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            },
+            headers=exc.headers,
+        )
+
+    @app.exception_handler(Exception)
+    async def general_exception_handler(request: Request, exc: Exception):
+        """
+        Handle all unhandled exceptions.
+
+        Logs the full traceback but returns a generic error to the client.
+        This prevents leaking internal details to potential attackers.
+        """
+        # Log the full exception for debugging
+        logger.error(
+            f"Unhandled exception on {request.method} {request.url.path}: {exc}",
+            exc_info=True,
+        )
+
+        # Don't expose internal details in production
+        security_config = get_security_config()
+        if security_config.debug_mode:
+            detail = f"{type(exc).__name__}: {str(exc)}"
+        else:
+            detail = "An internal server error occurred"
+
+        return JSONResponse(
+            status_code=500,
+            content={
+                "detail": detail,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            },
+        )
 
 
 def register_health_routes(app: FastAPI):
@@ -244,9 +283,9 @@ def register_indicator_routes(app: FastAPI):
         Returns:
             Calculated indicators
         """
-        # Validate inputs
-        symbol = validate_symbol(symbol)
-        timeframe = validate_timeframe(timeframe)
+        # Validate inputs - uses centralized validation which normalizes symbol format
+        symbol = validate_symbol_or_raise(symbol, strict=False)
+        timeframe = validate_timeframe_or_raise(timeframe)
 
         if not _db_pool or not _indicator_library:
             raise HTTPException(status_code=503, detail="Service not initialized")
@@ -269,6 +308,9 @@ def register_indicator_routes(app: FastAPI):
                 "timestamp": datetime.now(timezone.utc).isoformat()
             }
 
+        except HTTPException:
+            # Finding 22: Re-raise HTTPException to prevent it being caught below
+            raise
         except Exception as e:
             logger.error(f"Failed to calculate indicators: {e}", exc_info=True)
             raise HTTPException(status_code=500, detail="Internal server error calculating indicators")
@@ -292,8 +334,8 @@ def register_snapshot_routes(app: FastAPI):
         Returns:
             Market snapshot in prompt format
         """
-        # Validate inputs
-        symbol = validate_symbol(symbol)
+        # Validate inputs - uses centralized validation which normalizes symbol format
+        symbol = validate_symbol_or_raise(symbol, strict=False)
 
         if not _snapshot_builder:
             raise HTTPException(status_code=503, detail="Service not initialized")
@@ -316,31 +358,27 @@ def register_snapshot_routes(app: FastAPI):
                 "order_book": snapshot.order_book.to_dict() if snapshot.order_book else None,
             }
 
+        except HTTPException:
+            # Finding 22: Re-raise HTTPException to prevent it being caught below
+            raise
         except Exception as e:
             logger.error(f"Failed to build snapshot: {e}", exc_info=True)
             raise HTTPException(status_code=500, detail="Internal server error building snapshot")
 
 
-def register_debug_routes(app: FastAPI):
-    """Register debug endpoints for testing."""
+def register_debug_routes(app: FastAPI, debug_mode: bool = False):
+    """
+    Register debug endpoints for testing.
 
-    @app.get("/api/v1/debug/prompt/{agent}")
-    async def get_debug_prompt(
-        agent: str,
-        symbol: str = Query(default="BTC/USDT")
-    ):
-        """
-        Generate and return a debug prompt for an agent.
+    Finding 16: Debug endpoints require authentication unless in debug mode.
+    In production (debug_mode=False), these endpoints require authentication.
+    """
 
-        Args:
-            agent: Agent name (e.g., "technical_analysis")
-            symbol: Trading pair for snapshot
-
-        Returns:
-            Assembled prompt components
-        """
-        # Validate inputs
-        symbol = validate_symbol(symbol)
+    # Core implementation shared by both protected and unprotected routes
+    async def _get_debug_prompt_impl(agent: str, symbol: str):
+        """Core implementation for debug prompt generation."""
+        # Validate inputs - uses centralized validation which normalizes symbol format
+        symbol = validate_symbol_or_raise(symbol, strict=False)
 
         if not _prompt_builder or not _snapshot_builder:
             raise HTTPException(status_code=503, detail="Service not initialized")
@@ -364,15 +402,17 @@ def register_debug_routes(app: FastAPI):
             }
 
         except ValueError as e:
-            # ValueError is expected for invalid agent names - safe to expose
+            # Finding 22: Handle ValueError before generic Exception
             raise HTTPException(status_code=400, detail=str(e))
+        except HTTPException:
+            # Finding 22: Re-raise HTTPException to prevent it being caught below
+            raise
         except Exception as e:
             logger.error(f"Failed to generate debug prompt: {e}", exc_info=True)
             raise HTTPException(status_code=500, detail="Internal server error generating prompt")
 
-    @app.get("/api/v1/debug/config")
-    async def get_config():
-        """Return current configuration (sanitized)."""
+    async def _get_config_impl(show_debug_mode: bool):
+        """Core implementation for config retrieval."""
         try:
             config_loader = get_config_loader()
             return {
@@ -382,11 +422,74 @@ def register_debug_routes(app: FastAPI):
                 },
                 "database": {
                     "connected": _db_pool.is_connected if _db_pool else False,
-                }
+                },
+                "debug_mode": show_debug_mode,
             }
         except Exception as e:
             logger.error(f"Failed to get config: {e}", exc_info=True)
             raise HTTPException(status_code=500, detail="Internal server error retrieving config")
+
+    if debug_mode:
+        # Debug mode: no authentication required
+        @app.get("/api/v1/debug/prompt/{agent}")
+        async def get_debug_prompt(
+            agent: str,
+            symbol: str = Query(default="BTC/USDT"),
+        ):
+            """
+            Generate and return a debug prompt for an agent.
+
+            DEBUG MODE: No authentication required.
+
+            Args:
+                agent: Agent name (e.g., "technical_analysis")
+                symbol: Trading pair for snapshot
+
+            Returns:
+                Assembled prompt components
+            """
+            return await _get_debug_prompt_impl(agent, symbol)
+
+        @app.get("/api/v1/debug/config")
+        async def get_config():
+            """
+            Return current configuration (sanitized).
+
+            DEBUG MODE: No authentication required.
+            """
+            return await _get_config_impl(True)
+    else:
+        # Production mode: authentication required
+        @app.get("/api/v1/debug/prompt/{agent}")
+        async def get_debug_prompt_protected(
+            agent: str,
+            symbol: str = Query(default="BTC/USDT"),
+            user: User = Depends(get_current_user),
+        ):
+            """
+            Generate and return a debug prompt for an agent.
+
+            PRODUCTION MODE: Requires authentication.
+
+            Args:
+                agent: Agent name (e.g., "technical_analysis")
+                symbol: Trading pair for snapshot
+
+            Returns:
+                Assembled prompt components
+            """
+            return await _get_debug_prompt_impl(agent, symbol)
+
+        @app.get("/api/v1/debug/config")
+        async def get_config_protected(
+            user: User = Depends(get_current_user),
+        ):
+            """
+            Return current configuration (sanitized).
+
+            PRODUCTION MODE: Requires authentication.
+            """
+            return await _get_config_impl(False)
 
 
 # Singleton app instance

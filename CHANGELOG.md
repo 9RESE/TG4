@@ -5,6 +5,40 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.6] - 2025-12-19
+
+### Added
+- **Authentication Enforcement**: All API endpoints now require authentication via `Depends(get_current_user)` (F01)
+- **Role-Based Access Control**: Applied `require_role()` decorator - ADMIN for coordinator/risk, TRADER for trading operations (F02, F03)
+- **Security Headers Middleware**: Added X-Content-Type-Options, X-Frame-Options, CSP, HSTS headers (F04)
+- **UUID Validation**: All position_id and order_id parameters validated via `_validate_uuid()` (F05)
+- **Confirmation Token Mechanism**: Destructive operations require one-time token from `/confirm` endpoint (F09)
+  - `GET /positions/{id}/confirm` -> token valid for 5 minutes
+  - `POST /positions/{id}/close` requires confirmation_token
+  - Same pattern for order cancellation and portfolio rebalancing
+- **Audit Logging**: `log_security_event()` with `SecurityEventType` enum for security event tracking (F12)
+- **Task Name Validation**: `VALID_COORDINATOR_TASKS` whitelist for coordinator task endpoints (F20)
+- **Symbol Config Loading**: `get_supported_symbols()` loads from config with caching (F23)
+- **Pagination**: Added `offset` and `limit` parameters to `/positions` and `/orders` endpoints (F27)
+
+### Fixed
+- **Rate Limiting Hash**: Replaced MD5 with SHA256 for IP hashing in rate limiter (F13)
+- **Exception Handling Order**: HTTPException now caught before generic Exception to prevent masking (F22)
+- **Symbol Normalization**: All responses use consistent `BTC/USDT` format instead of `BTC_USDT` (F21)
+- **Debug Endpoint Security**: Debug endpoints require authentication in production mode (F16)
+
+### Changed
+- `/risk/reset` now requires ADMIN role and is rate-limited to 1 request per minute (F10, F11)
+- All validation functions centralized in `validation.py` module (F26)
+- JWT secret required in production mode, warns in debug mode (F25)
+- Request/response logging middleware added for debugging (F24)
+
+### Security
+- **OWASP A01**: Broken Access Control - Fixed by enforcing authentication/authorization on all endpoints
+- **OWASP A03**: Injection - Fixed by UUID and symbol validation
+- **OWASP A07**: Security Misconfiguration - Fixed by security headers and production mode requirements
+- 26 of 27 Phase 4 security findings addressed (Finding 18 deferred as optional enhancement)
+
 ## [0.3.5] - 2025-12-19
 
 ### Added

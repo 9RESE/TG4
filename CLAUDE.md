@@ -99,7 +99,7 @@ migrations/             # Database migrations (001, 002, 003)
 - [Changelog](CHANGELOG.md)
 
 ## Version
-**v0.3.5** (2025-12-19) - Phase 3C Execution Layer Robustness (17 issues resolved)
+**v0.3.6** (2025-12-19) - Phase 4 API Security (26 issues resolved)
 
 ---
 *Uses global config from ~/.claude/CLAUDE.md*

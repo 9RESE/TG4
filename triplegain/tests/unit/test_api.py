@@ -219,7 +219,8 @@ class TestIndicatorEndpoints:
         # May return 200 or 503 depending on initialization
         if response.status_code == 200:
             data = response.json()
-            assert data["symbol"] == "BTC_USDT"
+            # Symbol is normalized to slash format
+            assert data["symbol"] == "BTC/USDT"
             assert data["timeframe"] == "1h"
             assert "indicators" in data or "candle_count" in data
 
@@ -256,7 +257,8 @@ class TestSnapshotEndpoints:
         # May return 200 or 503 depending on initialization
         if response.status_code == 200:
             data = response.json()
-            assert data["symbol"] == "BTC_USDT"
+            # Symbol is normalized to slash format
+            assert data["symbol"] == "BTC/USDT"
             assert "snapshot" in data
 
     def test_get_snapshot_without_order_book(self, test_client):

@@ -29,6 +29,27 @@ pytestmark = pytest.mark.skipif(not FASTAPI_AVAILABLE, reason="FastAPI not insta
 
 
 # =============================================================================
+# Authentication Helpers
+# =============================================================================
+
+def add_auth_override(app):
+    """Add authentication override to app for testing."""
+    from datetime import datetime, timezone
+    from triplegain.src.api.security import get_current_user, User, UserRole
+
+    async def override_get_current_user():
+        return User(
+            user_id="test-user-123",
+            role=UserRole.ADMIN,  # Use ADMIN to pass all role checks
+            api_key_hash="test-hash",
+            created_at=datetime.now(timezone.utc),
+        )
+
+    app.dependency_overrides[get_current_user] = override_get_current_user
+    return app
+
+
+# =============================================================================
 # Mock Fixtures
 # =============================================================================
 
@@ -100,14 +121,21 @@ def mock_portfolio_agent():
     return mock
 
 
+# Valid test UUIDs (reused across tests)
+TEST_POSITION_UUID = "550e8400-e29b-41d4-a716-446655440001"
+TEST_ORDER_UUID = "550e8400-e29b-41d4-a716-446655440002"
+# UUID that doesn't exist in mock data (for "not found" tests)
+NONEXISTENT_UUID = "550e8400-e29b-41d4-a716-446655449999"
+
+
 @pytest.fixture
 def mock_position_tracker():
     """Create mock position tracker."""
     mock = MagicMock()
 
-    # Mock position
+    # Mock position with valid UUID
     position = MagicMock()
-    position.id = "pos-123"
+    position.id = TEST_POSITION_UUID
     position.symbol = "BTC/USDT"
     position.side = "long"
     position.entry_price = Decimal("45000")
@@ -116,7 +144,7 @@ def mock_position_tracker():
     position.unrealized_pnl = Decimal("100")
     position.status = "open"
     position.to_dict.return_value = {
-        "id": "pos-123",
+        "id": TEST_POSITION_UUID,
         "symbol": "BTC/USDT",
         "side": "long",
         "entry_price": "45000",
@@ -142,9 +170,9 @@ def mock_order_manager():
     """Create mock order manager."""
     mock = MagicMock()
 
-    # Mock order
+    # Mock order with valid UUID
     order = MagicMock()
-    order.id = "order-123"
+    order.id = TEST_ORDER_UUID
     order.symbol = "BTC/USDT"
     order.side = "buy"
     order.order_type = "limit"
@@ -152,7 +180,7 @@ def mock_order_manager():
     order.price = Decimal("45000")
     order.status = "open"
     order.to_dict.return_value = {
-        "id": "order-123",
+        "id": TEST_ORDER_UUID,
         "symbol": "BTC/USDT",
         "side": "buy",
         "order_type": "limit",
@@ -191,6 +219,10 @@ def app(mock_coordinator, mock_portfolio_agent, mock_position_tracker, mock_orde
         message_bus=mock_message_bus,
     )
     app.include_router(router)
+
+    # Add authentication override for testing
+    add_auth_override(app)
+
     return app
 
 
@@ -241,22 +273,25 @@ class TestCoordinatorEndpoints:
         mock_coordinator.force_run_task.assert_called_once()
 
     def test_force_run_task_not_found(self, client, mock_coordinator):
-        """Test force running non-existent task."""
-        mock_coordinator.force_run_task.return_value = False
-        response = client.post("/api/v1/coordinator/task/nonexistent/run")
+        """Test force running task that fails."""
+        mock_coordinator.force_run_task = AsyncMock(return_value=False)
+        # Use valid task name - coordinator returns False indicating task not scheduled
+        response = client.post("/api/v1/coordinator/task/regime_detection/run")
         assert response.status_code == 404
 
     def test_enable_task(self, client, mock_coordinator):
         """Test enabling a task."""
-        response = client.post("/api/v1/coordinator/task/sentiment_analysis/enable")
+        # Use valid task name from VALID_COORDINATOR_TASKS
+        response = client.post("/api/v1/coordinator/task/regime_detection/enable")
         assert response.status_code == 200
         data = response.json()
         assert data["status"] == "enabled"
 
     def test_enable_task_not_found(self, client, mock_coordinator):
-        """Test enabling non-existent task."""
+        """Test enabling task that doesn't exist in scheduler."""
         mock_coordinator.enable_task.return_value = False
-        response = client.post("/api/v1/coordinator/task/nonexistent/enable")
+        # Use valid task name - coordinator returns False indicating task not found
+        response = client.post("/api/v1/coordinator/task/portfolio_rebalance/enable")
         assert response.status_code == 404
 
     def test_disable_task(self, client, mock_coordinator):
@@ -267,9 +302,10 @@ class TestCoordinatorEndpoints:
         assert data["status"] == "disabled"
 
     def test_disable_task_not_found(self, client, mock_coordinator):
-        """Test disabling non-existent task."""
+        """Test disabling task that doesn't exist in scheduler."""
         mock_coordinator.disable_task.return_value = False
-        response = client.post("/api/v1/coordinator/task/nonexistent/disable")
+        # Use valid task name - coordinator returns False indicating task not found
+        response = client.post("/api/v1/coordinator/task/risk_check/disable")
         assert response.status_code == 404
 
 
@@ -293,9 +329,15 @@ class TestPortfolioEndpoints:
 
     def test_force_rebalance(self, client, mock_portfolio_agent):
         """Test forcing portfolio rebalance."""
+        # First get a confirmation token
+        confirm_response = client.get("/api/v1/portfolio/rebalance/confirm")
+        assert confirm_response.status_code == 200
+        token = confirm_response.json()["confirmation_token"]
+
+        # Now rebalance with the token
         response = client.post(
             "/api/v1/portfolio/rebalance",
-            json={"execution_strategy": "immediate"}
+            json={"execution_strategy": "immediate", "confirmation_token": token}
         )
         assert response.status_code == 200
         data = response.json()
@@ -305,7 +347,15 @@ class TestPortfolioEndpoints:
 
     def test_force_rebalance_default_strategy(self, client, mock_portfolio_agent):
         """Test forcing rebalance with default strategy."""
-        response = client.post("/api/v1/portfolio/rebalance")
+        # First get a confirmation token
+        confirm_response = client.get("/api/v1/portfolio/rebalance/confirm")
+        assert confirm_response.status_code == 200
+        token = confirm_response.json()["confirmation_token"]
+
+        response = client.post(
+            "/api/v1/portfolio/rebalance",
+            json={"confirmation_token": token}
+        )
         assert response.status_code == 200
         data = response.json()
         assert data["status"] == "no_action"
@@ -325,7 +375,7 @@ class TestPositionEndpoints:
         data = response.json()
         assert data["count"] == 1
         assert len(data["positions"]) == 1
-        assert data["positions"][0]["id"] == "pos-123"
+        assert data["positions"][0]["id"] == "550e8400-e29b-41d4-a716-446655440001"
 
     def test_get_positions_closed(self, client, mock_position_tracker):
         """Test getting closed positions."""
@@ -349,22 +399,28 @@ class TestPositionEndpoints:
 
     def test_get_position(self, client, mock_position_tracker):
         """Test getting specific position."""
-        response = client.get("/api/v1/positions/pos-123")
+        response = client.get("/api/v1/positions/550e8400-e29b-41d4-a716-446655440001")
         assert response.status_code == 200
         data = response.json()
-        assert data["id"] == "pos-123"
+        assert data["id"] == "550e8400-e29b-41d4-a716-446655440001"
 
     def test_get_position_not_found(self, client, mock_position_tracker):
         """Test getting non-existent position."""
         mock_position_tracker.get_position.return_value = None
-        response = client.get("/api/v1/positions/nonexistent")
+        response = client.get(f"/api/v1/positions/{NONEXISTENT_UUID}")
         assert response.status_code == 404
 
     def test_close_position(self, client, mock_position_tracker):
         """Test closing a position."""
+        # First get a confirmation token
+        confirm_response = client.get(f"/api/v1/positions/{TEST_POSITION_UUID}/confirm")
+        assert confirm_response.status_code == 200
+        token = confirm_response.json()["confirmation_token"]
+
+        # Now close with the token
         response = client.post(
-            "/api/v1/positions/pos-123/close",
-            json={"exit_price": 46000.0, "reason": "take_profit"}
+            f"/api/v1/positions/{TEST_POSITION_UUID}/close",
+            json={"exit_price": 46000.0, "reason": "take_profit", "confirmation_token": token}
         )
         assert response.status_code == 200
         data = response.json()
@@ -372,18 +428,16 @@ class TestPositionEndpoints:
         mock_position_tracker.close_position.assert_called_once()
 
     def test_close_position_not_found(self, client, mock_position_tracker):
-        """Test closing non-existent position."""
-        mock_position_tracker.close_position.return_value = None
-        response = client.post(
-            "/api/v1/positions/nonexistent/close",
-            json={"exit_price": 46000.0}
-        )
+        """Test closing non-existent position - fails at confirmation step."""
+        # First try to get a confirmation token - this should fail for nonexistent position
+        mock_position_tracker.get_position.return_value = None
+        response = client.get(f"/api/v1/positions/{NONEXISTENT_UUID}/confirm")
         assert response.status_code == 404
 
     def test_modify_position(self, client, mock_position_tracker):
         """Test modifying position stop-loss/take-profit."""
         response = client.patch(
-            "/api/v1/positions/pos-123",
+            "/api/v1/positions/550e8400-e29b-41d4-a716-446655440001",
             json={"stop_loss": 44000.0, "take_profit": 48000.0}
         )
         assert response.status_code == 200
@@ -393,7 +447,7 @@ class TestPositionEndpoints:
         """Test modifying non-existent position."""
         mock_position_tracker.modify_position.return_value = None
         response = client.patch(
-            "/api/v1/positions/nonexistent",
+            f"/api/v1/positions/{NONEXISTENT_UUID}",
             json={"stop_loss": 44000.0}
         )
         assert response.status_code == 404
@@ -430,28 +484,46 @@ class TestOrderEndpoints:
 
     def test_get_order(self, client, mock_order_manager):
         """Test getting specific order."""
-        response = client.get("/api/v1/orders/order-123")
+        response = client.get("/api/v1/orders/550e8400-e29b-41d4-a716-446655440002")
         assert response.status_code == 200
         data = response.json()
-        assert data["id"] == "order-123"
+        assert data["id"] == "550e8400-e29b-41d4-a716-446655440002"
 
     def test_get_order_not_found(self, client, mock_order_manager):
         """Test getting non-existent order."""
         mock_order_manager.get_order.return_value = None
-        response = client.get("/api/v1/orders/nonexistent")
+        response = client.get(f"/api/v1/orders/{NONEXISTENT_UUID}")
         assert response.status_code == 404
 
     def test_cancel_order(self, client, mock_order_manager):
         """Test cancelling an order."""
-        response = client.post("/api/v1/orders/order-123/cancel")
+        # First get a confirmation token
+        confirm_response = client.get(f"/api/v1/orders/{TEST_ORDER_UUID}/confirm")
+        assert confirm_response.status_code == 200
+        token = confirm_response.json()["confirmation_token"]
+
+        # Now cancel with the token
+        response = client.post(
+            f"/api/v1/orders/{TEST_ORDER_UUID}/cancel",
+            json={"confirmation_token": token, "reason": "test_cancel"}
+        )
         assert response.status_code == 200
         data = response.json()
         assert data["status"] == "cancelled"
 
     def test_cancel_order_failed(self, client, mock_order_manager):
         """Test cancelling order that fails."""
+        # First get a confirmation token
+        confirm_response = client.get(f"/api/v1/orders/{TEST_ORDER_UUID}/confirm")
+        assert confirm_response.status_code == 200
+        token = confirm_response.json()["confirmation_token"]
+
+        # Make the cancel operation fail
         mock_order_manager.cancel_order.return_value = False
-        response = client.post("/api/v1/orders/order-123/cancel")
+        response = client.post(
+            f"/api/v1/orders/{TEST_ORDER_UUID}/cancel",
+            json={"confirmation_token": token, "reason": "test_cancel"}
+        )
         assert response.status_code == 400
 
     def test_sync_orders(self, client, mock_order_manager):
@@ -495,6 +567,7 @@ class TestErrorHandling:
         app = FastAPI()
         router = create_orchestration_router(coordinator=None)
         app.include_router(router)
+        add_auth_override(app)
         client = TestClient(app)
 
         response = client.get("/api/v1/coordinator/status")
@@ -507,6 +580,7 @@ class TestErrorHandling:
         app = FastAPI()
         router = create_orchestration_router(portfolio_agent=None)
         app.include_router(router)
+        add_auth_override(app)
         client = TestClient(app)
 
         response = client.get("/api/v1/portfolio/allocation")
@@ -519,6 +593,7 @@ class TestErrorHandling:
         app = FastAPI()
         router = create_orchestration_router(position_tracker=None)
         app.include_router(router)
+        add_auth_override(app)
         client = TestClient(app)
 
         response = client.get("/api/v1/positions")
@@ -531,6 +606,7 @@ class TestErrorHandling:
         app = FastAPI()
         router = create_orchestration_router(order_manager=None)
         app.include_router(router)
+        add_auth_override(app)
         client = TestClient(app)
 
         response = client.get("/api/v1/orders")
@@ -575,6 +651,7 @@ class TestEdgeCases:
         app = FastAPI()
         router = create_orchestration_router()
         app.include_router(router)
+        add_auth_override(app)
         client = TestClient(app)
 
         response = client.get("/api/v1/stats/execution")
@@ -591,7 +668,7 @@ class TestEdgeCases:
     def test_modify_position_partial(self, client, mock_position_tracker):
         """Test modifying only stop-loss."""
         response = client.patch(
-            "/api/v1/positions/pos-123",
+            "/api/v1/positions/550e8400-e29b-41d4-a716-446655440001",
             json={"stop_loss": 44000.0}
         )
         assert response.status_code == 200
@@ -611,7 +688,15 @@ class TestEdgeCases:
 
         mock_portfolio_agent.process.return_value = output
 
-        response = client.post("/api/v1/portfolio/rebalance")
+        # First get a confirmation token
+        confirm_response = client.get("/api/v1/portfolio/rebalance/confirm")
+        assert confirm_response.status_code == 200
+        token = confirm_response.json()["confirmation_token"]
+
+        response = client.post(
+            "/api/v1/portfolio/rebalance",
+            json={"confirmation_token": token}
+        )
         assert response.status_code == 200
         data = response.json()
         assert data["status"] == "rebalance"

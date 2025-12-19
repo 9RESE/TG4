@@ -16,6 +16,7 @@ This directory contains Architecture Decision Records (ADRs) documenting signifi
 | [ADR-008](./ADR-008-llm-client-robustness-fixes.md) | LLM Client Robustness & Performance Fixes | Accepted | 2025-12-19 |
 | [ADR-009](./ADR-009-agent-robustness-fixes.md) | Agent Layer Robustness & Safety Fixes | Accepted | 2025-12-19 |
 | [ADR-010](./ADR-010-execution-layer-robustness.md) | Execution Layer Robustness Fixes | Accepted | 2025-12-19 |
+| [ADR-011](./ADR-011-api-security-fixes.md) | API Security Fixes | Accepted | 2025-12-19 |
 
 ## ADR Template
 

@@ -7,6 +7,12 @@ Phase 2 Endpoints:
 - POST /api/v1/agents/trading/{symbol}/run - Trigger trading decision
 - POST /api/v1/risk/validate - Validate trade proposal
 - GET /api/v1/risk/state - Current risk state
+- GET /api/v1/agents/outputs/{agent_name} - Latest agent output (Finding 17)
+
+Security Fixes Applied (Phase 4 Review):
+- Findings 1-3: All endpoints require authentication
+- Finding 10: risk/reset requires ADMIN role
+- Finding 14: Cross-field validation for trade proposals
 """
 
 import logging
@@ -15,8 +21,8 @@ from decimal import Decimal
 from typing import Optional, Any
 
 try:
-    from fastapi import APIRouter, HTTPException, Query, Body
-    from pydantic import BaseModel, Field
+    from fastapi import APIRouter, HTTPException, Query, Body, Depends, Request
+    from pydantic import BaseModel, Field, model_validator
     FASTAPI_AVAILABLE = True
 except ImportError:
     FASTAPI_AVAILABLE = False
@@ -24,6 +30,14 @@ except ImportError:
     BaseModel = object
 
 from .validation import validate_symbol_or_raise
+from .security import (
+    get_current_user,
+    require_role,
+    User,
+    UserRole,
+    log_security_event,
+    SecurityEventType,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -34,16 +48,45 @@ logger = logging.getLogger(__name__)
 
 if FASTAPI_AVAILABLE:
     class TradeProposalRequest(BaseModel):
-        """Request body for trade validation."""
+        """Request body for trade validation with cross-field validation (Finding 14)."""
         symbol: str = Field(..., description="Trading symbol")
-        side: str = Field(..., description="Trade side: buy or sell")
+        side: str = Field(..., pattern="^(buy|sell)$", description="Trade side: buy or sell")
         size_usd: float = Field(..., gt=0, description="Trade size in USD")
         entry_price: float = Field(..., gt=0, description="Entry price")
-        stop_loss: Optional[float] = Field(None, description="Stop-loss price")
-        take_profit: Optional[float] = Field(None, description="Take-profit price")
+        stop_loss: Optional[float] = Field(None, gt=0, description="Stop-loss price")
+        take_profit: Optional[float] = Field(None, gt=0, description="Take-profit price")
         leverage: int = Field(1, ge=1, le=5, description="Leverage (1-5)")
         confidence: float = Field(0.5, ge=0, le=1, description="Signal confidence")
         regime: str = Field("ranging", description="Current market regime")
+
+        @model_validator(mode='after')
+        def validate_sl_tp_levels(self) -> 'TradeProposalRequest':
+            """Validate stop-loss and take-profit are on correct side of entry."""
+            if self.side == "buy":
+                # Long position: SL below entry, TP above entry
+                if self.stop_loss and self.stop_loss >= self.entry_price:
+                    raise ValueError(
+                        f"Stop-loss ({self.stop_loss}) must be below entry price "
+                        f"({self.entry_price}) for long/buy positions"
+                    )
+                if self.take_profit and self.take_profit <= self.entry_price:
+                    raise ValueError(
+                        f"Take-profit ({self.take_profit}) must be above entry price "
+                        f"({self.entry_price}) for long/buy positions"
+                    )
+            elif self.side == "sell":
+                # Short position: SL above entry, TP below entry
+                if self.stop_loss and self.stop_loss <= self.entry_price:
+                    raise ValueError(
+                        f"Stop-loss ({self.stop_loss}) must be above entry price "
+                        f"({self.entry_price}) for short/sell positions"
+                    )
+                if self.take_profit and self.take_profit >= self.entry_price:
+                    raise ValueError(
+                        f"Take-profit ({self.take_profit}) must be below entry price "
+                        f"({self.entry_price}) for short/sell positions"
+                    )
+            return self
 
     class TradingDecisionRequest(BaseModel):
         """Request body for trading decision."""
@@ -94,10 +137,13 @@ def create_agent_router(
     @router.get("/agents/ta/{symbol}")
     async def get_ta_analysis(
         symbol: str,
-        max_age_seconds: int = Query(default=60, ge=0, le=300)
+        max_age_seconds: int = Query(default=60, ge=0, le=300),
+        user: User = Depends(get_current_user),
     ):
         """
         Get latest Technical Analysis for a symbol.
+
+        Requires authentication.
 
         Args:
             symbol: Trading symbol (e.g., "BTC/USDT")
@@ -143,10 +189,13 @@ def create_agent_router(
     @router.post("/agents/ta/{symbol}/run")
     async def run_ta_analysis(
         symbol: str,
-        force_refresh: bool = Query(default=True)
+        force_refresh: bool = Query(default=True),
+        user: User = Depends(require_role(UserRole.TRADER)),
     ):
         """
         Trigger a fresh Technical Analysis for a symbol.
+
+        Requires TRADER role or higher.
 
         Args:
             symbol: Trading symbol (e.g., "BTC/USDT")
@@ -186,10 +235,13 @@ def create_agent_router(
     @router.get("/agents/regime/{symbol}")
     async def get_regime(
         symbol: str,
-        max_age_seconds: int = Query(default=300, ge=0, le=600)
+        max_age_seconds: int = Query(default=300, ge=0, le=600),
+        user: User = Depends(get_current_user),
     ):
         """
         Get current market regime for a symbol.
+
+        Requires authentication.
 
         Args:
             symbol: Trading symbol (e.g., "BTC/USDT")
@@ -242,10 +294,13 @@ def create_agent_router(
     @router.post("/agents/regime/{symbol}/run")
     async def run_regime_detection(
         symbol: str,
-        force_refresh: bool = Query(default=True)
+        force_refresh: bool = Query(default=True),
+        user: User = Depends(require_role(UserRole.TRADER)),
     ):
         """
         Trigger a fresh Regime Detection for a symbol.
+
+        Requires TRADER role or higher.
 
         Args:
             symbol: Trading symbol (e.g., "BTC/USDT")
@@ -294,12 +349,14 @@ def create_agent_router(
     @router.post("/agents/trading/{symbol}/run")
     async def run_trading_decision(
         symbol: str,
-        request: TradingDecisionRequest = Body(default_factory=TradingDecisionRequest)
+        request: TradingDecisionRequest = Body(default_factory=TradingDecisionRequest),
+        user: User = Depends(require_role(UserRole.TRADER)),
     ):
         """
         Trigger a trading decision for a symbol.
 
         Runs all 6 models in parallel and calculates consensus.
+        Requires TRADER role or higher.
 
         Args:
             symbol: Trading symbol (e.g., "BTC/USDT")
@@ -394,10 +451,13 @@ def create_agent_router(
 
     @router.post("/risk/validate")
     async def validate_trade(
-        proposal: TradeProposalRequest
+        proposal: TradeProposalRequest,
+        user: User = Depends(require_role(UserRole.TRADER)),
     ):
         """
         Validate a trade proposal against risk rules.
+
+        Requires TRADER role or higher.
 
         Args:
             proposal: Trade proposal to validate
@@ -460,9 +520,13 @@ def create_agent_router(
             raise HTTPException(status_code=500, detail="Internal server error during trade validation")
 
     @router.get("/risk/state")
-    async def get_risk_state():
+    async def get_risk_state(
+        user: User = Depends(get_current_user),
+    ):
         """
         Get current risk state.
+
+        Requires authentication.
 
         Returns:
             Current risk state including circuit breakers, cooldowns, P&L
@@ -519,10 +583,15 @@ def create_agent_router(
 
     @router.post("/risk/reset")
     async def reset_risk_state(
-        admin_override: bool = Query(default=False)
+        request: Request,
+        admin_override: bool = Query(default=False),
+        user: User = Depends(require_role(UserRole.ADMIN)),
     ):
         """
-        Manually reset risk state (requires admin override for max drawdown).
+        Manually reset risk state.
+
+        REQUIRES ADMIN ROLE (Finding 10).
+        Use admin_override=true to reset max drawdown halt.
 
         Args:
             admin_override: Required for resetting max drawdown halt
@@ -533,13 +602,47 @@ def create_agent_router(
         if not risk_engine:
             raise HTTPException(status_code=503, detail="Risk Engine not initialized")
 
+        client_ip = request.client.host if request.client else "unknown"
+
         try:
+            # Log this critical operation
+            await log_security_event(
+                SecurityEventType.RISK_RESET,
+                user.user_id,
+                client_ip,
+                {"admin_override": admin_override},
+                request,
+            )
+
+            if admin_override:
+                # Log admin override usage
+                await log_security_event(
+                    SecurityEventType.ADMIN_OVERRIDE,
+                    user.user_id,
+                    client_ip,
+                    {"action": "risk_reset", "reason": "max_drawdown_bypass"},
+                    request,
+                )
+
             success = risk_engine.manual_reset(admin_override=admin_override)
 
             if success:
+                # Get fresh state for response
+                state = risk_engine.get_state()
                 return {
                     "status": "reset_complete",
-                    "state": await get_risk_state()
+                    "reset_by": user.user_id,
+                    "admin_override": admin_override,
+                    "state": {
+                        "equity": {
+                            "peak_usd": float(state.peak_equity),
+                            "current_usd": float(state.current_equity),
+                        },
+                        "circuit_breakers": {
+                            "trading_halted": state.trading_halted,
+                            "halt_reason": state.halt_reason,
+                        },
+                    }
                 }
             else:
                 raise HTTPException(
@@ -558,8 +661,14 @@ def create_agent_router(
     # ---------------------------------------------------------------------
 
     @router.get("/agents/stats")
-    async def get_agent_stats():
-        """Get statistics for all agents."""
+    async def get_agent_stats(
+        user: User = Depends(get_current_user),
+    ):
+        """
+        Get statistics for all agents.
+
+        Requires authentication.
+        """
         stats = {}
 
         if ta_agent:
@@ -575,5 +684,79 @@ def create_agent_router(
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "agents": stats,
         }
+
+    # Finding 17: Add GET /agents/outputs/{agent_name} endpoint
+    @router.get("/agents/outputs/{agent_name}")
+    async def get_agent_outputs(
+        agent_name: str,
+        symbol: str = Query("BTC/USDT", description="Trading symbol"),
+        limit: int = Query(10, ge=1, le=100, description="Number of outputs to return"),
+        user: User = Depends(get_current_user),
+    ):
+        """
+        Get latest outputs from a specific agent.
+
+        Requires authentication.
+
+        Args:
+            agent_name: Name of the agent (technical_analysis, regime_detection, trading_decision)
+            symbol: Trading symbol to filter by
+            limit: Maximum number of outputs to return
+
+        Returns:
+            List of recent agent outputs
+        """
+        # Validate agent name
+        valid_agents = {"technical_analysis", "regime_detection", "trading_decision"}
+        if agent_name not in valid_agents:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid agent name: '{agent_name}'. Valid: {', '.join(sorted(valid_agents))}"
+            )
+
+        # Validate symbol
+        symbol = validate_symbol_or_raise(symbol, strict=False)
+
+        # Get the appropriate agent
+        agent = None
+        if agent_name == "technical_analysis":
+            agent = ta_agent
+        elif agent_name == "regime_detection":
+            agent = regime_agent
+        elif agent_name == "trading_decision":
+            agent = trading_agent
+
+        if not agent:
+            raise HTTPException(
+                status_code=503,
+                detail=f"{agent_name.replace('_', ' ').title()} Agent not initialized"
+            )
+
+        try:
+            # Get outputs (most agents store recent outputs)
+            outputs = []
+            if hasattr(agent, 'get_recent_outputs'):
+                raw_outputs = await agent.get_recent_outputs(symbol, limit)
+                outputs = [o.to_dict() for o in raw_outputs]
+            elif hasattr(agent, 'get_latest_output'):
+                # Fallback to single latest output
+                latest = await agent.get_latest_output(symbol, max_age_seconds=3600)
+                if latest:
+                    outputs = [latest.to_dict()]
+
+            return {
+                "agent": agent_name,
+                "symbol": symbol,
+                "count": len(outputs),
+                "outputs": outputs,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+
+        except Exception as e:
+            logger.error(f"Failed to get {agent_name} outputs: {e}", exc_info=True)
+            raise HTTPException(
+                status_code=500,
+                detail=f"Internal server error getting {agent_name} outputs"
+            )
 
     return router

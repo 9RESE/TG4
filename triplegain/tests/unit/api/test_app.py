@@ -127,7 +127,8 @@ def app_with_mocks(
                     app_module.register_health_routes(app)
                     app_module.register_indicator_routes(app)
                     app_module.register_snapshot_routes(app)
-                    app_module.register_debug_routes(app)
+                    # Use debug_mode=True for testing (no auth required)
+                    app_module.register_debug_routes(app, debug_mode=True)
 
                     yield app
 
@@ -151,7 +152,8 @@ def app_not_initialized():
                     app_module.register_health_routes(app)
                     app_module.register_indicator_routes(app)
                     app_module.register_snapshot_routes(app)
-                    app_module.register_debug_routes(app)
+                    # Use debug_mode=True for testing (no auth required)
+                    app_module.register_debug_routes(app, debug_mode=True)
                     yield app
 
 
@@ -250,7 +252,8 @@ class TestIndicatorEndpoints:
 
         assert response.status_code == 200
         data = response.json()
-        assert data['symbol'] == 'BTC_USDT'
+        # Symbol is normalized to BTC/USDT format (Finding 21 fix)
+        assert data['symbol'] == 'BTC/USDT'
         assert data['timeframe'] == '1h'
         assert 'indicators' in data
         assert 'candle_count' in data
@@ -275,8 +278,7 @@ class TestIndicatorEndpoints:
     ):
         """Test indicators when no data found.
 
-        Note: Currently returns 500 due to exception handling order in app.py.
-        HTTPException is caught by generic Exception handler.
+        Finding 22 fixed: Exception handling order now correctly re-raises HTTPException.
         """
         from triplegain.src.api import app as app_module
 
@@ -294,8 +296,8 @@ class TestIndicatorEndpoints:
 
                         response = client.get("/api/v1/indicators/XYZ_USDT/1h")
 
-                        # Should be 404 but currently 500 due to exception handling
-                        assert response.status_code == 500
+                        # Now correctly returns 404 (Finding 22 fix)
+                        assert response.status_code == 404
 
     def test_get_indicators_invalid_limit(self, client):
         """Test indicators with invalid limit."""
@@ -317,7 +319,8 @@ class TestSnapshotEndpoints:
 
         assert response.status_code == 200
         data = response.json()
-        assert data['symbol'] == 'BTC_USDT'
+        # Symbol is normalized to BTC/USDT format (Finding 21 fix)
+        assert data['symbol'] == 'BTC/USDT'
         assert 'snapshot' in data
         assert 'indicators' in data
         assert 'mtf_state' in data
@@ -350,7 +353,8 @@ class TestDebugEndpoints:
         assert response.status_code == 200
         data = response.json()
         assert data['agent'] == 'technical_analysis'
-        assert data['symbol'] == 'BTC_USDT'
+        # Symbol is normalized to BTC/USDT format (Finding 21 fix)
+        assert data['symbol'] == 'BTC/USDT'
         assert 'prompt' in data
         assert 'system_prompt' in data['prompt']
         assert 'user_message' in data['prompt']
@@ -385,7 +389,8 @@ class TestDebugEndpoints:
                 with patch.object(app_module, '_snapshot_builder', mock_snapshot_builder):
                     with patch.object(app_module, '_prompt_builder', mock_prompt):
                         app = FastAPI()
-                        app_module.register_debug_routes(app)
+                        # Use debug_mode=True for testing (no auth required)
+                        app_module.register_debug_routes(app, debug_mode=True)
                         client = TestClient(app)
 
                         response = client.get("/api/v1/debug/prompt/invalid_agent")

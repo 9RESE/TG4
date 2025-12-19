@@ -28,6 +28,27 @@ pytestmark = pytest.mark.skipif(not FASTAPI_AVAILABLE, reason="FastAPI not insta
 
 
 # =============================================================================
+# Authentication Helpers
+# =============================================================================
+
+def add_auth_override(app):
+    """Add authentication override to app for testing."""
+    from datetime import datetime, timezone
+    from triplegain.src.api.security import get_current_user, User, UserRole
+
+    async def override_get_current_user():
+        return User(
+            user_id="test-user-123",
+            role=UserRole.ADMIN,  # Use ADMIN to pass all role checks
+            api_key_hash="test-hash",
+            created_at=datetime.now(timezone.utc),
+        )
+
+    app.dependency_overrides[get_current_user] = override_get_current_user
+    return app
+
+
+# =============================================================================
 # Mock Fixtures
 # =============================================================================
 
@@ -249,6 +270,10 @@ def app_with_agents(
         risk_engine=mock_risk_engine,
     )
     app.include_router(router)
+
+    # Add authentication override for testing
+    add_auth_override(app)
+
     return app
 
 
@@ -275,6 +300,10 @@ def app_minimal():
         risk_engine=None,
     )
     app.include_router(router)
+
+    # Add authentication override for testing
+    add_auth_override(app)
+
     return app
 
 
@@ -323,6 +352,7 @@ class TestTAEndpoints:
             ta_agent=mock_ta_agent_with_cache,
         )
         app.include_router(router)
+        add_auth_override(app)
         client = TestClient(app)
 
         response = client.get("/api/v1/agents/ta/BTC_USDT?max_age_seconds=120")
@@ -378,6 +408,7 @@ class TestTAEndpoints:
             ta_agent=mock_ta,
         )
         app.include_router(router)
+        add_auth_override(app)
         client = TestClient(app)
 
         response = client.get("/api/v1/agents/ta/BTC_USDT")
@@ -621,6 +652,7 @@ class TestRiskEndpoints:
             risk_engine=mock_engine,
         )
         app.include_router(router)
+        add_auth_override(app)
         client = TestClient(app)
 
         response = client.post(
@@ -709,11 +741,13 @@ class TestEdgeCases:
         mock_prompt_builder,
         mock_db_pool,
     ):
-        """Test reset fails when admin override required."""
+        """Test reset fails when non-admin tries to reset."""
+        from datetime import datetime, timezone
         from triplegain.src.api.routes_agents import create_agent_router
+        from triplegain.src.api.security import get_current_user, User, UserRole
 
         mock_engine = MagicMock()
-        mock_engine.manual_reset.return_value = False  # Requires admin
+        mock_engine.manual_reset.return_value = False
 
         app = FastAPI()
         router = create_agent_router(
@@ -724,9 +758,20 @@ class TestEdgeCases:
             risk_engine=mock_engine,
         )
         app.include_router(router)
+
+        # Add auth override with TRADER role (not admin)
+        async def override_get_current_user():
+            return User(
+                user_id="test-user",
+                role=UserRole.TRADER,
+                api_key_hash="test-hash",
+                created_at=datetime.now(timezone.utc),
+            )
+        app.dependency_overrides[get_current_user] = override_get_current_user
+
         client = TestClient(app)
 
-        response = client.post("/api/v1/risk/reset?admin_override=false")
+        response = client.post("/api/v1/risk/reset")
 
         assert response.status_code == 403
-        assert 'admin_override' in response.json()['detail']
+        assert 'admin' in response.json()['detail'].lower()
