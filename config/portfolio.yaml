@@ -1,0 +1,98 @@
+# ============================================================================
+# Portfolio Configuration
+# ============================================================================
+# Settings for portfolio allocation, rebalancing, and hodl bags.
+
+# ============================================================================
+# Target Allocation
+# ============================================================================
+target_allocation:
+  # Target percentages (must sum to 100)
+  btc_pct: 33.33
+  xrp_pct: 33.33
+  usdt_pct: 33.34
+
+# ============================================================================
+# Rebalancing Settings
+# ============================================================================
+rebalancing:
+  # Enable automatic rebalancing
+  enabled: true
+
+  # Deviation threshold to trigger rebalancing (%)
+  threshold_pct: 5.0
+
+  # Minimum time between rebalances (hours)
+  min_interval_hours: 24
+
+  # Minimum trade size (USD)
+  min_trade_usd: 10.0
+
+  # Default execution type for rebalance trades
+  execution_type: limit
+
+  # DCA settings for large rebalances
+  dca:
+    # Enable DCA for large rebalances
+    enabled: true
+    # Threshold for DCA (USD total trade value)
+    threshold_usd: 500
+    # Number of DCA batches over 24 hours
+    batches: 6
+    # Hours between DCA batches
+    interval_hours: 4
+
+  # Exclude hodl bags from rebalancing
+  exclude_hodl_bags: true
+
+# ============================================================================
+# Hodl Bags Configuration
+# ============================================================================
+hodl_bags:
+  enabled: true
+
+  # Percentage of realized profit to allocate to hodl bags
+  profit_allocation_pct: 10
+
+  # Minimum profit to trigger hodl allocation (USD)
+  min_allocation_usd: 10
+
+  # Initial hodl bag amounts (set manually or from database)
+  btc_amount: 0.0
+  xrp_amount: 0.0
+  usdt_amount: 0.0
+
+# ============================================================================
+# Mock Data (for testing without Kraken)
+# ============================================================================
+mock_balances:
+  BTC: 0.5
+  XRP: 10000
+  USDT: 5000
+
+mock_prices:
+  BTC/USDT: 45000
+  XRP/USDT: 0.60
+
+# ============================================================================
+# Portfolio LLM Agent
+# ============================================================================
+llm:
+  provider: deepseek
+  model: deepseek-chat
+  timeout_seconds: 30
+
+# ============================================================================
+# Alerts and Notifications
+# ============================================================================
+alerts:
+  # Alert when allocation deviates beyond threshold
+  deviation_warn_pct: 8.0
+  deviation_critical_pct: 15.0
+
+  # Alert on rebalancing events
+  notify_on_rebalance: true
+  notify_on_dca: true
+
+  # Alert on hodl bag additions
+  notify_on_hodl_add: true

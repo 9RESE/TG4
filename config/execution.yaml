@@ -1,0 +1,172 @@
+# ============================================================================
+# Order Execution Configuration
+# ============================================================================
+# Settings for Kraken API integration, order management, and position tracking.
+
+# ============================================================================
+# Kraken API Configuration
+# ============================================================================
+kraken:
+  # API credentials from environment variables
+  # KRAKEN_API_KEY and KRAKEN_API_SECRET
+
+  # API endpoints
+  rest_url: https://api.kraken.com
+  websocket_url: wss://ws.kraken.com
+
+  # Rate limiting
+  rate_limit:
+    calls_per_minute: 60
+    order_calls_per_minute: 30
+    retry_after_seconds: 10
+
+  # Timeouts
+  timeouts:
+    connect_seconds: 10
+    read_seconds: 30
+    total_seconds: 60
+
+# ============================================================================
+# Order Configuration
+# ============================================================================
+orders:
+  # Default order type when not specified
+  default_type: limit
+
+  # Time in force for orders
+  # GTC = Good Till Cancelled
+  # IOC = Immediate Or Cancel
+  # GTD = Good Till Date
+  time_in_force: GTC
+
+  # Maximum order retries on failure
+  max_retry_count: 3
+
+  # Delay between retries (seconds)
+  retry_delay_seconds: 5
+
+  # Order expiry for limit orders (hours, 0 = no expiry)
+  limit_order_expiry_hours: 24
+
+  # Slippage tolerance for market orders (%)
+  market_order_slippage_pct: 0.5
+
+# ============================================================================
+# Position Limits
+# ============================================================================
+position_limits:
+  # Maximum open positions per symbol
+  max_per_symbol: 2
+
+  # Maximum total open positions
+  max_total: 5
+
+  # Maximum position holding time (hours, 0 = no limit)
+  max_holding_hours: 48
+
+# ============================================================================
+# Position Tracking
+# ============================================================================
+position_tracking:
+  # How often to capture position snapshots (seconds)
+  snapshot_interval_seconds: 60
+
+  # Maximum snapshots to keep in memory
+  max_snapshots: 10000
+
+  # Update P&L on price changes
+  update_pnl_on_price_change: true
+
+# ============================================================================
+# Contingent Orders
+# ============================================================================
+contingent_orders:
+  # Automatically place stop-loss after entry fill
+  auto_stop_loss: true
+
+  # Automatically place take-profit after entry fill
+  auto_take_profit: true
+
+  # Order type for stop-loss (stop-loss or stop-loss-limit)
+  stop_loss_type: stop-loss
+
+  # Order type for take-profit (take-profit or take-profit-limit)
+  take_profit_type: limit
+
+  # Delay before placing contingent orders (seconds)
+  placement_delay_seconds: 1
+
+# ============================================================================
+# Trailing Stop Configuration
+# ============================================================================
+trailing_stop:
+  enabled: false  # Enable in production
+
+  # Activation threshold (% profit before trailing activates)
+  activation_pct: 1.0
+
+  # Trail distance (% below highest price)
+  trail_distance_pct: 1.5
+
+  # Update frequency (seconds)
+  update_interval_seconds: 60
+
+# ============================================================================
+# Symbol Configuration
+# ============================================================================
+symbols:
+  BTC/USDT:
+    kraken_pair: XBTUSDT
+    min_order_size: 0.0001
+    price_decimals: 2
+    size_decimals: 8
+    fee_pct: 0.26  # Taker fee
+
+  XRP/USDT:
+    kraken_pair: XRPUSDT
+    min_order_size: 10
+    price_decimals: 5
+    size_decimals: 0
+    fee_pct: 0.26
+
+  XRP/BTC:
+    kraken_pair: XRPXBT
+    min_order_size: 10
+    price_decimals: 8
+    size_decimals: 0
+    fee_pct: 0.26
+
+# ============================================================================
+# Execution Logging
+# ============================================================================
+logging:
+  # Log all order events
+  log_orders: true
+
+  # Log position changes
+  log_positions: true
+
+  # Log P&L updates
+  log_pnl_updates: false
+
+  # Store detailed execution logs to database
+  persist_logs: true
+
+# ============================================================================
+# Paper Trading Mode
+# ============================================================================
+paper_trading:
+  enabled: true  # Set to false for live trading
+
+  # Initial paper balance
+  initial_balance:
+    USDT: 10000
+
+  # Simulated fill delay (ms)
+  fill_delay_ms: 100
+
+  # Simulate partial fills
+  simulate_partial_fills: false
+
+  # Simulated slippage (%)
+  simulated_slippage_pct: 0.1

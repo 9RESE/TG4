@@ -1,0 +1,137 @@
+# ============================================================================
+# Coordinator Orchestration Configuration
+# ============================================================================
+# Settings for agent scheduling, conflict resolution, and trading workflow.
+
+# ============================================================================
+# Coordinator LLM Configuration
+# ============================================================================
+# LLM is used ONLY for conflict resolution, not for scheduling.
+llm:
+  primary:
+    provider: deepseek
+    model: deepseek-chat
+    timeout_seconds: 30
+  fallback:
+    provider: anthropic
+    model: claude-3-5-sonnet-20241022
+    timeout_seconds: 60
+
+# ============================================================================
+# Scheduled Agent Tasks
+# ============================================================================
+schedules:
+  # Technical Analysis - runs every minute
+  technical_analysis:
+    enabled: true
+    interval_seconds: 60
+    run_on_start: true
+    max_concurrent: 3  # Max concurrent symbol analyses
+
+  # Regime Detection - runs every 5 minutes
+  regime_detection:
+    enabled: true
+    interval_seconds: 300
+    run_on_start: false
+    depends_on:
+      - technical_analysis
+
+  # Sentiment Analysis - runs every 30 minutes (Phase 4)
+  sentiment_analysis:
+    enabled: false  # Enable in Phase 4
+    interval_seconds: 1800
+    run_on_start: false
+
+  # Trading Decision - runs hourly
+  trading_decision:
+    enabled: true
+    interval_seconds: 3600
+    run_on_start: false
+    depends_on:
+      - technical_analysis
+      - regime_detection
+
+  # Portfolio Rebalance - runs hourly
+  portfolio_rebalance:
+    enabled: true
+    interval_seconds: 3600
+    run_on_start: false
+
+# ============================================================================
+# Trading Symbols
+# ============================================================================
+symbols:
+  - BTC/USDT
+  - XRP/USDT
+  # - XRP/BTC  # Add if needed
+
+# ============================================================================
+# Conflict Detection and Resolution
+# ============================================================================
+conflicts:
+  # Threshold to invoke LLM for resolution
+  # If confidence difference < this value, use LLM to decide
+  invoke_llm_threshold: 0.2
+
+  # Maximum time for conflict resolution
+  max_resolution_time_ms: 10000
+
+  # Conflict types to detect
+  detection:
+    ta_sentiment_conflict: true
+    regime_conflict: true
+    risk_override: true
+
+  # Default actions when LLM unavailable
+  fallback_actions:
+    ta_sentiment_conflict: wait
+    regime_conflict: abort
+    risk_override: abort
+
+# ============================================================================
+# Message Bus Configuration
+# ============================================================================
+message_bus:
+  # Maximum messages to keep in history
+  max_history_size: 1000
+
+  # How often to clean up expired messages (seconds)
+  cleanup_interval_seconds: 60
+
+  # Default message TTL (seconds)
+  default_ttl_seconds: 300
+
+  # Enable message persistence to database
+  enable_persistence: false
+
+# ============================================================================
+# Emergency Handling
+# ============================================================================
+emergency:
+  # Circuit breaker response actions
+  circuit_breaker:
+    daily_loss:
+      action: pause_trading
+      notify: true
+    weekly_loss:
+      action: reduce_positions
+      reduction_pct: 50
+      notify: true
+    max_drawdown:
+      action: halt_all
+      close_positions: true
+      notify: true
+
+  # Execution error handling
+  execution_errors:
+    max_consecutive_errors: 3
+    error_cooldown_minutes: 15
+    notify_on_error: true
+
+  # System health checks
+  health_check:
+    interval_seconds: 60
+    required_agents:
+      - technical_analysis
+      - regime_detection
+      - risk_engine

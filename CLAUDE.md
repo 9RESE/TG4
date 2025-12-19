@@ -5,24 +5,35 @@ Python trading system with TimescaleDB + 6-model LLM comparison
 
 ## Quick Commands
 ```bash
-pytest triplegain/tests/                            # Run all tests (689 passing)
-pytest --cov=triplegain/src --cov-report=term       # Run with coverage (90%)
+pytest triplegain/tests/                            # Run all tests (916 passing)
+pytest --cov=triplegain/src --cov-report=term       # Run with coverage (87%)
 docker-compose up -d timescaledb                    # Start database
 python -m data.kraken_db.gap_filler --db-url "$DB_URL"  # Fill data gaps
 uvicorn triplegain.src.api.app:app --reload         # Start API server
 ```
 
-## Current Phase: Phase 2 Complete
+## Current Phase: Phase 3 Complete
 
-**Status**: Phase 2 COMPLETE (2025-12-18), ready for Phase 3 orchestration
+**Status**: Phase 3 COMPLETE (2025-12-18), ready for Phase 4 extended features
 
 | Phase | Status | Description |
 |-------|--------|-------------|
 | 1. Foundation | **COMPLETE** | Data pipeline, indicators, snapshots, prompts |
 | 2. Core Agents | **COMPLETE** | TA, Regime, Risk, Trading Decision agents |
-| 3. Orchestration | Ready to Start | Communication, Coordinator, Execution |
-| 4. Extended | Not Started | Sentiment, Hodl Bag, A/B Testing, Dashboard |
+| 3. Orchestration | **COMPLETE** | Communication, Coordinator, Execution |
+| 4. Extended | Ready to Start | Sentiment, Hodl Bag tracking, Dashboard |
 | 5. Production | Not Started | Testing, Paper Trading, Live Deployment |
+
+### Phase 3 Deliverables (Completed)
+- **Message Bus**: In-memory pub/sub with topic routing, TTL, thread-safe
+- **Coordinator Agent**: DeepSeek V3 / Claude conflict resolution, agent scheduling
+- **Portfolio Rebalance Agent**: 33/33/33 allocation, hodl bag exclusion
+- **Order Execution Manager**: Kraken API integration, order lifecycle, retry logic
+- **Position Tracker**: P&L calculation, SL/TP monitoring, leverage support
+- **API Endpoints**: Coordinator, portfolio, positions, orders routes
+- **Database Migration**: 9 tables (orders, positions, hodl_bags, coordinator_state, etc.)
+- **Config Files**: orchestration.yaml, portfolio.yaml, execution.yaml
+- **Test Coverage**: 916 tests, 87% coverage (227 new tests for Phase 3)
 
 ### Phase 2 Deliverables (Completed)
 - **Base Agent Class**: Abstract interface with AgentOutput dataclass, validation, serialization
@@ -34,7 +45,6 @@ uvicorn triplegain.src.api.app:app --reload         # Start API server
 - **API Endpoints**: Agent invoke, risk state, model comparison routes
 - **Database Migration**: model_comparisons table for A/B tracking
 - **Config Files**: agents.yaml, risk.yaml with all parameters
-- **Test Coverage**: 689 tests, 90% coverage (comprehensive mocked tests)
 
 ### Phase 1 Deliverables (Completed)
 - **Indicator Library**: 17+ indicators (EMA, SMA, RSI, MACD, ATR, BB, ADX, OBV, VWAP, Supertrend, StochRSI, ROC, Keltner, Choppiness, Volume SMA)
@@ -61,6 +71,7 @@ uvicorn triplegain.src.api.app:app --reload         # Start API server
 |----------|-----------|
 | 6-Model A/B Testing | GPT, Grok, DeepSeek V3, Claude Sonnet/Opus, Qwen run parallel |
 | Rules-based Risk | Deterministic, no LLM dependency, <10ms execution |
+| In-Memory Message Bus | Simple, fast, sufficient for single-process |
 | Trend-following | Mean reversion does NOT work on crypto |
 | Conservative | Quality over quantity (3 trades beat 44 in Alpha Arena) |
 | 33/33/33 Allocation | BTC/XRP/USDT with Hodl Bag (10% of profits) |
@@ -70,9 +81,10 @@ uvicorn triplegain.src.api.app:app --reload         # Start API server
 |------|-------|-----------|
 | Technical Analysis | Qwen 2.5 7B (Local) | Per-minute |
 | Regime Detection | Qwen 2.5 7B (Local) | Every 5 min |
-| Sentiment | Grok + GPT (web search) | Every 30 min |
+| Sentiment | Grok + GPT (web search) | Every 30 min (Phase 4) |
 | Trading Decision | 6-Model A/B | Hourly |
 | Coordinator | DeepSeek V3 / Claude | On conflict |
+| Portfolio Rebalance | DeepSeek V3 | Hourly (on deviation) |
 
 ### System Constraints
 - Max Leverage: 5x | Daily Loss Limit: 5% | Max Drawdown: 20%
@@ -85,29 +97,58 @@ uvicorn triplegain.src.api.app:app --reload         # Start API server
 ```
 triplegain/
 ├── src/
-│   ├── agents/         # Base agent, TA, Regime, Trading Decision
+│   ├── agents/         # Base, TA, Regime, Trading Decision, Portfolio Rebalance
 │   ├── risk/           # Rules engine, circuit breakers, cooldowns
+│   ├── orchestration/  # Message bus, coordinator agent
+│   ├── execution/      # Order manager, position tracker
 │   ├── data/           # Indicator library, market snapshot, database
 │   ├── llm/            # Prompt builder, LLM clients (5 providers)
-│   ├── api/            # FastAPI endpoints, agent routes
+│   ├── api/            # FastAPI endpoints, agent routes, orchestration routes
 │   └── utils/          # Config loader
 ├── tests/
-│   ├── unit/           # 689 unit tests (90% coverage)
-│   │   ├── agents/     # Agent tests (185 tests)
+│   ├── unit/           # 916 unit tests (87% coverage)
+│   │   ├── agents/     # Agent tests (215 tests)
 │   │   ├── risk/       # Risk engine tests (90 tests)
+│   │   ├── orchestration/  # Message bus, coordinator tests (114 tests)
+│   │   ├── execution/  # Order manager, position tracker tests (70 tests)
 │   │   ├── llm/        # LLM client tests (105 tests)
-│   │   └── api/        # API endpoint tests (67 tests)
+│   │   └── api/        # API endpoint tests (110 tests)
 │   └── integration/    # Database integration tests
-config/                 # agents.yaml, risk.yaml, system.yaml
+config/                 # agents.yaml, risk.yaml, orchestration.yaml, portfolio.yaml, execution.yaml
 data/kraken_db/         # Data collectors (operational)
 docs/development/       # Design + Implementation plans + Reviews
-migrations/             # Database migrations (001, 002)
+migrations/             # Database migrations (001, 002, 003)
 ```
 
 ## Documentation
 - [Master Design](docs/development/TripleGain-master-design/README.md)
 - [Implementation Plan](docs/development/TripleGain-implementation-plan/README.md)
+- [Phase 3 Features](docs/development/features/phase-3-orchestration.md)
 - [Kraken API](docs/api/kraken/kraken-api-reference.md)
+
+## API Endpoints (Phase 3)
+
+### Coordinator
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/v1/coordinator/status` | GET | Get coordinator state |
+| `/api/v1/coordinator/pause` | POST | Pause trading |
+| `/api/v1/coordinator/resume` | POST | Resume trading |
+| `/api/v1/coordinator/task/{name}/run` | POST | Force run task |
+
+### Portfolio
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/v1/portfolio/allocation` | GET | Get current allocation |
+| `/api/v1/portfolio/rebalance` | POST | Force rebalance |
+
+### Positions & Orders
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/v1/positions` | GET | List open positions |
+| `/api/v1/positions/{id}/close` | POST | Close position |
+| `/api/v1/orders` | GET | List open orders |
+| `/api/v1/orders/{id}/cancel` | POST | Cancel order |
 
 ---
 *Uses global config from ~/.claude/CLAUDE.md*
