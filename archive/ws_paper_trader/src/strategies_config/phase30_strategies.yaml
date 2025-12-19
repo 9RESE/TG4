@@ -1,0 +1,447 @@
+# Phase 30: Research-Based Trading Strategies Configuration
+# Based on 2025 research across GitHub, TradingView, crypto blogs, and social media
+#
+# All strategies are disabled by default. Enable the ones you want to use.
+
+global:
+  paper_trading: true
+  starting_balance:
+    USDT: 2000.0
+    XRP: 0.0
+    BTC: 0.0
+  fee_rate: 0.001
+  max_drawdown: 0.10
+
+strategies:
+  # ===== TREND FOLLOWING STRATEGIES =====
+
+  supertrend:
+    enabled: true
+    category: trend
+    description: "ATR-based trend following - 11% avg profit per trade in backtests"
+
+    # Primary SuperTrend
+    atr_period: 10
+    atr_multiplier: 3.0
+
+    # Double confirmation (reduces false signals)
+    use_double_supertrend: true
+    atr_period_slow: 25
+    atr_multiplier_slow: 5.0
+
+    # EMA filter for macro trend
+    use_ema_filter: true
+    ema_period: 200
+
+    # Position sizing
+    base_size_pct: 0.10
+    dynamic_sizing: true
+    min_size_pct: 0.05
+    max_size_pct: 0.20
+
+    # Risk management
+    stop_loss_atr_mult: 1.5
+    take_profit_atr_mult: 3.0
+    max_leverage: 5
+
+    # Cooldown
+    cooldown_bars: 2
+
+    symbols:
+      - "BTC/USDT"
+      - "XRP/USDT"
+
+  ichimoku_cloud:
+    enabled: true
+    category: trend
+    description: "All-in-one Ichimoku system - BTC broke cloud at $93K, rallied to $120K+"
+
+    # Trading style: 'scalping', 'default', 'swing'
+    style: default
+
+    # Custom periods (override style defaults)
+    # tenkan_period: 9
+    # kijun_period: 26
+    # senkou_b_period: 52
+    displacement: 26
+
+    # Signal settings
+    require_chikou_confirm: true
+    require_price_above_cloud: true
+    use_tk_cross: true
+    use_kumo_breakout: true
+
+    # Risk
+    use_kijun_stop: true  # Use Kijun-sen as stop loss
+    base_size_pct: 0.12
+    max_leverage: 5
+
+    symbols:
+      - "BTC/USDT"
+      - "XRP/USDT"
+
+  # ===== ARBITRAGE STRATEGIES =====
+
+  funding_rate_arb:
+    enabled: true
+    category: arbitrage
+    description: "Funding rate cash-and-carry - 19.26% APY avg in 2025"
+
+    # Funding rate thresholds
+    min_funding_rate: 0.01      # 0.01% per 8h = ~11% APY
+    max_funding_rate: 0.10      # Avoid extreme (manipulation)
+    negative_funding_threshold: -0.01
+
+    # Position parameters
+    base_size_pct: 0.20
+    max_positions: 3
+    leverage: 2                 # Low leverage for safety
+
+    # Timing
+    funding_interval_hours: 8
+    entry_before_funding_minutes: 30
+    exit_after_funding_minutes: 15
+
+    # Costs
+    trading_fee_pct: 0.001
+    slippage_pct: 0.001
+
+    symbols:
+      - "BTC/USDT"
+      - "XRP/USDT"
+      - "ETH/USDT"
+
+  triangular_arb:
+    enabled: false  # Requires high-frequency execution
+    category: arbitrage
+    description: "Triangular arbitrage on single exchange - 3-5% annualized"
+
+    # Profit thresholds
+    min_profit_pct: 0.10        # 0.1% minimum profit after fees
+    fee_per_trade: 0.001        # 0.1% Kraken fee
+    slippage_buffer: 0.001      # 0.1% slippage allowance
+
+    # Position sizing
+    trade_size_pct: 0.05
+    max_trade_size_usd: 500
+
+    # Rate limiting
+    cooldown_seconds: 10
+    max_opportunities_per_hour: 20
+
+    trios:
+      - path: ['BTC', 'XRP', 'USDT']
+        pairs: ['XRP/BTC', 'XRP/USDT', 'BTC/USDT']
+      - path: ['BTC', 'ETH', 'USDT']
+        pairs: ['ETH/BTC', 'ETH/USDT', 'BTC/USDT']
+
+  # ===== BREAKOUT STRATEGIES =====
+
+  volatility_breakout:
+    enabled: true
+    category: breakout
+    description: "Donchian + Keltner dual channel breakout with ATR confirmation"
+
+    # Donchian Channel
+    donchian_period: 20
+    donchian_exit_period: 10
+
+    # Keltner Channel
+    keltner_period: 20
+    keltner_atr_mult: 2.0
+
+    # ATR
+    atr_period: 14
+    atr_breakout_mult: 0.5
+    atr_stop_mult: 1.5
+
+    # Dual confirmation
+    require_dual_confirmation: true
+
+    # Volatility regime adjustments
+    adjust_for_volatility: true
+    low_vol_threshold: 1.0      # ATR% < 1%
+    high_vol_threshold: 3.0     # ATR% > 3%
+
+    # Position sizing
+    base_size_pct: 0.10
+    max_leverage: 5
+
+    symbols:
+      - "BTC/USDT"
+      - "XRP/USDT"
+
+  # ===== CONFLUENCE STRATEGIES =====
+
+  multi_indicator_confluence:
+    enabled: true
+    category: confluence
+    description: "RSI + MACD + EMA + BB + Volume - 77% win rate with proper confluence"
+
+    # EMA Trend Filter
+    ema_fast: 50
+    ema_slow: 200
+
+    # RSI
+    rsi_period: 14
+    rsi_bullish_threshold: 50
+    rsi_oversold: 30
+    rsi_overbought: 70
+
+    # MACD
+    macd_fast: 12
+    macd_slow: 26
+    macd_signal: 9
+
+    # Bollinger Bands
+    bb_period: 20
+    bb_std: 2.0
+
+    # Volume
+    volume_mult: 1.5
+    volume_window: 20
+
+    # Confluence requirements
+    min_confirmations: 3        # Minimum indicators agreeing
+    require_trend_alignment: true
+    require_volume_confirm: true
+
+    # Position sizing
+    base_size_pct: 0.12
+    confidence_scaling: true
+    max_leverage: 5
+
+    symbols:
+      - "BTC/USDT"
+      - "XRP/USDT"
+
+  # ===== SENTIMENT STRATEGIES =====
+
+  whale_sentiment:
+    enabled: true
+    category: sentiment
+    description: "Whale tracking + sentiment analysis - contrarian opportunities"
+
+    # Volume spike detection (whale proxy)
+    volume_spike_mult: 2.0
+    volume_window: 24
+
+    # Fear/Greed proxy
+    fear_deviation: -0.05       # -5% from high = fear
+    greed_deviation: 0.05       # +5% from low = greed
+
+    # RSI as sentiment
+    rsi_period: 14
+    rsi_fear: 25
+    rsi_greed: 75
+
+    # Contrarian mode (buy fear, sell greed)
+    contrarian_mode: true
+
+    # Sentiment thresholds
+    bullish_threshold: 0.60
+    bearish_threshold: 0.40
+
+    base_size_pct: 0.10
+    max_leverage: 5
+
+    symbols:
+      - "BTC/USDT"
+      - "XRP/USDT"
+
+  # ===== ACCUMULATION STRATEGIES =====
+
+  enhanced_dca:
+    enabled: true
+    category: accumulation
+    description: "Dynamic DCA with volatility-adjusted multipliers"
+
+    # DCA base
+    base_amount_usd: 50
+    dca_interval_hours: 24      # Daily DCA
+
+    # Moving average for fair value
+    ma_period: 200
+    short_ma_period: 50
+
+    # Deviation multipliers (buy more when cheap)
+    multipliers:
+      -0.30: 3.0                # 30% below MA = 3x buy
+      -0.20: 2.0
+      -0.10: 1.5
+      0.00: 1.0
+      0.10: 0.75
+      0.20: 0.50
+      0.30: 0.25                # 30% above MA = 0.25x buy
+
+    # RSI bonus
+    rsi_period: 14
+    rsi_extreme_oversold: 25
+    rsi_extreme_bonus: 0.5      # +50% on extreme oversold
+
+    # Asset allocation
+    allocations:
+      'BTC/USDT': 0.60
+      'XRP/USDT': 0.40
+
+    symbols:
+      - "BTC/USDT"
+      - "XRP/USDT"
+
+  twap_accumulator:
+    enabled: false
+    category: accumulation
+    description: "TWAP execution for large orders - minimize market impact"
+
+    # TWAP parameters
+    total_amount_usd: 1000
+    duration_hours: 24
+    interval_minutes: 30
+
+    # Randomization
+    use_jitter: true
+    jitter_pct: 0.20
+
+    # Volume weighting
+    use_volume_weight: true
+    volume_window: 24
+
+    allocations:
+      'BTC/USDT': 0.60
+      'XRP/USDT': 0.40
+
+    symbols:
+      - "BTC/USDT"
+      - "XRP/USDT"
+
+  # ===== VOLUME STRATEGIES =====
+
+  volume_profile:
+    enabled: true
+    category: volume
+    description: "POC and Value Area trading - identify key S/R levels"
+
+    # Volume Profile
+    lookback_bars: 100
+    num_bins: 50
+    value_area_pct: 0.70        # 70% for Value Area
+
+    # Trading
+    poc_tolerance: 0.005        # 0.5% from POC
+    va_tolerance: 0.01          # 1% from VA edges
+
+    # Momentum filter
+    use_momentum_filter: true
+    momentum_period: 14
+
+    base_size_pct: 0.10
+    max_leverage: 5
+
+    symbols:
+      - "BTC/USDT"
+      - "XRP/USDT"
+
+  # ===== MOMENTUM STRATEGIES =====
+
+  wavetrend:
+    enabled: true
+    category: momentum
+    description: "WaveTrend oscillator - cleaner signals than RSI for crypto"
+
+    # WaveTrend parameters
+    channel_length: 10
+    average_length: 21
+    ma_length: 4
+
+    # Thresholds
+    overbought: 60
+    oversold: -60
+    extreme_overbought: 80
+    extreme_oversold: -80
+
+    # Signals
+    require_zone_exit: true
+    use_divergence: true
+    divergence_lookback: 14
+
+    base_size_pct: 0.10
+    max_leverage: 5
+
+    symbols:
+      - "BTC/USDT"
+      - "XRP/USDT"
+
+  # ===== SCALPER STRATEGIES =====
+
+  scalping_1m5m:
+    enabled: true
+    category: scalper
+    description: "1m/5m scalping - SMA cross + CHOCH + prev day levels"
+
+    # Timeframe
+    primary_timeframe: "5m"     # '1m' or '5m'
+
+    # SMA Crossover
+    sma_fast: 5
+    sma_slow: 12
+
+    # EMA filter
+    ema_period: 200
+    use_ema_filter: true
+
+    # Previous day levels
+    use_prev_day_levels: true
+    level_tolerance: 0.002
+
+    # CHOCH detection
+    use_choch: true
+    choch_lookback: 10
+
+    # Risk
+    scalp_target_pct: 0.005     # 0.5%
+    scalp_stop_pct: 0.003       # 0.3%
+    max_positions: 2
+
+    base_size_pct: 0.05
+    cooldown_seconds: 60
+    max_leverage: 5
+
+    symbols:
+      - "BTC/USDT"
+      - "XRP/USDT"
+
+# Experiment presets
+experiments:
+  high_frequency:
+    description: "Fast scalping focus"
+    enable_only:
+      - scalping_1m5m
+      - triangular_arb
+
+  accumulation_focus:
+    description: "Long-term accumulation"
+    enable_only:
+      - enhanced_dca
+      - twap_accumulator
+      - whale_sentiment
+
+  trend_following:
+    description: "Trend strategies only"
+    enable_only:
+      - supertrend
+      - ichimoku_cloud
+      - volatility_breakout
+
+  full_ensemble:
+    description: "All Phase 30 strategies"
+    enable_only:
+      - supertrend
+      - funding_rate_arb
+      - volatility_breakout
+      - ichimoku_cloud
+      - multi_indicator_confluence
+      - whale_sentiment
+      - enhanced_dca
+      - volume_profile
+      - wavetrend
+      - scalping_1m5m

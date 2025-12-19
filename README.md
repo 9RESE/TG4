@@ -13,6 +13,7 @@ An autonomous cryptocurrency trading system using a multi-agent architecture wit
 | **Trading Pairs** | BTC/USDT, XRP/USDT, XRP/BTC |
 | **Starting Capital** | ~$2,100 |
 | **Exchange** | Kraken (spot + margin) |
+| **LLMs** | Qwen(local), GPT, Grok, Claude, DeepSeek|
 | **Deployment** | Paper trading → Micro-live → Scale |
 
 ## Architecture
