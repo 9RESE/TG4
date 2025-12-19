@@ -50,8 +50,11 @@ class Position:
     leverage: int = 1
     status: PositionStatus = PositionStatus.OPEN
     order_id: Optional[str] = None  # Opening order ID
+    external_id: Optional[str] = None  # Kraken position ID (for sync)
     stop_loss: Optional[Decimal] = None
     take_profit: Optional[Decimal] = None
+    stop_loss_order_id: Optional[str] = None  # F14: Link to SL order
+    take_profit_order_id: Optional[str] = None  # F14: Link to TP order
     opened_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     closed_at: Optional[datetime] = None
     exit_price: Optional[Decimal] = None
@@ -60,6 +63,10 @@ class Position:
     realized_pnl: Decimal = Decimal(0)
     unrealized_pnl: Decimal = Decimal(0)
     unrealized_pnl_pct: Decimal = Decimal(0)
+
+    # Fee tracking (F10)
+    total_fees: Decimal = Decimal(0)
+    fee_currency: str = ""
 
     # Trailing stop fields
     trailing_stop_enabled: bool = False
@@ -127,14 +134,19 @@ class Position:
             "leverage": self.leverage,
             "status": self.status.value,
             "order_id": self.order_id,
+            "external_id": self.external_id,
             "stop_loss": str(self.stop_loss) if self.stop_loss else None,
             "take_profit": str(self.take_profit) if self.take_profit else None,
+            "stop_loss_order_id": self.stop_loss_order_id,
+            "take_profit_order_id": self.take_profit_order_id,
             "opened_at": self.opened_at.isoformat(),
             "closed_at": self.closed_at.isoformat() if self.closed_at else None,
             "exit_price": str(self.exit_price) if self.exit_price else None,
             "realized_pnl": str(self.realized_pnl),
             "unrealized_pnl": str(self.unrealized_pnl),
             "unrealized_pnl_pct": str(self.unrealized_pnl_pct),
+            "total_fees": str(self.total_fees),
+            "fee_currency": self.fee_currency,
             "trailing_stop_enabled": self.trailing_stop_enabled,
             "trailing_stop_activated": self.trailing_stop_activated,
             "trailing_stop_highest_price": str(self.trailing_stop_highest_price) if self.trailing_stop_highest_price else None,
@@ -156,14 +168,19 @@ class Position:
             leverage=data.get("leverage", 1),
             status=PositionStatus(data.get("status", "open")),
             order_id=data.get("order_id"),
+            external_id=data.get("external_id"),
             stop_loss=Decimal(data["stop_loss"]) if data.get("stop_loss") else None,
             take_profit=Decimal(data["take_profit"]) if data.get("take_profit") else None,
+            stop_loss_order_id=data.get("stop_loss_order_id"),
+            take_profit_order_id=data.get("take_profit_order_id"),
             opened_at=datetime.fromisoformat(data["opened_at"]) if data.get("opened_at") else datetime.now(timezone.utc),
             closed_at=datetime.fromisoformat(data["closed_at"]) if data.get("closed_at") else None,
             exit_price=Decimal(data["exit_price"]) if data.get("exit_price") else None,
             realized_pnl=Decimal(data.get("realized_pnl", "0")),
             unrealized_pnl=Decimal(data.get("unrealized_pnl", "0")),
             unrealized_pnl_pct=Decimal(data.get("unrealized_pnl_pct", "0")),
+            total_fees=Decimal(data.get("total_fees", "0")),
+            fee_currency=data.get("fee_currency", ""),
             trailing_stop_enabled=data.get("trailing_stop_enabled", False),
             trailing_stop_activated=data.get("trailing_stop_activated", False),
             trailing_stop_highest_price=Decimal(data["trailing_stop_highest_price"]) if data.get("trailing_stop_highest_price") else None,
@@ -247,8 +264,12 @@ class PositionTracker:
         # Price cache for P&L calculations
         self._price_cache: dict[str, Decimal] = {}
 
-        # Background task
+        # F09: Separate interval for SL/TP trigger checks (faster than snapshots)
+        self._trigger_check_interval_seconds = tracking_config.get('trigger_check_interval_seconds', 5)
+
+        # Background tasks
         self._snapshot_task: Optional[asyncio.Task] = None
+        self._trigger_check_task: Optional[asyncio.Task] = None
         self._running = False
 
         # Lock for thread safety
@@ -263,6 +284,8 @@ class PositionTracker:
         """Start position tracking and snapshot task."""
         self._running = True
         self._snapshot_task = asyncio.create_task(self._snapshot_loop())
+        # F09: Start separate faster trigger check loop
+        self._trigger_check_task = asyncio.create_task(self._trigger_check_loop())
         await self._load_positions()
         logger.info("PositionTracker started")
 
@@ -273,6 +296,13 @@ class PositionTracker:
             self._snapshot_task.cancel()
             try:
                 await self._snapshot_task
+            except asyncio.CancelledError:
+                pass
+        # F09: Stop trigger check task
+        if self._trigger_check_task:
+            self._trigger_check_task.cancel()
+            try:
+                await self._trigger_check_task
             except asyncio.CancelledError:
                 pass
         logger.info("PositionTracker stopped")
@@ -346,14 +376,18 @@ class PositionTracker:
         position_id: str,
         exit_price: Decimal,
         reason: str = "manual",
+        order_manager=None,
     ) -> Optional[Position]:
         """
         Close an open position.
+
+        F12: If order_manager is provided, cancels orphan SL/TP orders.
 
         Args:
             position_id: Position ID to close
             exit_price: Exit/closing price
             reason: Reason for closing
+            order_manager: Optional OrderExecutionManager to cancel orphan orders
 
         Returns:
             Closed position or None if not found
@@ -417,6 +451,13 @@ class PositionTracker:
             f"Position closed: {position_id} @ {exit_price}, "
             f"P&L: {pnl:.2f} ({pnl_pct:.2f}%)"
         )
+
+        # F12: Cancel orphan orders (SL/TP that are no longer needed)
+        if order_manager:
+            cancelled = await order_manager.cancel_orphan_orders(position_id)
+            if cancelled > 0:
+                logger.info(f"Cancelled {cancelled} orphan orders for closed position {position_id}")
+
         return position
 
     async def modify_position(
@@ -424,14 +465,18 @@ class PositionTracker:
         position_id: str,
         stop_loss: Optional[Decimal] = None,
         take_profit: Optional[Decimal] = None,
+        order_manager=None,
     ) -> Optional[Position]:
         """
         Modify position stop-loss or take-profit.
+
+        F08: If order_manager is provided, also updates exchange orders.
 
         Args:
             position_id: Position ID to modify
             stop_loss: New stop-loss price
             take_profit: New take-profit price
+            order_manager: Optional OrderExecutionManager to update exchange orders
 
         Returns:
             Modified position or None if not found
@@ -443,6 +488,9 @@ class PositionTracker:
                 logger.warning(f"Position not found: {position_id}")
                 return None
 
+            old_sl = position.stop_loss
+            old_tp = position.take_profit
+
             if stop_loss is not None:
                 position.stop_loss = stop_loss
 
@@ -451,6 +499,44 @@ class PositionTracker:
 
         # Persist to database
         await self._update_position(position)
+
+        # F08: Update exchange orders if manager provided
+        if order_manager:
+            if stop_loss is not None and old_sl != stop_loss:
+                # Cancel old SL order and place new one
+                if position.stop_loss_order_id:
+                    cancelled = await order_manager.cancel_order(position.stop_loss_order_id)
+                    if cancelled:
+                        logger.info(f"Cancelled old SL order {position.stop_loss_order_id}")
+
+                # Place new SL order
+                new_sl_order = await order_manager.place_stop_loss_update(
+                    position=position,
+                    new_stop_price=stop_loss,
+                )
+                if new_sl_order:
+                    position.stop_loss_order_id = new_sl_order.id
+                    await self._update_position(position)
+                else:
+                    logger.warning(f"Failed to place updated SL order for position {position_id}")
+
+            if take_profit is not None and old_tp != take_profit:
+                # Cancel old TP order and place new one
+                if position.take_profit_order_id:
+                    cancelled = await order_manager.cancel_order(position.take_profit_order_id)
+                    if cancelled:
+                        logger.info(f"Cancelled old TP order {position.take_profit_order_id}")
+
+                # Place new TP order
+                new_tp_order = await order_manager.place_take_profit_update(
+                    position=position,
+                    new_take_profit_price=take_profit,
+                )
+                if new_tp_order:
+                    position.take_profit_order_id = new_tp_order.id
+                    await self._update_position(position)
+                else:
+                    logger.warning(f"Failed to place updated TP order for position {position_id}")
 
         logger.info(f"Position modified: {position_id} SL={stop_loss} TP={take_profit}")
         return position
@@ -709,13 +795,15 @@ class PositionTracker:
                                 f"SL {old_stop} -> {new_stop}"
                             )
 
-    def enable_trailing_stop_for_position(
+    async def enable_trailing_stop_for_position(
         self,
         position_id: str,
         distance_pct: Optional[Decimal] = None,
     ) -> bool:
         """
         Enable trailing stop for a specific position.
+
+        F07: Now async and thread-safe with proper locking.
 
         Args:
             position_id: Position ID
@@ -724,33 +812,203 @@ class PositionTracker:
         Returns:
             True if successfully enabled
         """
-        position = self._positions.get(position_id)
-        if not position:
-            return False
+        async with self._lock:
+            position = self._positions.get(position_id)
+            if not position:
+                return False
 
-        position.trailing_stop_enabled = True
-        if distance_pct is not None:
-            position.trailing_stop_distance_pct = distance_pct
-        else:
-            position.trailing_stop_distance_pct = self._trailing_stop_distance_pct
+            position.trailing_stop_enabled = True
+            if distance_pct is not None:
+                position.trailing_stop_distance_pct = distance_pct
+            else:
+                position.trailing_stop_distance_pct = self._trailing_stop_distance_pct
 
         logger.info(f"Trailing stop enabled for position {position_id}")
         return True
 
+    async def update_order_links(
+        self,
+        position_id: str,
+        stop_loss_order_id: Optional[str] = None,
+        take_profit_order_id: Optional[str] = None,
+    ) -> bool:
+        """
+        Update position with linked order IDs.
+
+        F14: Links contingent orders to positions for tracking.
+
+        Args:
+            position_id: Position ID to update
+            stop_loss_order_id: ID of the stop-loss order
+            take_profit_order_id: ID of the take-profit order
+
+        Returns:
+            True if successfully updated
+        """
+        async with self._lock:
+            position = self._positions.get(position_id)
+            if not position:
+                logger.warning(f"Position not found for order link update: {position_id}")
+                return False
+
+            if stop_loss_order_id:
+                position.stop_loss_order_id = stop_loss_order_id
+            if take_profit_order_id:
+                position.take_profit_order_id = take_profit_order_id
+
+        # Persist the update
+        await self._update_position(position)
+        logger.debug(f"Updated order links for position {position_id}: SL={stop_loss_order_id}, TP={take_profit_order_id}")
+        return True
+
+    async def sync_with_exchange(self, kraken_client) -> dict:
+        """
+        Synchronize local position state with Kraken exchange.
+
+        F05: Detects positions that exist on exchange but not locally,
+        and positions that exist locally but not on exchange.
+
+        Args:
+            kraken_client: Kraken API client
+
+        Returns:
+            dict with sync results: added, removed, updated counts, and alerts
+        """
+        if not kraken_client:
+            return {"error": "No Kraken client available"}
+
+        try:
+            # Get open positions from Kraken
+            result = await kraken_client.open_positions()
+            if result.get("error"):
+                logger.warning(f"Position sync error: {result['error']}")
+                return {"error": result["error"]}
+
+            exchange_positions = result.get("result", {})
+            sync_result = {
+                "added": 0,
+                "removed": 0,
+                "updated": 0,
+                "alerts": [],
+                "exchange_position_count": len(exchange_positions),
+                "local_position_count": len(self._positions),
+            }
+
+            exchange_ids = set()
+
+            for pos_id, pos_info in exchange_positions.items():
+                exchange_ids.add(pos_id)
+
+                # Check if we're tracking this position
+                local_pos = self._find_position_by_external_id(pos_id)
+
+                if not local_pos:
+                    # New position on exchange we don't know about
+                    logger.warning(f"Unknown exchange position detected: {pos_id}")
+                    sync_result["alerts"].append({
+                        "type": "unknown_position",
+                        "severity": "high",
+                        "position_id": pos_id,
+                        "details": {
+                            "pair": pos_info.get("pair"),
+                            "type": pos_info.get("type"),
+                            "vol": pos_info.get("vol"),
+                            "cost": pos_info.get("cost"),
+                        },
+                        "message": f"Position {pos_id} exists on exchange but not tracked locally",
+                    })
+                    sync_result["added"] += 1
+                else:
+                    # Verify size matches
+                    exchange_size = Decimal(str(pos_info.get("vol", 0)))
+                    if abs(local_pos.size - exchange_size) > Decimal("0.0001"):
+                        logger.warning(
+                            f"Position size mismatch: local={local_pos.size}, "
+                            f"exchange={exchange_size}"
+                        )
+                        sync_result["alerts"].append({
+                            "type": "size_mismatch",
+                            "severity": "medium",
+                            "position_id": local_pos.id,
+                            "external_id": pos_id,
+                            "local_size": str(local_pos.size),
+                            "exchange_size": str(exchange_size),
+                        })
+                        sync_result["updated"] += 1
+
+            # Check for positions we have that exchange doesn't
+            async with self._lock:
+                for pos_id, local_pos in list(self._positions.items()):
+                    if local_pos.external_id and local_pos.external_id not in exchange_ids:
+                        logger.warning(f"Local position not on exchange: {pos_id}")
+                        sync_result["alerts"].append({
+                            "type": "missing_on_exchange",
+                            "severity": "high",
+                            "position_id": pos_id,
+                            "external_id": local_pos.external_id,
+                            "symbol": local_pos.symbol,
+                            "message": "Position tracked locally but not found on exchange (may have been closed/liquidated)",
+                        })
+                        sync_result["removed"] += 1
+
+            # Publish sync alerts if any issues found
+            if sync_result["alerts"] and self.bus:
+                from ..orchestration.message_bus import MessageTopic, create_message, MessagePriority
+                await self.bus.publish(create_message(
+                    topic=MessageTopic.RISK_ALERTS,
+                    source="position_tracker",
+                    payload={
+                        "alert_type": "position_sync_discrepancy",
+                        "severity": "high" if sync_result["alerts"] else "info",
+                        "sync_result": sync_result,
+                        "message": f"Position sync found {len(sync_result['alerts'])} discrepancies",
+                    },
+                    priority=MessagePriority.HIGH,
+                ))
+
+            return sync_result
+
+        except Exception as e:
+            logger.error(f"Exchange position sync failed: {e}", exc_info=True)
+            return {"error": str(e)}
+
+    def _find_position_by_external_id(self, external_id: str) -> Optional[Position]:
+        """Find position by its exchange/external ID."""
+        for position in self._positions.values():
+            if position.external_id == external_id:
+                return position
+        return None
+
     async def _snapshot_loop(self) -> None:
-        """Background task to capture position snapshots and check SL/TP."""
+        """Background task to capture position snapshots (every 60s by default)."""
         while self._running:
             try:
                 await asyncio.sleep(self._snapshot_interval_seconds)
                 await self._capture_snapshots()
-                # Update trailing stops
+                # Update trailing stops (also checked in trigger loop, but update here too)
                 await self.update_trailing_stops(self._price_cache)
-                # Check SL/TP triggers during snapshot loop
-                await self._process_sl_tp_triggers()
             except asyncio.CancelledError:
                 break
             except Exception as e:
                 logger.error(f"Snapshot error: {e}")
+
+    async def _trigger_check_loop(self) -> None:
+        """
+        F09: Separate fast loop for SL/TP trigger checks.
+
+        Runs more frequently than snapshot loop (every 5s by default)
+        to catch stop-loss and take-profit triggers quickly.
+        """
+        while self._running:
+            try:
+                await asyncio.sleep(self._trigger_check_interval_seconds)
+                # Only process if we have price data
+                if self._price_cache:
+                    await self._process_sl_tp_triggers()
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"Trigger check error: {e}")
 
     async def _capture_snapshots(self) -> None:
         """Capture current state snapshots for all positions."""

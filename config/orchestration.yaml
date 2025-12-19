@@ -18,37 +18,68 @@ llm:
     timeout_seconds: 60
 
 # ============================================================================
+# Degradation Settings (F04)
+# ============================================================================
+degradation:
+  # Number of consecutive successes required to recover one failure level
+  recovery_threshold: 3
+
+# ============================================================================
+# Consensus Settings (F11, F16)
+# ============================================================================
+# Controls how agent agreement affects confidence multiplier
+consensus:
+  # 66%+ agreement = high confidence boost
+  high_agreement_threshold: 0.66
+  # 33-66% = neutral (no adjustment)
+  low_agreement_threshold: 0.33
+  # Max confidence boost at 100% agreement (+30%)
+  max_confidence_boost: 0.30
+  # Max confidence penalty at 0% agreement (-15%)
+  max_confidence_penalty: 0.15
+
+# ============================================================================
 # Scheduled Agent Tasks
 # ============================================================================
 schedules:
+  # F02: Maximum concurrent tasks to prevent starvation
+  max_concurrent_tasks: 5
+
   # Technical Analysis - runs every minute
   technical_analysis:
     enabled: true
     interval_seconds: 60
     run_on_start: true
-    max_concurrent: 3  # Max concurrent symbol analyses
+    timeout_seconds: 30  # F08: Individual task timeout
+    max_concurrent: 3    # F05: Max concurrent symbol analyses
 
   # Regime Detection - runs every 5 minutes
   regime_detection:
     enabled: true
     interval_seconds: 300
     run_on_start: false
-    depends_on:
-      - technical_analysis
+    timeout_seconds: 30
+    max_concurrent: 3
+    depends_on:  # F03: Task dependencies
+      - ta_analysis
 
   # Sentiment Analysis - runs every 30 minutes (Phase 4)
   sentiment_analysis:
     enabled: false  # Enable in Phase 4
     interval_seconds: 1800
     run_on_start: false
+    timeout_seconds: 60
+    max_concurrent: 3
 
   # Trading Decision - runs hourly
   trading_decision:
     enabled: true
     interval_seconds: 3600
     run_on_start: false
-    depends_on:
-      - technical_analysis
+    timeout_seconds: 60  # Longer timeout for 6-model LLM calls
+    max_concurrent: 3
+    depends_on:  # F03: Task dependencies
+      - ta_analysis
       - regime_detection
 
   # Portfolio Rebalance - runs hourly
@@ -56,6 +87,7 @@ schedules:
     enabled: true
     interval_seconds: 3600
     run_on_start: false
+    timeout_seconds: 30
 
 # ============================================================================
 # Trading Symbols

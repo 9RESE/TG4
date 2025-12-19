@@ -5,6 +5,35 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.5] - 2025-12-19
+
+### Added
+- **Exchange Position Sync**: `sync_with_exchange()` method in PositionTracker detects discrepancies between local and Kraken positions (F05)
+- **Partial Fill Detection**: `_handle_partial_fill()` creates positions for partial fills, handles cancelled/expired orders with fills (F03)
+- **OCO Orders**: `handle_oco_fill()` automatically cancels take-profit when stop-loss fills and vice versa (F16)
+- **Fee Tracking**: Order and Position dataclasses now track `fee_amount`, `fee_currency`, `total_fees` (F10)
+- **Order Links**: Position dataclass includes `stop_loss_order_id`, `take_profit_order_id`, `external_id` for order tracking (F14)
+- **Trigger Check Loop**: Separate `_trigger_check_loop()` runs every 5s (configurable) for faster SL/TP detection (F09)
+- **Price Lookup for Market Orders**: `_get_current_price()` fetches from cache or Kraken API for size calculation (F02)
+- **32 new execution tests**: Comprehensive coverage for new features, 1045 total tests
+
+### Fixed
+- **Stop-Loss Kraken Parameter**: Fixed critical bug where stop-loss used wrong `price2` parameter instead of `price` for trigger (F01)
+- **Market Order Size**: Fixed calculation that returned USD amount instead of base currency amount (F02)
+- **Contingent Order Failures**: Now publishes `RISK_ALERTS` when SL/TP placement fails, position marked as unprotected (F04)
+- **Non-Atomic Fill Handling**: Added transaction-like error handling with proper alerting on failures (F06)
+- **Thread Safety**: `enable_trailing_stop_for_position()` now async with proper lock usage (F07)
+- **Case-Insensitive Errors**: Fixed inconsistent error checking (`Invalid` vs `invalid`) in order placement (F13)
+- **Race in get_order()**: Fixed race condition with nested lock acquisition (F15)
+- **Orphan Orders**: `cancel_orphan_orders()` cleans up SL/TP when position closes (F12)
+- **Failed Order Persistence**: Failed orders now stored for audit before returning error (F11)
+
+### Changed
+- `modify_position()` now accepts optional `order_manager` to sync SL/TP changes to exchange (F08)
+- `close_position()` now accepts optional `order_manager` to cancel orphan orders (F12)
+- `trigger_check_interval_seconds` config option added (default: 5 seconds)
+- Execution test coverage improved from 47% to 63%
+
 ## [0.3.4] - 2025-12-19
 
 ### Added

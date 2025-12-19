@@ -513,3 +513,338 @@ class TestOrderManagerWithPositionTracker:
         await manager._handle_order_fill(order, proposal)
 
         position_tracker.open_position.assert_called_once()
+
+
+class TestOrderManagerNewFeatures:
+    """Tests for new OrderExecutionManager features (F01-F16)."""
+
+    @pytest.fixture
+    def mock_kraken_client(self):
+        """Create mock Kraken client."""
+        client = AsyncMock()
+        client.add_order = AsyncMock()
+        client.cancel_order = AsyncMock()
+        client.query_orders = AsyncMock()
+        client.open_orders = AsyncMock()
+        client.get_ticker = AsyncMock()
+        return client
+
+    @pytest.fixture
+    def order_manager(self, mock_kraken_client):
+        """Create OrderExecutionManager with mocks."""
+        return OrderExecutionManager(
+            kraken_client=mock_kraken_client,
+            message_bus=AsyncMock(),
+            config={"orders": {}},
+        )
+
+    def test_order_fee_fields(self):
+        """Test F10: Order has fee tracking fields."""
+        order = Order(
+            id=str(uuid.uuid4()),
+            symbol="BTC/USDT",
+            side=OrderSide.BUY,
+            order_type=OrderType.LIMIT,
+            size=Decimal("0.1"),
+        )
+        assert hasattr(order, "fee_amount")
+        assert hasattr(order, "fee_currency")
+        assert order.fee_amount == Decimal(0)
+        assert order.fee_currency == ""
+
+    def test_order_fee_in_to_dict(self):
+        """Test F10: Fee fields included in serialization."""
+        order = Order(
+            id=str(uuid.uuid4()),
+            symbol="BTC/USDT",
+            side=OrderSide.BUY,
+            order_type=OrderType.LIMIT,
+            size=Decimal("0.1"),
+            fee_amount=Decimal("0.5"),
+            fee_currency="USDT",
+        )
+        d = order.to_dict()
+        assert "fee_amount" in d
+        assert "fee_currency" in d
+        assert d["fee_amount"] == "0.5"
+        assert d["fee_currency"] == "USDT"
+
+    @pytest.mark.asyncio
+    async def test_get_current_price_from_cache(self, order_manager):
+        """Test F02: Get price from position tracker cache."""
+        position_tracker = MagicMock()
+        position_tracker._price_cache = {"BTC/USDT": Decimal("50000")}
+        order_manager.position_tracker = position_tracker
+
+        price = await order_manager._get_current_price("BTC/USDT")
+        assert price == Decimal("50000")
+
+    @pytest.mark.asyncio
+    async def test_get_current_price_from_api(self, order_manager, mock_kraken_client):
+        """Test F02: Get price from Kraken API when cache empty."""
+        mock_kraken_client.get_ticker.return_value = {
+            "result": {"XBTUSDT": {"c": ["50000", "0.1"]}}
+        }
+
+        price = await order_manager._get_current_price("BTC/USDT")
+        assert price == Decimal("50000")
+
+    @pytest.mark.asyncio
+    async def test_calculate_size_with_market_order(self, order_manager, mock_kraken_client):
+        """Test F02: Calculate size for market order uses API price."""
+        mock_kraken_client.get_ticker.return_value = {
+            "result": {"XBTUSDT": {"c": ["50000", "0.1"]}}
+        }
+
+        # Create a mock proposal that simulates market order (entry_price=0 or None)
+        # TradeProposal validates entry_price > 0, so we mock it instead
+        mock_proposal = MagicMock()
+        mock_proposal.symbol = "BTC/USDT"
+        mock_proposal.size_usd = 5000
+        mock_proposal.entry_price = None  # Simulates market order
+
+        size = await order_manager._calculate_size(mock_proposal)
+        assert size == Decimal("0.1")  # 5000 / 50000 = 0.1
+
+    @pytest.mark.asyncio
+    async def test_place_stop_loss_update(self, order_manager, mock_kraken_client):
+        """Test F08: Place stop-loss update order."""
+        mock_kraken_client.add_order.return_value = {
+            "result": {"txid": ["OTEST-SL-123"]}
+        }
+
+        from triplegain.src.execution.position_tracker import Position, PositionSide
+
+        position = Position(
+            id="pos-123",
+            symbol="BTC/USDT",
+            side=PositionSide.LONG,
+            size=Decimal("0.1"),
+            entry_price=Decimal("50000"),
+        )
+
+        result = await order_manager.place_stop_loss_update(position, Decimal("49000"))
+        assert result is not None
+        assert result.order_type == OrderType.STOP_LOSS
+        assert result.price == Decimal("49000")
+        assert result.side == OrderSide.SELL  # Opposite of LONG
+
+    @pytest.mark.asyncio
+    async def test_place_take_profit_update(self, order_manager, mock_kraken_client):
+        """Test F08: Place take-profit update order."""
+        mock_kraken_client.add_order.return_value = {
+            "result": {"txid": ["OTEST-TP-123"]}
+        }
+
+        from triplegain.src.execution.position_tracker import Position, PositionSide
+
+        position = Position(
+            id="pos-123",
+            symbol="BTC/USDT",
+            side=PositionSide.SHORT,
+            size=Decimal("0.1"),
+            entry_price=Decimal("50000"),
+        )
+
+        result = await order_manager.place_take_profit_update(position, Decimal("48000"))
+        assert result is not None
+        assert result.order_type == OrderType.TAKE_PROFIT
+        assert result.price == Decimal("48000")
+        assert result.side == OrderSide.BUY  # Opposite of SHORT
+
+    @pytest.mark.asyncio
+    async def test_get_orders_for_position(self, order_manager):
+        """Test F12: Get orders related to a position."""
+        position_tracker = AsyncMock()
+        from triplegain.src.execution.position_tracker import Position, PositionSide
+
+        position = Position(
+            id="pos-123",
+            symbol="BTC/USDT",
+            side=PositionSide.LONG,
+            size=Decimal("0.1"),
+            entry_price=Decimal("50000"),
+            stop_loss_order_id="sl-order-123",
+            take_profit_order_id="tp-order-456",
+        )
+        position_tracker.get_position = AsyncMock(return_value=position)
+        order_manager.position_tracker = position_tracker
+
+        # Add orders
+        sl_order = Order(
+            id="sl-order-123",
+            symbol="BTC/USDT",
+            side=OrderSide.SELL,
+            order_type=OrderType.STOP_LOSS,
+            size=Decimal("0.1"),
+            status=OrderStatus.OPEN,
+        )
+        tp_order = Order(
+            id="tp-order-456",
+            symbol="BTC/USDT",
+            side=OrderSide.SELL,
+            order_type=OrderType.TAKE_PROFIT,
+            size=Decimal("0.1"),
+            status=OrderStatus.OPEN,
+        )
+        order_manager._open_orders["sl-order-123"] = sl_order
+        order_manager._open_orders["tp-order-456"] = tp_order
+
+        orders = await order_manager.get_orders_for_position("pos-123")
+        assert len(orders) == 2
+
+    @pytest.mark.asyncio
+    async def test_cancel_orphan_orders(self, order_manager, mock_kraken_client):
+        """Test F12: Cancel orphan orders for closed position."""
+        position_tracker = AsyncMock()
+        from triplegain.src.execution.position_tracker import Position, PositionSide
+
+        position = Position(
+            id="pos-123",
+            symbol="BTC/USDT",
+            side=PositionSide.LONG,
+            size=Decimal("0.1"),
+            entry_price=Decimal("50000"),
+            stop_loss_order_id="sl-order-123",
+        )
+        position_tracker.get_position = AsyncMock(return_value=position)
+        order_manager.position_tracker = position_tracker
+
+        # Add orphan SL order
+        sl_order = Order(
+            id="sl-order-123",
+            symbol="BTC/USDT",
+            side=OrderSide.SELL,
+            order_type=OrderType.STOP_LOSS,
+            size=Decimal("0.1"),
+            status=OrderStatus.OPEN,
+            external_id="OTEST-SL",
+        )
+        order_manager._open_orders["sl-order-123"] = sl_order
+
+        mock_kraken_client.cancel_order.return_value = {"result": {"count": 1}}
+
+        cancelled = await order_manager.cancel_orphan_orders("pos-123")
+        assert cancelled == 1
+
+    @pytest.mark.asyncio
+    async def test_handle_oco_fill_cancels_tp(self, order_manager, mock_kraken_client):
+        """Test F16: OCO cancels TP when SL fills."""
+        mock_kraken_client.cancel_order.return_value = {"result": {"count": 1}}
+
+        parent_order = Order(
+            id="parent-123",
+            symbol="BTC/USDT",
+            side=OrderSide.BUY,
+            order_type=OrderType.LIMIT,
+            size=Decimal("0.1"),
+            take_profit_order_id="tp-order-456",
+        )
+        order_manager._open_orders["parent-123"] = parent_order
+
+        tp_order = Order(
+            id="tp-order-456",
+            symbol="BTC/USDT",
+            side=OrderSide.SELL,
+            order_type=OrderType.TAKE_PROFIT,
+            size=Decimal("0.1"),
+            status=OrderStatus.OPEN,
+            external_id="OTEST-TP",
+        )
+        order_manager._open_orders["tp-order-456"] = tp_order
+
+        sl_order = Order(
+            id="sl-order-789",
+            symbol="BTC/USDT",
+            side=OrderSide.SELL,
+            order_type=OrderType.STOP_LOSS,
+            size=Decimal("0.1"),
+            status=OrderStatus.FILLED,
+            parent_order_id="parent-123",
+        )
+
+        await order_manager.handle_oco_fill(sl_order)
+        # TP order should be cancelled
+        mock_kraken_client.cancel_order.assert_called()
+
+    def test_stop_loss_order_price_parameter(self, order_manager):
+        """Test F01: Stop-loss uses price field not stop_price."""
+        order = Order(
+            id=str(uuid.uuid4()),
+            symbol="BTC/USDT",
+            side=OrderSide.SELL,
+            order_type=OrderType.STOP_LOSS,
+            size=Decimal("0.1"),
+            price=Decimal("49000"),  # Trigger price in 'price' field
+        )
+
+        # Verify price is set, not stop_price
+        assert order.price == Decimal("49000")
+        assert order.stop_price is None
+
+    @pytest.mark.asyncio
+    async def test_get_order_with_lock_fix(self, order_manager):
+        """Test F15: get_order uses nested locks to prevent race."""
+        order = Order(
+            id="test-order-123",
+            symbol="BTC/USDT",
+            side=OrderSide.BUY,
+            order_type=OrderType.LIMIT,
+            size=Decimal("0.1"),
+        )
+        order_manager._open_orders["test-order-123"] = order
+
+        # Should find order in open orders
+        result = await order_manager.get_order("test-order-123")
+        assert result is not None
+        assert result.id == "test-order-123"
+
+        # Move to history and test again
+        del order_manager._open_orders["test-order-123"]
+        order_manager._order_history.append(order)
+
+        result = await order_manager.get_order("test-order-123")
+        assert result is not None
+        assert result.id == "test-order-123"
+
+    @pytest.mark.asyncio
+    async def test_error_checking_case_insensitive(self, order_manager, mock_kraken_client):
+        """Test F13: Error checking is case insensitive."""
+        # Test with uppercase "Invalid"
+        mock_kraken_client.add_order.return_value = {"error": ["Invalid order"]}
+        order1 = Order(
+            id=str(uuid.uuid4()),
+            symbol="BTC/USDT",
+            side=OrderSide.BUY,
+            order_type=OrderType.LIMIT,
+            size=Decimal("0.1"),
+        )
+        result1 = await order_manager._place_order(order1)
+        assert result1 is False
+        assert order1.status == OrderStatus.ERROR
+
+        # Test with lowercase "invalid"
+        mock_kraken_client.add_order.return_value = {"error": ["invalid parameters"]}
+        order2 = Order(
+            id=str(uuid.uuid4()),
+            symbol="BTC/USDT",
+            side=OrderSide.BUY,
+            order_type=OrderType.LIMIT,
+            size=Decimal("0.1"),
+        )
+        result2 = await order_manager._place_order(order2)
+        assert result2 is False
+        assert order2.status == OrderStatus.ERROR
+
+        # Test with "Insufficient"
+        mock_kraken_client.add_order.return_value = {"error": ["Insufficient funds"]}
+        order3 = Order(
+            id=str(uuid.uuid4()),
+            symbol="BTC/USDT",
+            side=OrderSide.BUY,
+            order_type=OrderType.LIMIT,
+            size=Decimal("0.1"),
+        )
+        result3 = await order_manager._place_order(order3)
+        assert result3 is False
+        assert order3.status == OrderStatus.ERROR

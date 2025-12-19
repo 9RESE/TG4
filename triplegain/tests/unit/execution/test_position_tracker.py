@@ -645,3 +645,372 @@ class TestPositionTrackerStatistics:
 
         assert position_tracker._total_positions_closed == 1
         assert position_tracker._total_realized_pnl == Decimal("100")
+
+
+class TestPositionTrackerNewFeatures:
+    """Tests for new PositionTracker features (F05, F07, F09, F14)."""
+
+    @pytest.fixture
+    def mock_message_bus(self):
+        """Create mock message bus."""
+        return AsyncMock()
+
+    @pytest.fixture
+    def position_tracker_config(self):
+        """Create position tracker config."""
+        return {
+            "position_tracking": {
+                "snapshot_interval_seconds": 60,
+                "max_snapshots": 1000,
+                "trigger_check_interval_seconds": 5,
+            },
+            "trailing_stop": {
+                "enabled": True,
+                "activation_pct": 1.0,
+                "trail_distance_pct": 1.5,
+            },
+        }
+
+    @pytest.fixture
+    def position_tracker(self, mock_message_bus, position_tracker_config):
+        """Create a position tracker instance for testing."""
+        return PositionTracker(
+            message_bus=mock_message_bus,
+            risk_engine=None,
+            db_pool=None,
+            config=position_tracker_config,
+        )
+
+    def test_position_has_new_fields(self):
+        """Test F14: Position has order ID reference fields."""
+        position = Position(
+            id="test-123",
+            symbol="BTC/USDT",
+            side=PositionSide.LONG,
+            size=Decimal("0.1"),
+            entry_price=Decimal("50000"),
+        )
+        assert hasattr(position, "stop_loss_order_id")
+        assert hasattr(position, "take_profit_order_id")
+        assert hasattr(position, "external_id")
+        assert hasattr(position, "total_fees")
+        assert hasattr(position, "fee_currency")
+
+    def test_position_new_fields_in_to_dict(self):
+        """Test F14: New fields included in serialization."""
+        position = Position(
+            id="test-123",
+            symbol="BTC/USDT",
+            side=PositionSide.LONG,
+            size=Decimal("0.1"),
+            entry_price=Decimal("50000"),
+            stop_loss_order_id="sl-order-456",
+            take_profit_order_id="tp-order-789",
+            external_id="kraken-pos-123",
+            total_fees=Decimal("0.5"),
+            fee_currency="USDT",
+        )
+        d = position.to_dict()
+        assert d["stop_loss_order_id"] == "sl-order-456"
+        assert d["take_profit_order_id"] == "tp-order-789"
+        assert d["external_id"] == "kraken-pos-123"
+        assert d["total_fees"] == "0.5"
+        assert d["fee_currency"] == "USDT"
+
+    def test_position_from_dict_with_new_fields(self):
+        """Test F14: Deserialization includes new fields."""
+        data = {
+            "id": "test-123",
+            "symbol": "BTC/USDT",
+            "side": "long",
+            "size": "0.1",
+            "entry_price": "50000",
+            "stop_loss_order_id": "sl-order-456",
+            "take_profit_order_id": "tp-order-789",
+            "external_id": "kraken-pos-123",
+            "total_fees": "0.5",
+            "fee_currency": "USDT",
+        }
+        position = Position.from_dict(data)
+        assert position.stop_loss_order_id == "sl-order-456"
+        assert position.take_profit_order_id == "tp-order-789"
+        assert position.external_id == "kraken-pos-123"
+        assert position.total_fees == Decimal("0.5")
+        assert position.fee_currency == "USDT"
+
+    @pytest.mark.asyncio
+    async def test_enable_trailing_stop_async(self, position_tracker):
+        """Test F07: enable_trailing_stop_for_position is async and uses lock."""
+        position = await position_tracker.open_position(
+            symbol="BTC/USDT",
+            side="long",
+            size=Decimal("0.1"),
+            entry_price=Decimal("50000"),
+        )
+
+        result = await position_tracker.enable_trailing_stop_for_position(
+            position.id,
+            distance_pct=Decimal("2.0"),
+        )
+        assert result is True
+
+        updated = await position_tracker.get_position(position.id)
+        assert updated.trailing_stop_enabled is True
+        assert updated.trailing_stop_distance_pct == Decimal("2.0")
+
+    @pytest.mark.asyncio
+    async def test_enable_trailing_stop_not_found(self, position_tracker):
+        """Test F07: enable_trailing_stop returns False for non-existent position."""
+        result = await position_tracker.enable_trailing_stop_for_position(
+            "nonexistent-id",
+            distance_pct=Decimal("2.0"),
+        )
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_update_order_links(self, position_tracker):
+        """Test F14: Update position with order links."""
+        position = await position_tracker.open_position(
+            symbol="BTC/USDT",
+            side="long",
+            size=Decimal("0.1"),
+            entry_price=Decimal("50000"),
+        )
+
+        result = await position_tracker.update_order_links(
+            position.id,
+            stop_loss_order_id="sl-order-123",
+            take_profit_order_id="tp-order-456",
+        )
+        assert result is True
+
+        updated = await position_tracker.get_position(position.id)
+        assert updated.stop_loss_order_id == "sl-order-123"
+        assert updated.take_profit_order_id == "tp-order-456"
+
+    @pytest.mark.asyncio
+    async def test_update_order_links_not_found(self, position_tracker):
+        """Test F14: Update order links returns False for non-existent position."""
+        result = await position_tracker.update_order_links(
+            "nonexistent-id",
+            stop_loss_order_id="sl-order-123",
+        )
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_sync_with_exchange_no_client(self, position_tracker):
+        """Test F05: sync_with_exchange handles no client gracefully."""
+        result = await position_tracker.sync_with_exchange(kraken_client=None)
+        assert "error" in result
+        assert result["error"] == "No Kraken client available"
+
+    @pytest.mark.asyncio
+    async def test_sync_with_exchange_success(self, position_tracker):
+        """Test F05: sync_with_exchange detects discrepancies."""
+        mock_kraken = AsyncMock()
+        mock_kraken.open_positions.return_value = {
+            "result": {
+                "pos-123": {
+                    "pair": "XBTUSDT",
+                    "type": "buy",
+                    "vol": "0.1",
+                    "cost": "5000",
+                },
+            }
+        }
+
+        result = await position_tracker.sync_with_exchange(mock_kraken)
+        assert result["exchange_position_count"] == 1
+        assert result["local_position_count"] == 0
+        # Unknown position on exchange should be flagged
+        assert len(result["alerts"]) == 1
+        assert result["alerts"][0]["type"] == "unknown_position"
+
+    @pytest.mark.asyncio
+    async def test_sync_with_exchange_detects_size_mismatch(self, position_tracker):
+        """Test F05: sync_with_exchange detects size mismatches."""
+        # Open a position locally
+        position = await position_tracker.open_position(
+            symbol="BTC/USDT",
+            side="long",
+            size=Decimal("0.1"),
+            entry_price=Decimal("50000"),
+        )
+        position.external_id = "pos-123"
+        position_tracker._positions[position.id] = position
+
+        mock_kraken = AsyncMock()
+        mock_kraken.open_positions.return_value = {
+            "result": {
+                "pos-123": {
+                    "pair": "XBTUSDT",
+                    "type": "buy",
+                    "vol": "0.2",  # Different size than local
+                    "cost": "10000",
+                },
+            }
+        }
+
+        result = await position_tracker.sync_with_exchange(mock_kraken)
+        assert result["updated"] == 1
+        assert any(a["type"] == "size_mismatch" for a in result["alerts"])
+
+    @pytest.mark.asyncio
+    async def test_find_position_by_external_id(self, position_tracker):
+        """Test F05: Helper to find position by external ID."""
+        position = await position_tracker.open_position(
+            symbol="BTC/USDT",
+            side="long",
+            size=Decimal("0.1"),
+            entry_price=Decimal("50000"),
+        )
+        position.external_id = "kraken-123"
+        position_tracker._positions[position.id] = position
+
+        found = position_tracker._find_position_by_external_id("kraken-123")
+        assert found is not None
+        assert found.id == position.id
+
+        not_found = position_tracker._find_position_by_external_id("nonexistent")
+        assert not_found is None
+
+    @pytest.mark.asyncio
+    async def test_trigger_check_interval_configured(self, position_tracker):
+        """Test F09: Trigger check interval is configurable."""
+        assert position_tracker._trigger_check_interval_seconds == 5
+
+    @pytest.mark.asyncio
+    async def test_start_creates_trigger_check_task(self, position_tracker):
+        """Test F09: Start creates separate trigger check task."""
+        await position_tracker.start()
+        assert position_tracker._running is True
+        assert position_tracker._snapshot_task is not None
+        assert position_tracker._trigger_check_task is not None
+
+        await position_tracker.stop()
+        assert position_tracker._running is False
+
+    @pytest.mark.asyncio
+    async def test_close_position_with_order_manager(self, position_tracker):
+        """Test F12: close_position cancels orphan orders."""
+        mock_order_manager = AsyncMock()
+        mock_order_manager.cancel_orphan_orders = AsyncMock(return_value=2)
+
+        position = await position_tracker.open_position(
+            symbol="BTC/USDT",
+            side="long",
+            size=Decimal("0.1"),
+            entry_price=Decimal("50000"),
+        )
+
+        closed = await position_tracker.close_position(
+            position.id,
+            exit_price=Decimal("51000"),
+            reason="test",
+            order_manager=mock_order_manager,
+        )
+        assert closed is not None
+        mock_order_manager.cancel_orphan_orders.assert_called_once_with(position.id)
+
+    @pytest.mark.asyncio
+    async def test_modify_position_with_order_manager(self, position_tracker):
+        """Test F08: modify_position updates exchange orders."""
+        mock_order_manager = AsyncMock()
+        mock_order_manager.cancel_order = AsyncMock(return_value=True)
+        mock_sl_order = MagicMock(id="new-sl-123")
+        mock_order_manager.place_stop_loss_update = AsyncMock(return_value=mock_sl_order)
+
+        position = await position_tracker.open_position(
+            symbol="BTC/USDT",
+            side="long",
+            size=Decimal("0.1"),
+            entry_price=Decimal("50000"),
+            stop_loss=Decimal("49000"),
+        )
+        position.stop_loss_order_id = "old-sl-order"
+        position_tracker._positions[position.id] = position
+
+        modified = await position_tracker.modify_position(
+            position.id,
+            stop_loss=Decimal("49500"),
+            order_manager=mock_order_manager,
+        )
+        assert modified is not None
+        mock_order_manager.cancel_order.assert_called()
+        mock_order_manager.place_stop_loss_update.assert_called()
+
+    @pytest.mark.asyncio
+    async def test_check_sl_tp_triggers_long_stop_loss(self, position_tracker):
+        """Test SL trigger detection for LONG position."""
+        position = await position_tracker.open_position(
+            symbol="BTC/USDT",
+            side="long",
+            size=Decimal("0.1"),
+            entry_price=Decimal("50000"),
+            stop_loss=Decimal("49000"),
+        )
+
+        # Price drops below SL
+        triggered = await position_tracker.check_sl_tp_triggers({
+            "BTC/USDT": Decimal("48500"),
+        })
+        assert len(triggered) == 1
+        assert triggered[0][0].id == position.id
+        assert triggered[0][1] == "stop_loss"
+
+    @pytest.mark.asyncio
+    async def test_check_sl_tp_triggers_long_take_profit(self, position_tracker):
+        """Test TP trigger detection for LONG position."""
+        position = await position_tracker.open_position(
+            symbol="BTC/USDT",
+            side="long",
+            size=Decimal("0.1"),
+            entry_price=Decimal("50000"),
+            take_profit=Decimal("52000"),
+        )
+
+        # Price rises above TP
+        triggered = await position_tracker.check_sl_tp_triggers({
+            "BTC/USDT": Decimal("52500"),
+        })
+        assert len(triggered) == 1
+        assert triggered[0][0].id == position.id
+        assert triggered[0][1] == "take_profit"
+
+    @pytest.mark.asyncio
+    async def test_check_sl_tp_triggers_short_stop_loss(self, position_tracker):
+        """Test SL trigger detection for SHORT position."""
+        position = await position_tracker.open_position(
+            symbol="BTC/USDT",
+            side="short",
+            size=Decimal("0.1"),
+            entry_price=Decimal("50000"),
+            stop_loss=Decimal("51000"),
+        )
+
+        # Price rises above SL for SHORT
+        triggered = await position_tracker.check_sl_tp_triggers({
+            "BTC/USDT": Decimal("51500"),
+        })
+        assert len(triggered) == 1
+        assert triggered[0][0].id == position.id
+        assert triggered[0][1] == "stop_loss"
+
+    @pytest.mark.asyncio
+    async def test_check_sl_tp_triggers_short_take_profit(self, position_tracker):
+        """Test TP trigger detection for SHORT position."""
+        position = await position_tracker.open_position(
+            symbol="BTC/USDT",
+            side="short",
+            size=Decimal("0.1"),
+            entry_price=Decimal("50000"),
+            take_profit=Decimal("48000"),
+        )
+
+        # Price drops below TP for SHORT
+        triggered = await position_tracker.check_sl_tp_triggers({
+            "BTC/USDT": Decimal("47500"),
+        })
+        assert len(triggered) == 1
+        assert triggered[0][0].id == position.id
+        assert triggered[0][1] == "take_profit"

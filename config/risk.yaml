@@ -3,6 +3,11 @@
 # ============================================================================
 # Deterministic, rule-based risk management - NO LLM dependency.
 # All values are hard limits that cannot be overridden.
+#
+# DESIGN DEVIATIONS (documented per review F09):
+# - max_total_exposure_pct: 80% (design checklist: 60%) - allows more capital deployment
+# - ranging leverage: 2x (design table: 3x) - MORE conservative than design
+# - max_correlated_exposure_pct: 40% - implemented but not in original design spec
 
 # ============================================================================
 # Position and Leverage Limits

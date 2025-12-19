@@ -71,10 +71,10 @@ Uptime   Recovery  Latency  Throughput  Risk    Audit
 | Core Agents | 87% | 188 |
 | Risk Engine | 87% | 90 |
 | Orchestration | 87% | 114 |
-| Execution | 87% | 70 |
-| LLM Clients | 87% | 157 |
+| Execution | 63% | 102 |
+| LLM Clients | 87% | 209 |
 | API Layer | 87% | 110 |
-| **Total** | **87%** | **969** |
+| **Total** | **87%** | **1045** |
 
 *Last updated: 2025-12-19*
 
@@ -89,7 +89,8 @@ Uptime   Recovery  Latency  Throughput  Risk    Audit
 | Review 4 Phase 1 P3 | Complete | Foundation layer (P3) | 5/5 |
 | Review 4 Phase 2A | Complete | LLM client robustness | 15/15 |
 | Review 4 Phase 2B | Complete | Agent layer robustness | 12/12 |
-| Review 4 Phase 3-6 | Pending | - | - |
+| Review 4 Phase 3C | Complete | Execution layer robustness | 17/17 |
+| Review 4 Phase 4-6 | Pending | - | - |
 
 See [ADRs](../09-decisions/) for detailed fix documentation.
 
@@ -102,6 +103,19 @@ See [ADRs](../09-decisions/) for detailed fix documentation.
 | Decimal Pricing | Exact arithmetic for trade prices | ✅ v0.3.4 |
 | SQL Parameterization | All dynamic SQL values parameterized | ✅ v0.3.4 |
 | Stop-Loss Bounds | 1-5% range validation | ✅ v0.3.4 |
+
+### Execution Layer Safety Controls
+
+| Control | Description | Status |
+|---------|-------------|--------|
+| Correct Stop-Loss Params | Kraken trigger price in correct field | ✅ v0.3.5 |
+| Market Order Size | Proper USD→base currency conversion | ✅ v0.3.5 |
+| Partial Fill Tracking | Positions created for partial fills | ✅ v0.3.5 |
+| OCO Orders | Sibling order cancelled on fill | ✅ v0.3.5 |
+| Exchange State Sync | Local/exchange position reconciliation | ✅ v0.3.5 |
+| Orphan Order Cleanup | SL/TP cancelled on position close | ✅ v0.3.5 |
+| Fast SL/TP Triggers | 5-second trigger check interval | ✅ v0.3.5 |
+| Fee Tracking | Order/position fee audit trail | ✅ v0.3.5 |
 
 ### Static Analysis
 

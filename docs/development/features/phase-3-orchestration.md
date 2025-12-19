@@ -1,7 +1,7 @@
 # Phase 3: Orchestration - Feature Documentation
 
-**Version**: 1.5
-**Status**: COMPLETE (with all enhancements, security, and consolidated review fixes)
+**Version**: 1.6
+**Status**: COMPLETE (with all enhancements, security, consolidated, and execution robustness fixes)
 **Date**: 2025-12-19
 
 ## Overview
@@ -270,6 +270,42 @@ async def get_open_orders(symbol: Optional[str]) -> list[Order]
 async def sync_with_exchange() -> int  # Returns synced count
 ```
 
+**OCO (One-Cancels-Other) Orders** (v1.6):
+When a stop-loss or take-profit order fills, the sibling order is automatically cancelled:
+```python
+async def handle_oco_fill(filled_order: Order) -> None:
+    # If SL filled, cancel TP; if TP filled, cancel SL
+```
+
+**Orphan Order Cleanup** (v1.6):
+When positions close, related orders are automatically cancelled:
+```python
+async def cancel_orphan_orders(position_id: str) -> int:
+    # Returns count of cancelled orders
+```
+
+**Fee Tracking** (v1.6):
+Order dataclass now includes fee fields extracted from Kraken responses:
+```python
+@dataclass
+class Order:
+    fee_amount: Decimal = Decimal(0)
+    fee_currency: str = ""
+```
+
+**Partial Fill Handling** (v1.6):
+Orders in `PARTIALLY_FILLED` state are properly tracked:
+- Position created for partial amount
+- SL/TP placed when order finishes (fill, cancel, or expire)
+- Partial fill events published to message bus
+
+**Market Order Price Lookup** (v1.6):
+For market orders without `entry_price`, current price fetched automatically:
+```python
+async def _get_current_price(symbol: str) -> Optional[Decimal]:
+    # Checks position tracker cache first, then Kraken API
+```
+
 ### 5. Position Tracker
 
 **Location**: `triplegain/src/execution/position_tracker.py`
@@ -291,6 +327,13 @@ class Position:
     unrealized_pnl: Decimal
     unrealized_pnl_pct: Decimal
     status: str            # "open", "closed"
+    # v1.6: Order tracking
+    external_id: Optional[str]           # Kraken position ID
+    stop_loss_order_id: Optional[str]    # Link to SL order
+    take_profit_order_id: Optional[str]  # Link to TP order
+    # v1.6: Fee tracking
+    total_fees: Decimal
+    fee_currency: str
 ```
 
 **P&L Calculation**:
@@ -348,10 +391,47 @@ trailing_stop:
 - Integrated into snapshot loop for automatic updates
 
 ```python
-# Enable trailing stop for specific position
-position_tracker.enable_trailing_stop_for_position(
+# Enable trailing stop for specific position (v1.6: now async with proper locking)
+await position_tracker.enable_trailing_stop_for_position(
     position_id="pos-123",
     distance_pct=Decimal("2.0")  # Optional custom distance
+)
+```
+
+**Exchange Position Sync** (v1.6):
+Reconcile local state with Kraken positions:
+```python
+async def sync_with_exchange(kraken_client) -> dict:
+    # Returns: added, removed, updated counts, and alerts for discrepancies
+```
+Detects:
+- Unknown positions on exchange not tracked locally
+- Local positions missing from exchange
+- Size mismatches between local and exchange state
+
+**Faster Trigger Checking** (v1.6):
+Separate loop for SL/TP trigger detection:
+```yaml
+position_tracking:
+  snapshot_interval_seconds: 60      # P&L snapshots
+  trigger_check_interval_seconds: 5  # SL/TP checks (faster!)
+```
+
+**Order Links Management** (v1.6):
+```python
+async def update_order_links(
+    position_id: str,
+    stop_loss_order_id: Optional[str],
+    take_profit_order_id: Optional[str]
+) -> bool
+```
+
+**Position Close with Order Manager** (v1.6):
+Orphan orders automatically cancelled on close:
+```python
+await position_tracker.close_position(
+    position_id, exit_price, reason,
+    order_manager=order_manager  # Cancels SL/TP orders
 )
 ```
 
@@ -537,14 +617,14 @@ execution:
 **Test Files**:
 - `tests/unit/orchestration/test_message_bus.py` - 52 tests
 - `tests/unit/orchestration/test_coordinator.py` - 62 tests
-- `tests/unit/execution/test_order_manager.py` - 36 tests
-- `tests/unit/execution/test_position_tracker.py` - 34 tests
+- `tests/unit/execution/test_order_manager.py` - 53 tests (17 new in v1.6)
+- `tests/unit/execution/test_position_tracker.py` - 49 tests (15 new in v1.6)
 - `tests/unit/agents/test_portfolio_rebalance.py` - 30 tests
 - `tests/unit/api/test_routes_orchestration.py` - 43 tests
 
-**Total Phase 3 Tests**: 257 tests
-**Total Project Tests**: 917
-**Coverage**: 87%
+**Total Phase 3 Tests**: 289 tests
+**Total Project Tests**: 1045
+**Coverage**: 87% (Execution layer: 63%)
 
 ## Integration Points
 
@@ -587,6 +667,38 @@ execution:
 - [Comprehensive Code Review](../reviews/full/triplegain-comprehensive-code-review.md)
 
 ## Changelog
+
+### v1.6 (2025-12-19) - Execution Layer Robustness
+
+Comprehensive fixes from Phase 3C code review addressing 17 issues (2 P0 critical, 5 P1 high):
+
+**Critical Fixes (P0)**:
+- **Stop-Loss Kraken Parameter**: Fixed bug where stop-loss used wrong `price2` parameter instead of `price` for trigger
+- **Market Order Size**: Fixed calculation that returned USD amount instead of base currency amount via `_get_current_price()`
+
+**High Priority Fixes (P1)**:
+- **Partial Fill Detection**: New `_handle_partial_fill()` creates positions for partial fills
+- **Contingent Order Alerts**: Now publishes `RISK_ALERTS` when SL/TP placement fails
+- **Exchange Position Sync**: New `sync_with_exchange()` method detects discrepancies
+- **Non-Atomic Fill Handling**: Transaction-like error handling with proper alerting
+- **Thread-Safe Trailing Stop**: `enable_trailing_stop_for_position()` now async with lock
+
+**Medium Priority Fixes (P2)**:
+- **SL/TP Exchange Sync**: `modify_position()` accepts optional `order_manager`
+- **Faster Triggers**: Separate `_trigger_check_loop()` runs every 5s (configurable)
+- **Fee Tracking**: Order and Position dataclasses track `fee_amount`, `fee_currency`, `total_fees`
+- **Failed Order Persistence**: Failed orders stored for audit before returning error
+- **Orphan Order Cleanup**: `cancel_orphan_orders()` cleans up SL/TP when position closes
+- **Case-Insensitive Errors**: Fixed inconsistent error checking (`Invalid` vs `invalid`)
+
+**Low Priority Fixes (P3)**:
+- **Order ID References**: Position dataclass includes `stop_loss_order_id`, `take_profit_order_id`, `external_id`
+- **Race Fix in get_order()**: Fixed race condition with nested lock acquisition
+- **OCO Implementation**: `handle_oco_fill()` cancels sibling order on fill
+
+**Tests**: +32 new tests (1045 total) | **Execution Coverage**: 47% → 63%
+
+**ADR**: [ADR-010: Execution Layer Robustness](../../architecture/09-decisions/ADR-010-execution-layer-robustness.md)
 
 ### v1.5 (2025-12-19) - Consolidated Review Fixes
 
@@ -669,4 +781,4 @@ Comprehensive fixes from consolidated code review addressing 13 P0 and 12 P1 iss
 
 ---
 
-*Phase 3 Feature Documentation v1.5 - December 2025*
+*Phase 3 Feature Documentation v1.6 - December 2025*

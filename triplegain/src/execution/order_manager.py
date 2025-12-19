@@ -140,6 +140,10 @@ class Order:
     updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     error_message: Optional[str] = None
 
+    # F10: Fee tracking
+    fee_amount: Decimal = Decimal(0)
+    fee_currency: str = ""
+
     # Related orders
     parent_order_id: Optional[str] = None
     stop_loss_order_id: Optional[str] = None
@@ -163,6 +167,8 @@ class Order:
             "created_at": self.created_at.isoformat(),
             "updated_at": self.updated_at.isoformat(),
             "error_message": self.error_message,
+            "fee_amount": str(self.fee_amount),
+            "fee_currency": self.fee_currency,
             "parent_order_id": self.parent_order_id,
             "stop_loss_order_id": self.stop_loss_order_id,
             "take_profit_order_id": self.take_profit_order_id,
@@ -348,6 +354,9 @@ class OrderExecutionManager:
             # Place order on exchange
             success = await self._place_order(order)
 
+            # F11: Always store order for audit trail (success or failure)
+            await self._store_order(order)
+
             if not success:
                 return ExecutionResult(
                     success=False,
@@ -360,9 +369,6 @@ class OrderExecutionManager:
             async with self._lock:
                 self._open_orders[order.id] = order
                 self._total_orders_placed += 1
-
-            # Store to database
-            await self._store_order(order)
 
             # Start monitoring
             self._monitoring_tasks[order.id] = asyncio.create_task(
@@ -429,11 +435,25 @@ class OrderExecutionManager:
                     "volume": str(order.size),
                 }
 
-                if order.price:
-                    params["price"] = str(order.price)
-
-                if order.stop_price:
-                    params["price2"] = str(order.stop_price)
+                # Handle price parameters based on order type
+                # For stop-loss/take-profit: trigger price goes in 'price'
+                # For limit variants: limit price in 'price', trigger in 'price2'
+                if order.order_type in [OrderType.STOP_LOSS, OrderType.TAKE_PROFIT]:
+                    # Simple stop/TP orders: trigger price in 'price'
+                    if order.stop_price:
+                        params["price"] = str(order.stop_price)
+                    elif order.price:
+                        params["price"] = str(order.price)
+                elif order.order_type in [OrderType.STOP_LOSS_LIMIT, OrderType.TAKE_PROFIT_LIMIT]:
+                    # Limit variants: limit price in 'price', trigger in 'price2'
+                    if order.price:
+                        params["price"] = str(order.price)
+                    if order.stop_price:
+                        params["price2"] = str(order.stop_price)
+                else:
+                    # Market/Limit orders
+                    if order.price:
+                        params["price"] = str(order.price)
 
                 if order.leverage > 1:
                     params["leverage"] = str(order.leverage)
@@ -447,8 +467,9 @@ class OrderExecutionManager:
                         logger.warning(f"Kraken order error: {error_msg}")
                         order.error_message = error_msg
 
-                        # Don't retry certain errors
-                        if "Invalid" in error_msg or "insufficient" in error_msg.lower():
+                        # F13: Consistent case-insensitive error checking
+                        error_lower = error_msg.lower()
+                        if "invalid" in error_lower or "insufficient" in error_lower:
                             order.status = OrderStatus.ERROR
                             return False
 
@@ -521,26 +542,71 @@ class OrderExecutionManager:
                     order_info = result.get("result", {}).get(order.external_id, {})
                     kraken_status = order_info.get("status", "")
 
+                    vol_exec = Decimal(str(order_info.get("vol_exec", 0)))
+                    vol_total = Decimal(str(order_info.get("vol", order.size)))
+
                     if kraken_status == "closed":
                         order.status = OrderStatus.FILLED
-                        order.filled_size = Decimal(str(order_info.get("vol_exec", 0)))
+                        order.filled_size = vol_exec
                         order.filled_price = Decimal(str(order_info.get("price", 0)))
                         order.updated_at = datetime.now(timezone.utc)
 
+                        # F10: Extract fee information from Kraken response
+                        order.fee_amount = Decimal(str(order_info.get("fee", 0)))
+                        order.fee_currency = order_info.get("fee_asset", "")
+
                         # Handle fill
                         await self._handle_order_fill(order, proposal)
+
+                        # F16: Handle OCO (cancel sibling order)
+                        if order.order_type in [OrderType.STOP_LOSS, OrderType.TAKE_PROFIT]:
+                            await self.handle_oco_fill(order)
+
+                    elif kraken_status in ["open", "pending"]:
+                        # Check for partial fill - new fills since last check
+                        if vol_exec > order.filled_size:
+                            old_filled = order.filled_size
+                            order.filled_size = vol_exec
+                            order.filled_price = Decimal(str(order_info.get("price", 0)))
+                            order.updated_at = datetime.now(timezone.utc)
+
+                            if vol_exec < vol_total:
+                                # Partial fill detected
+                                order.status = OrderStatus.PARTIALLY_FILLED
+                                logger.info(
+                                    f"Partial fill detected: {order.id} "
+                                    f"{old_filled} -> {vol_exec} / {vol_total}"
+                                )
+
+                                # Handle partial fill (create partial position, optional SL/TP)
+                                await self._handle_partial_fill(order, proposal, vol_exec, vol_total)
+                            else:
+                                # Fully filled now
+                                order.status = OrderStatus.FILLED
+                                await self._handle_order_fill(order, proposal)
 
                     elif kraken_status == "canceled":
                         order.status = OrderStatus.CANCELLED
                         order.updated_at = datetime.now(timezone.utc)
 
+                        # Check if it was partially filled before cancellation
+                        if vol_exec > 0:
+                            logger.warning(
+                                f"Order {order.id} cancelled with partial fill: {vol_exec} of {vol_total}"
+                            )
+                            # Still need to handle the partial fill that occurred
+                            await self._handle_partial_fill(order, proposal, vol_exec, vol_total, is_final=True)
+
                     elif kraken_status == "expired":
                         order.status = OrderStatus.EXPIRED
                         order.updated_at = datetime.now(timezone.utc)
 
-                    elif kraken_status == "pending":
-                        # Still open
-                        pass
+                        # Check if it was partially filled before expiry
+                        if vol_exec > 0:
+                            logger.warning(
+                                f"Order {order.id} expired with partial fill: {vol_exec} of {vol_total}"
+                            )
+                            await self._handle_partial_fill(order, proposal, vol_exec, vol_total, is_final=True)
 
                 else:
                     # Mock mode - simulate fill after short delay
@@ -588,29 +654,113 @@ class OrderExecutionManager:
         order: Order,
         proposal: 'TradeProposal',
     ) -> None:
-        """Handle order fill - create position and contingent orders."""
+        """
+        Handle order fill - create position and contingent orders.
+
+        Implements best-effort atomicity:
+        - Position is always created first
+        - Contingent orders are placed after position creation
+        - Failures are logged and alerted (not silently ignored)
+        - Position remains even if contingent orders fail
+        """
         logger.info(f"Order filled: {order.id} at {order.filled_price}")
         self._total_orders_filled += 1
 
-        # Create position in tracker
+        position = None
         position_id = None
-        if self.position_tracker:
-            position = await self.position_tracker.open_position(
-                symbol=order.symbol,
-                side="long" if order.side == OrderSide.BUY else "short",
-                size=order.filled_size,
-                entry_price=order.filled_price or Decimal(0),
-                leverage=order.leverage,
-                order_id=order.id,
-            )
-            position_id = position.id if position else None
+        sl_order = None
+        tp_order = None
+        failed_contingent: list[str] = []
 
-        # Place contingent orders (stop-loss, take-profit)
-        if proposal.stop_loss:
-            await self._place_stop_loss(order, proposal, position_id)
+        try:
+            # Step 1: Create position in tracker (required)
+            if self.position_tracker:
+                position = await self.position_tracker.open_position(
+                    symbol=order.symbol,
+                    side="long" if order.side == OrderSide.BUY else "short",
+                    size=order.filled_size,
+                    entry_price=order.filled_price or Decimal(0),
+                    leverage=order.leverage,
+                    order_id=order.id,
+                )
+                if position:
+                    position_id = position.id
+                else:
+                    raise RuntimeError("Failed to create position for filled order")
+            else:
+                logger.warning("No position tracker - position will not be tracked")
 
-        if proposal.take_profit:
-            await self._place_take_profit(order, proposal, position_id)
+            # Step 2: Place contingent orders and check for failures
+            if proposal.stop_loss:
+                sl_order = await self._place_stop_loss(order, proposal, position_id)
+                if not sl_order:
+                    failed_contingent.append("stop_loss")
+                    logger.critical(
+                        f"CRITICAL: Stop-loss placement failed for position {position_id}! "
+                        f"Position is UNPROTECTED at SL={proposal.stop_loss}"
+                    )
+
+            if proposal.take_profit:
+                tp_order = await self._place_take_profit(order, proposal, position_id)
+                if not tp_order:
+                    failed_contingent.append("take_profit")
+                    logger.warning(f"Take-profit placement failed for position {position_id}")
+
+            # Step 3: Update position with order links (for F14)
+            if position and self.position_tracker and (sl_order or tp_order):
+                await self.position_tracker.update_order_links(
+                    position_id,
+                    stop_loss_order_id=sl_order.id if sl_order else None,
+                    take_profit_order_id=tp_order.id if tp_order else None,
+                )
+
+            # Step 4: Publish alert for failed contingent orders
+            if failed_contingent and self.bus:
+                from ..orchestration.message_bus import MessageTopic, create_message, MessagePriority
+                await self.bus.publish(create_message(
+                    topic=MessageTopic.RISK_ALERTS,
+                    source="order_execution_manager",
+                    payload={
+                        "alert_type": "contingent_order_failure",
+                        "severity": "critical" if "stop_loss" in failed_contingent else "high",
+                        "position_id": position_id,
+                        "order_id": order.id,
+                        "symbol": order.symbol,
+                        "failed_orders": failed_contingent,
+                        "message": (
+                            "IMMEDIATE ATTENTION: Position lacks stop-loss protection"
+                            if "stop_loss" in failed_contingent
+                            else "Take-profit order failed to place"
+                        ),
+                        "requested_stop_loss": str(proposal.stop_loss) if proposal.stop_loss else None,
+                        "requested_take_profit": str(proposal.take_profit) if proposal.take_profit else None,
+                    },
+                    priority=MessagePriority.URGENT,
+                ))
+
+        except Exception as e:
+            logger.critical(f"Fill handling failed: {e}", exc_info=True)
+
+            # Publish emergency alert
+            if self.bus:
+                from ..orchestration.message_bus import MessageTopic, create_message, MessagePriority
+                await self.bus.publish(create_message(
+                    topic=MessageTopic.RISK_ALERTS,
+                    source="order_execution_manager",
+                    payload={
+                        "alert_type": "fill_handling_failure",
+                        "severity": "critical",
+                        "position_id": position_id,
+                        "order_id": order.id,
+                        "symbol": order.symbol,
+                        "error": str(e),
+                        "message": (
+                            f"Order fill handling failed for {order.symbol}. "
+                            f"Position may be unprotected. Immediate review required."
+                        ),
+                    },
+                    priority=MessagePriority.URGENT,
+                ))
 
         # Publish fill event
         if self.bus:
@@ -631,6 +781,90 @@ class OrderExecutionManager:
                 priority=MessagePriority.HIGH,
             ))
 
+    async def _handle_partial_fill(
+        self,
+        order: Order,
+        proposal: 'TradeProposal',
+        filled_size: Decimal,
+        total_size: Decimal,
+        is_final: bool = False,
+    ) -> None:
+        """
+        Handle partial order fill.
+
+        Args:
+            order: The order with partial fill
+            proposal: Original trade proposal
+            filled_size: Amount filled so far
+            total_size: Total order size
+            is_final: True if this is the final state (cancelled/expired with partial fill)
+        """
+        fill_pct = (filled_size / total_size * 100) if total_size > 0 else Decimal(0)
+        logger.info(
+            f"Partial fill: {order.id} filled {filled_size}/{total_size} "
+            f"({fill_pct:.1f}%) at {order.filled_price}"
+        )
+
+        # Only create position on first partial fill or final state
+        # Check if we already have a position for this order
+        position = None
+        if self.position_tracker:
+            # Check if position already exists for this order
+            existing_positions = await self.position_tracker.get_open_positions(symbol=order.symbol)
+            for pos in existing_positions:
+                if pos.order_id == order.id:
+                    position = pos
+                    break
+
+            if not position:
+                # Create position for the partial fill
+                position = await self.position_tracker.open_position(
+                    symbol=order.symbol,
+                    side="long" if order.side == OrderSide.BUY else "short",
+                    size=filled_size,
+                    entry_price=order.filled_price or Decimal(0),
+                    leverage=order.leverage,
+                    order_id=order.id,
+                )
+                logger.info(f"Created position for partial fill: {position.id}")
+            else:
+                # Update existing position size
+                # Note: This is a simplified approach - in reality you might want
+                # to track multiple fill events separately
+                async with self.position_tracker._lock:
+                    position.size = filled_size
+                await self.position_tracker._update_position(position)
+                logger.info(f"Updated position {position.id} size to {filled_size}")
+
+        # If final state (cancelled/expired), place contingent orders now
+        if is_final and position:
+            if proposal.stop_loss:
+                await self._place_stop_loss(order, proposal, position.id)
+            if proposal.take_profit:
+                await self._place_take_profit(order, proposal, position.id)
+
+        # Publish partial fill event
+        if self.bus:
+            from ..orchestration.message_bus import MessageTopic, create_message, MessagePriority
+            await self.bus.publish(create_message(
+                topic=MessageTopic.EXECUTION_EVENTS,
+                source="order_execution_manager",
+                payload={
+                    "event_type": "order_partial_fill",
+                    "order_id": order.id,
+                    "external_id": order.external_id,
+                    "symbol": order.symbol,
+                    "side": order.side.value,
+                    "filled_size": str(filled_size),
+                    "total_size": str(total_size),
+                    "fill_pct": str(fill_pct),
+                    "fill_price": str(order.filled_price),
+                    "position_id": position.id if position else None,
+                    "is_final": is_final,
+                },
+                priority=MessagePriority.NORMAL if not is_final else MessagePriority.HIGH,
+            ))
+
     async def _place_stop_loss(
         self,
         parent_order: Order,
@@ -644,7 +878,9 @@ class OrderExecutionManager:
             side=OrderSide.SELL if parent_order.side == OrderSide.BUY else OrderSide.BUY,
             order_type=OrderType.STOP_LOSS,
             size=parent_order.filled_size,
-            stop_price=Decimal(str(proposal.stop_loss)),
+            # Use price field for stop-loss trigger (not stop_price)
+            # Kraken expects trigger price in 'price' for stop-loss orders
+            price=Decimal(str(proposal.stop_loss)),
             parent_order_id=parent_order.id,
         )
 
@@ -758,17 +994,23 @@ class OrderExecutionManager:
         return orders
 
     async def get_order(self, order_id: str) -> Optional[Order]:
-        """Get order by ID."""
-        # Check open orders first
+        """
+        Get order by ID.
+
+        F15: Uses nested locks to prevent race condition where order
+        moves from open_orders to history between lock releases.
+        """
+        # F15: Hold both locks to prevent race between open orders and history
         async with self._lock:
             if order_id in self._open_orders:
                 return self._open_orders[order_id]
 
-        # Check history with separate lock
-        async with self._history_lock:
-            for order in self._order_history:
-                if order.id == order_id:
-                    return order
+            # Check history while still holding the main lock
+            # This prevents order from moving between the checks
+            async with self._history_lock:
+                for order in self._order_history:
+                    if order.id == order_id:
+                        return order
 
         return None
 
@@ -817,10 +1059,71 @@ class OrderExecutionManager:
             return 0
 
     async def _calculate_size(self, proposal: 'TradeProposal') -> Decimal:
-        """Calculate order size in base currency."""
+        """
+        Calculate order size in base currency.
+
+        For limit orders: uses the entry_price from proposal
+        For market orders: fetches current price to convert USD to base currency
+
+        Raises:
+            ValueError: If price cannot be determined for market orders
+        """
+        # Get price for conversion
         if proposal.entry_price and proposal.entry_price > 0:
-            return Decimal(str(proposal.size_usd)) / Decimal(str(proposal.entry_price))
-        return Decimal(str(proposal.size_usd))
+            price = Decimal(str(proposal.entry_price))
+        else:
+            # For market orders, get current price from tracker or API
+            price = await self._get_current_price(proposal.symbol)
+            if not price or price <= 0:
+                raise ValueError(
+                    f"Cannot calculate size without price for {proposal.symbol}. "
+                    f"For market orders, current price must be available."
+                )
+
+        return Decimal(str(proposal.size_usd)) / price
+
+    async def _get_current_price(self, symbol: str) -> Optional[Decimal]:
+        """
+        Get current market price for size calculation.
+
+        Checks position tracker's price cache first, then falls back to Kraken API.
+
+        Args:
+            symbol: Trading symbol (e.g., "BTC/USDT")
+
+        Returns:
+            Current price as Decimal, or None if unavailable
+        """
+        # Try position tracker's price cache first (fastest)
+        if self.position_tracker:
+            cached = self.position_tracker._price_cache.get(symbol)
+            if cached and cached > 0:
+                logger.debug(f"Using cached price for {symbol}: {cached}")
+                return cached
+
+        # Fall back to Kraken API
+        if self.kraken:
+            try:
+                # Acquire rate limit token
+                await self._api_rate_limiter.acquire(1)
+
+                kraken_symbol = self._to_kraken_symbol(symbol)
+                ticker = await self.kraken.get_ticker(kraken_symbol)
+
+                if ticker and not ticker.get("error"):
+                    result = ticker.get("result", {})
+                    # Get the first pair's data
+                    pair_data = list(result.values())[0] if result else {}
+                    if "c" in pair_data:  # 'c' = last trade closed [price, lot-volume]
+                        price = Decimal(pair_data["c"][0])
+                        logger.debug(f"Fetched price for {symbol} from Kraken: {price}")
+                        return price
+                else:
+                    logger.warning(f"Ticker error for {symbol}: {ticker.get('error')}")
+            except Exception as e:
+                logger.warning(f"Failed to get ticker for {symbol}: {e}")
+
+        return None
 
     async def _check_position_limits(self, symbol: str) -> dict:
         """
@@ -916,6 +1219,182 @@ class OrderExecutionManager:
             )
         except Exception as e:
             logger.error(f"Failed to update order: {e}")
+
+    async def place_stop_loss_update(
+        self,
+        position,  # Position object
+        new_stop_price: Decimal,
+    ) -> Optional[Order]:
+        """
+        Place a new stop-loss order for an existing position.
+
+        F08: Used when modifying SL price - cancels old order, places new one.
+
+        Args:
+            position: Position object
+            new_stop_price: New stop-loss price
+
+        Returns:
+            New Order if successful, None otherwise
+        """
+        # Determine order side (opposite of position)
+        from .position_tracker import PositionSide
+        order_side = OrderSide.SELL if position.side == PositionSide.LONG else OrderSide.BUY
+
+        sl_order = Order(
+            id=str(uuid.uuid4()),
+            symbol=position.symbol,
+            side=order_side,
+            order_type=OrderType.STOP_LOSS,
+            size=position.size,
+            price=new_stop_price,  # Use price for stop trigger
+        )
+
+        success = await self._place_order(sl_order)
+
+        if success:
+            async with self._lock:
+                self._open_orders[sl_order.id] = sl_order
+            await self._store_order(sl_order)
+            logger.info(f"Stop-loss update placed: {sl_order.id} at {new_stop_price}")
+            return sl_order
+
+        return None
+
+    async def place_take_profit_update(
+        self,
+        position,  # Position object
+        new_take_profit_price: Decimal,
+    ) -> Optional[Order]:
+        """
+        Place a new take-profit order for an existing position.
+
+        F08: Used when modifying TP price - cancels old order, places new one.
+
+        Args:
+            position: Position object
+            new_take_profit_price: New take-profit price
+
+        Returns:
+            New Order if successful, None otherwise
+        """
+        from .position_tracker import PositionSide
+        order_side = OrderSide.SELL if position.side == PositionSide.LONG else OrderSide.BUY
+
+        tp_order = Order(
+            id=str(uuid.uuid4()),
+            symbol=position.symbol,
+            side=order_side,
+            order_type=OrderType.TAKE_PROFIT,
+            size=position.size,
+            price=new_take_profit_price,
+        )
+
+        success = await self._place_order(tp_order)
+
+        if success:
+            async with self._lock:
+                self._open_orders[tp_order.id] = tp_order
+            await self._store_order(tp_order)
+            logger.info(f"Take-profit update placed: {tp_order.id} at {new_take_profit_price}")
+            return tp_order
+
+        return None
+
+    async def get_orders_for_position(self, position_id: str) -> list[Order]:
+        """
+        Get all orders related to a position.
+
+        F12: Used to find orphan orders when closing a position.
+
+        Args:
+            position_id: Position ID
+
+        Returns:
+            List of related orders
+        """
+        related_orders: list[Order] = []
+
+        # Check open orders
+        async with self._lock:
+            for order in self._open_orders.values():
+                # Check if order is related to this position
+                # (parent order created the position, or it's a SL/TP for the position)
+                if order.parent_order_id:
+                    # Get parent order and check if it created this position
+                    parent = self._open_orders.get(order.parent_order_id)
+                    if parent and parent.id == position_id:
+                        related_orders.append(order)
+
+        # Also check by position tracker's order links if available
+        if self.position_tracker:
+            position = await self.position_tracker.get_position(position_id)
+            if position:
+                if position.stop_loss_order_id:
+                    sl_order = await self.get_order(position.stop_loss_order_id)
+                    if sl_order and sl_order not in related_orders:
+                        related_orders.append(sl_order)
+                if position.take_profit_order_id:
+                    tp_order = await self.get_order(position.take_profit_order_id)
+                    if tp_order and tp_order not in related_orders:
+                        related_orders.append(tp_order)
+
+        return related_orders
+
+    async def cancel_orphan_orders(self, position_id: str) -> int:
+        """
+        Cancel all orphan orders for a closed position.
+
+        F12: When a position closes (via SL, TP, or manual), cancel the other order.
+
+        Args:
+            position_id: Position ID that was closed
+
+        Returns:
+            Number of orders cancelled
+        """
+        cancelled_count = 0
+        related_orders = await self.get_orders_for_position(position_id)
+
+        for order in related_orders:
+            if order.status in [OrderStatus.OPEN, OrderStatus.PENDING]:
+                success = await self.cancel_order(order.id)
+                if success:
+                    cancelled_count += 1
+                    logger.info(f"Cancelled orphan order {order.id} for position {position_id}")
+                else:
+                    logger.warning(f"Failed to cancel orphan order {order.id}")
+
+        return cancelled_count
+
+    async def handle_oco_fill(self, filled_order: Order) -> None:
+        """
+        Handle one-cancels-other logic when SL or TP fills.
+
+        F16: When SL fills, cancel TP (and vice versa).
+
+        Args:
+            filled_order: The order that was filled (SL or TP)
+        """
+        if not filled_order.parent_order_id:
+            return
+
+        # Get the parent order to find sibling orders
+        parent = await self.get_order(filled_order.parent_order_id)
+        if not parent:
+            return
+
+        # Determine which order to cancel
+        if filled_order.order_type == OrderType.STOP_LOSS:
+            # SL filled, cancel TP
+            if parent.take_profit_order_id:
+                await self.cancel_order(parent.take_profit_order_id)
+                logger.info(f"OCO: Cancelled TP {parent.take_profit_order_id} after SL fill")
+        elif filled_order.order_type == OrderType.TAKE_PROFIT:
+            # TP filled, cancel SL
+            if parent.stop_loss_order_id:
+                await self.cancel_order(parent.stop_loss_order_id)
+                logger.info(f"OCO: Cancelled SL {parent.stop_loss_order_id} after TP fill")
 
     def get_stats(self) -> dict:
         """Get execution statistics."""

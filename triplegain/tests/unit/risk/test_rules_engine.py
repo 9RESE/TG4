@@ -1576,3 +1576,400 @@ class TestWeeklyReset:
         # Should be cleared since it was the only breaker
         assert state.trading_halted is False
         assert 'weekly_loss' not in state.triggered_breakers
+
+
+# =============================================================================
+# F01: Risk/Reward Ratio Rejection Tests
+# =============================================================================
+
+class TestRiskRewardRejection:
+    """Test risk/reward ratio rejection (F01 fix)."""
+
+    def test_low_rr_ratio_rejected(self, risk_engine, healthy_risk_state):
+        """Trade with R:R below 1.5 should be REJECTED, not just warned."""
+        proposal = TradeProposal(
+            symbol="BTC/USDT",
+            side="buy",
+            size_usd=1000.0,
+            entry_price=45000.0,
+            stop_loss=44100.0,  # 2% risk (900 points)
+            take_profit=45500.0,  # 1.1% reward (500 points) - R:R = 0.56
+            leverage=1,
+            confidence=0.75,
+        )
+
+        result = risk_engine.validate_trade(proposal, healthy_risk_state)
+
+        assert result.status == ValidationStatus.REJECTED
+        assert any("LOW_RR" in r for r in result.rejections)
+
+    def test_good_rr_ratio_approved(self, risk_engine, healthy_risk_state):
+        """Trade with R:R >= 1.5 should be approved."""
+        proposal = TradeProposal(
+            symbol="BTC/USDT",
+            side="buy",
+            size_usd=1000.0,
+            entry_price=45000.0,
+            stop_loss=44100.0,  # 2% risk (900 points)
+            take_profit=46500.0,  # 3.3% reward (1500 points) - R:R = 1.67
+            leverage=1,
+            confidence=0.75,
+        )
+
+        result = risk_engine.validate_trade(proposal, healthy_risk_state)
+
+        assert result.is_approved()
+
+
+# =============================================================================
+# F02: Regime-Based Confidence Threshold Tests
+# =============================================================================
+
+class TestRegimeConfidenceThresholds:
+    """Test regime-based confidence thresholds (F02 fix)."""
+
+    def test_choppy_requires_high_confidence(self, risk_engine, healthy_risk_state):
+        """Choppy regime should require 0.75 confidence."""
+        proposal = TradeProposal(
+            symbol="BTC/USDT",
+            side="buy",
+            size_usd=1000.0,
+            entry_price=45000.0,
+            stop_loss=44100.0,
+            take_profit=47000.0,
+            leverage=1,
+            confidence=0.70,  # Below 0.75 required for choppy
+            regime="choppy",
+        )
+
+        result = risk_engine.validate_trade(proposal, healthy_risk_state)
+
+        assert result.status == ValidationStatus.REJECTED
+        assert any("CONFIDENCE_TOO_LOW" in r for r in result.rejections)
+
+    def test_trending_accepts_lower_confidence(self, risk_engine, healthy_risk_state):
+        """Trending regime should accept 0.55 confidence."""
+        proposal = TradeProposal(
+            symbol="BTC/USDT",
+            side="buy",
+            size_usd=1000.0,
+            entry_price=45000.0,
+            stop_loss=44100.0,
+            take_profit=47000.0,
+            leverage=1,
+            confidence=0.56,  # Above 0.55 required for trending
+            regime="trending_bull",
+        )
+
+        result = risk_engine.validate_trade(proposal, healthy_risk_state)
+
+        assert result.is_approved()
+
+    def test_volatile_requires_medium_confidence(self, risk_engine, healthy_risk_state):
+        """Volatile regime should require 0.65 confidence."""
+        proposal = TradeProposal(
+            symbol="BTC/USDT",
+            side="buy",
+            size_usd=1000.0,
+            entry_price=45000.0,
+            stop_loss=44100.0,
+            take_profit=47000.0,
+            leverage=1,
+            confidence=0.62,  # Below 0.65 required for volatile
+            regime="volatile_bull",
+        )
+
+        result = risk_engine.validate_trade(proposal, healthy_risk_state)
+
+        assert result.status == ValidationStatus.REJECTED
+
+
+# =============================================================================
+# F03: Consecutive Loss Size Reduction Tests
+# =============================================================================
+
+class TestConsecutiveLossSizeReduction:
+    """Test 50% size reduction after 5 consecutive losses (F03 fix)."""
+
+    def test_size_reduced_after_5_losses(self, risk_engine, healthy_risk_state):
+        """Position size should be reduced by 50% after 5 consecutive losses."""
+        healthy_risk_state.consecutive_losses = 5
+
+        proposal = TradeProposal(
+            symbol="BTC/USDT",
+            side="buy",
+            size_usd=1000.0,
+            entry_price=45000.0,
+            stop_loss=44100.0,
+            take_profit=47000.0,
+            leverage=1,
+            confidence=0.85,  # High enough to pass elevated confidence check
+            regime="trending_bull",
+        )
+
+        result = risk_engine.validate_trade(proposal, healthy_risk_state)
+
+        assert result.status == ValidationStatus.MODIFIED
+        assert result.modified_proposal.size_usd == 500.0  # 50% of 1000
+        assert 'consecutive_loss_reduction' in result.modifications
+        assert any("SIZE_REDUCED_LOSSES" in w for w in result.warnings)
+
+    def test_no_size_reduction_before_5_losses(self, risk_engine, healthy_risk_state):
+        """Position size should NOT be reduced before 5 consecutive losses."""
+        healthy_risk_state.consecutive_losses = 4
+
+        proposal = TradeProposal(
+            symbol="BTC/USDT",
+            side="buy",
+            size_usd=1000.0,
+            entry_price=45000.0,
+            stop_loss=44100.0,
+            take_profit=47000.0,
+            leverage=1,
+            confidence=0.85,
+            regime="trending_bull",
+        )
+
+        result = risk_engine.validate_trade(proposal, healthy_risk_state)
+
+        # Should be approved without size modification for consecutive losses
+        assert result.is_approved()
+        assert 'consecutive_loss_reduction' not in result.modifications
+
+
+# =============================================================================
+# F05: Trades Today Counter Tests
+# =============================================================================
+
+class TestTradesTodayCounter:
+    """Test trades_today counter (F05 fix)."""
+
+    def test_trades_today_increments_on_trade(self, risk_engine):
+        """trades_today should increment when recording trade result."""
+        assert risk_engine._risk_state.trades_today == 0
+
+        risk_engine.record_trade_result(is_win=True)
+        assert risk_engine._risk_state.trades_today == 1
+
+        risk_engine.record_trade_result(is_win=False)
+        assert risk_engine._risk_state.trades_today == 2
+
+    def test_trades_today_resets_daily(self, risk_engine):
+        """trades_today should reset to 0 on daily reset."""
+        risk_engine._risk_state.trades_today = 5
+
+        risk_engine.reset_daily()
+
+        assert risk_engine._risk_state.trades_today == 0
+
+    def test_trades_today_serialization(self):
+        """trades_today should be included in serialization."""
+        state = RiskState()
+        state.trades_today = 10
+
+        data = state.to_dict()
+        assert data['trades_today'] == 10
+
+        restored = RiskState.from_dict(data)
+        assert restored.trades_today == 10
+
+
+# =============================================================================
+# F06: Persist State Retry Tests
+# =============================================================================
+
+class TestPersistStateRetry:
+    """Test persist_state retry logic (F06 fix)."""
+
+    @pytest.mark.asyncio
+    async def test_persist_retries_on_failure(self, risk_engine):
+        """persist_state should retry on failure."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        mock_db = MagicMock()
+        # Fail first 2 times, succeed on 3rd
+        mock_db.execute = AsyncMock(
+            side_effect=[Exception("fail 1"), Exception("fail 2"), None]
+        )
+        risk_engine.db = mock_db
+
+        result = await risk_engine.persist_state(max_retries=3)
+
+        assert result is True
+        assert mock_db.execute.call_count == 3
+
+    @pytest.mark.asyncio
+    async def test_persist_fails_after_max_retries(self, risk_engine):
+        """persist_state should return False after max retries exceeded."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        mock_db = MagicMock()
+        mock_db.execute = AsyncMock(side_effect=Exception("always fail"))
+        risk_engine.db = mock_db
+
+        result = await risk_engine.persist_state(max_retries=2)
+
+        assert result is False
+        assert mock_db.execute.call_count == 2
+
+
+# =============================================================================
+# F10: Weekly Reset Non-Monday Tests
+# =============================================================================
+
+class TestWeeklyResetNonMonday:
+    """Test weekly reset triggers on any day of new week (F10 fix)."""
+
+    def test_weekly_reset_on_tuesday(self, risk_engine):
+        """Weekly reset should trigger on Tuesday if first validation of week."""
+        state = risk_engine._risk_state
+
+        # Set last reset to previous week (any day)
+        state.last_weekly_reset = datetime(2025, 12, 8, 12, 0, tzinfo=timezone.utc)  # Monday
+        state.weekly_pnl = Decimal("500")
+
+        # Simulate validation on Tuesday of next week
+        from unittest.mock import patch
+        tuesday = datetime(2025, 12, 16, 12, 0, tzinfo=timezone.utc)  # Tuesday
+
+        with patch('triplegain.src.risk.rules_engine.datetime') as mock_dt:
+            mock_dt.now.return_value = tuesday
+            mock_dt.fromisoformat = datetime.fromisoformat
+            risk_engine._check_and_reset_periods(state)
+
+        # Should have reset
+        assert state.weekly_pnl == Decimal("0")
+
+
+# =============================================================================
+# F11: Correlation Rejection Path Tests
+# =============================================================================
+
+class TestCorrelationRejection:
+    """Test correlated exposure rejection path (F11 fix)."""
+
+    def test_correlated_exposure_exceeds_max_rejected(self, risk_engine, healthy_risk_state):
+        """Trade causing correlated exposure over limit should be rejected."""
+        # Set max_correlated_exposure_pct to 40%
+        risk_engine.max_correlated_exposure_pct = 40
+
+        # Already holding BTC/USDT at 30% exposure
+        healthy_risk_state.open_position_symbols = ['BTC/USDT']
+        healthy_risk_state.position_exposures = {'BTC/USDT': 30.0}
+        healthy_risk_state.current_equity = Decimal("10000")
+
+        # Propose XRP/USDT trade (correlated with BTC at 0.75)
+        # With 30% BTC * 0.75 correlation = 22.5% correlated
+        # Plus new 20% = 42.5% > 40% limit
+        proposal = TradeProposal(
+            symbol="XRP/USDT",
+            side="buy",
+            size_usd=2000.0,  # 20% of $10k equity
+            entry_price=0.50,
+            stop_loss=0.49,
+            take_profit=0.55,
+            leverage=1,
+            confidence=0.75,
+        )
+
+        result = risk_engine.validate_trade(proposal, healthy_risk_state)
+
+        assert result.status == ValidationStatus.REJECTED
+        assert any("CORRELATED_EXPOSURE" in r for r in result.rejections)
+
+    def test_correlated_exposure_under_limit_approved(self, risk_engine, healthy_risk_state):
+        """Trade with correlated exposure under limit should be approved."""
+        # Set max_correlated_exposure_pct to 50%
+        risk_engine.max_correlated_exposure_pct = 50
+
+        # Already holding BTC/USDT at 15% exposure
+        healthy_risk_state.open_position_symbols = ['BTC/USDT']
+        healthy_risk_state.position_exposures = {'BTC/USDT': 15.0}
+        healthy_risk_state.current_equity = Decimal("10000")
+
+        # Propose small XRP/USDT trade
+        proposal = TradeProposal(
+            symbol="XRP/USDT",
+            side="buy",
+            size_usd=500.0,  # 5% of equity
+            entry_price=0.50,
+            stop_loss=0.49,
+            take_profit=0.55,
+            leverage=1,
+            confidence=0.75,
+        )
+
+        result = risk_engine.validate_trade(proposal, healthy_risk_state)
+
+        assert result.is_approved()
+
+
+# =============================================================================
+# TradeProposal Validation Edge Cases (F07)
+# =============================================================================
+
+class TestTradeProposalValidation:
+    """Test TradeProposal validation edge cases (F07)."""
+
+    def test_empty_symbol_raises(self):
+        """Empty symbol should raise validation error."""
+        from triplegain.src.risk.rules_engine import TradeProposalValidationError
+
+        with pytest.raises(TradeProposalValidationError):
+            TradeProposal(symbol="", side="buy", size_usd=100, entry_price=50)
+
+    def test_invalid_side_raises(self):
+        """Invalid side should raise validation error."""
+        from triplegain.src.risk.rules_engine import TradeProposalValidationError
+
+        with pytest.raises(TradeProposalValidationError):
+            TradeProposal(symbol="BTC/USDT", side="invalid", size_usd=100, entry_price=50)
+
+    def test_negative_size_raises(self):
+        """Negative size should raise validation error."""
+        from triplegain.src.risk.rules_engine import TradeProposalValidationError
+
+        with pytest.raises(TradeProposalValidationError):
+            TradeProposal(symbol="BTC/USDT", side="buy", size_usd=-100, entry_price=50)
+
+    def test_zero_size_raises(self):
+        """Zero size should raise validation error."""
+        from triplegain.src.risk.rules_engine import TradeProposalValidationError
+
+        with pytest.raises(TradeProposalValidationError):
+            TradeProposal(symbol="BTC/USDT", side="buy", size_usd=0, entry_price=50)
+
+    def test_negative_entry_price_raises(self):
+        """Negative entry price should raise validation error."""
+        from triplegain.src.risk.rules_engine import TradeProposalValidationError
+
+        with pytest.raises(TradeProposalValidationError):
+            TradeProposal(symbol="BTC/USDT", side="buy", size_usd=100, entry_price=-50)
+
+    def test_invalid_leverage_raises(self):
+        """Leverage < 1 should raise validation error."""
+        from triplegain.src.risk.rules_engine import TradeProposalValidationError
+
+        with pytest.raises(TradeProposalValidationError):
+            TradeProposal(symbol="BTC/USDT", side="buy", size_usd=100, entry_price=50, leverage=0)
+
+    def test_invalid_confidence_raises(self):
+        """Confidence outside 0-1 should raise validation error."""
+        from triplegain.src.risk.rules_engine import TradeProposalValidationError
+
+        with pytest.raises(TradeProposalValidationError):
+            TradeProposal(symbol="BTC/USDT", side="buy", size_usd=100, entry_price=50, confidence=1.5)
+
+    def test_buy_stop_above_entry_raises(self):
+        """Buy with stop loss above entry should raise validation error."""
+        from triplegain.src.risk.rules_engine import TradeProposalValidationError
+
+        with pytest.raises(TradeProposalValidationError):
+            TradeProposal(symbol="BTC/USDT", side="buy", size_usd=100, entry_price=50, stop_loss=55)
+
+    def test_sell_stop_below_entry_raises(self):
+        """Sell with stop loss below entry should raise validation error."""
+        from triplegain.src.risk.rules_engine import TradeProposalValidationError
+
+        with pytest.raises(TradeProposalValidationError):
+            TradeProposal(symbol="BTC/USDT", side="sell", size_usd=100, entry_price=50, stop_loss=45)

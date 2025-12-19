@@ -94,15 +94,47 @@ class ScheduledTask:
     last_run: Optional[datetime] = None
     enabled: bool = True
     run_on_start: bool = False
+    depends_on: list[str] = field(default_factory=list)
+    timeout_seconds: int = 30  # F08: Individual task timeout
+    max_concurrent_symbols: int = 3  # F05: Max parallel symbol executions
+    # F01: Concurrent execution guard
+    _running: bool = field(default=False, repr=False)
+    _started_at: Optional[datetime] = field(default=None, repr=False)
+    _lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
 
     def is_due(self, now: datetime) -> bool:
         """Check if task is due for execution."""
         if not self.enabled:
             return False
+        # F01: Don't run if already running
+        if self._running:
+            return False
         if self.last_run is None:
             return self.run_on_start
         elapsed = (now - self.last_run).total_seconds()
         return elapsed >= self.interval_seconds
+
+    def dependencies_satisfied(self, task_map: dict[str, 'ScheduledTask']) -> bool:
+        """
+        Check if all dependencies have run more recently than this task.
+
+        F03: Task dependency enforcement - ensures tasks run in correct order.
+        """
+        if not self.depends_on:
+            return True
+
+        for dep_name in self.depends_on:
+            dep_task = task_map.get(dep_name)
+            if not dep_task:
+                logger.warning(f"Task {self.name} depends on unknown task: {dep_name}")
+                continue
+            if dep_task.last_run is None:
+                # Dependency hasn't run yet
+                return False
+            if self.last_run and dep_task.last_run < self.last_run:
+                # Dependency hasn't run since we last ran
+                return False
+        return True
 
 
 @dataclass
@@ -186,6 +218,30 @@ class CoordinatorAgent:
         self._consecutive_llm_failures = 0
         self._consecutive_api_failures = 0
         self._max_failures_for_degradation = 3
+
+        # F04: Hysteresis for degradation recovery
+        self._recovery_threshold = config.get('degradation', {}).get('recovery_threshold', 3)
+        self._success_count_for_recovery = 0
+
+        # F07: Thread safety for scheduled trades
+        self._scheduled_trades: list = []
+        self._scheduled_trades_lock = asyncio.Lock()
+
+        # F06: Track in-flight tasks for restart recovery
+        self._task_map: dict[str, ScheduledTask] = {}  # name -> task for dependency lookup
+
+        # F15: Emergency config-driven response
+        self._emergency_config = config.get('emergency', {})
+
+        # F16: Consensus thresholds (configurable)
+        consensus_config = config.get('consensus', {})
+        self._consensus_high_threshold = consensus_config.get('high_agreement_threshold', 0.66)
+        self._consensus_low_threshold = consensus_config.get('low_agreement_threshold', 0.33)
+        self._consensus_max_boost = consensus_config.get('max_confidence_boost', 0.30)
+        self._consensus_max_penalty = consensus_config.get('max_confidence_penalty', 0.15)
+
+        # F02: Max concurrent tasks to prevent starvation
+        self._max_concurrent_tasks = config.get('schedules', {}).get('max_concurrent_tasks', 5)
 
         # LLM configuration
         llm_config = config.get('llm', {})
@@ -293,23 +349,49 @@ class CoordinatorAgent:
             asyncio.create_task(self._publish_degradation_event(old_level, new_level))
 
     def _record_llm_success(self) -> None:
-        """Record successful LLM call and potentially recover from degradation."""
-        self._consecutive_llm_failures = 0
+        """
+        Record successful LLM call with gradual recovery (F04 fix).
+
+        Uses hysteresis to prevent rapid oscillation between degradation levels.
+        Multiple consecutive successes are required to recover, but a single
+        success contributes to the recovery counter.
+        """
+        self._success_count_for_recovery += 1
+        if self._success_count_for_recovery >= self._recovery_threshold:
+            # Only decrement (not reset to 0) for gradual recovery
+            if self._consecutive_llm_failures > 0:
+                self._consecutive_llm_failures -= 1
+                logger.debug(
+                    f"LLM recovery progress: {self._success_count_for_recovery} successes, "
+                    f"failures now: {self._consecutive_llm_failures}"
+                )
+            self._success_count_for_recovery = 0
         self._check_degradation_level()
 
     def _record_llm_failure(self) -> None:
-        """Record LLM failure and potentially increase degradation."""
+        """
+        Record LLM failure and potentially increase degradation (F04 fix).
+
+        Resets recovery progress on failure to prevent oscillation.
+        """
         self._consecutive_llm_failures += 1
+        self._success_count_for_recovery = 0  # Reset recovery progress
         self._check_degradation_level()
 
     def _record_api_success(self) -> None:
-        """Record successful API call and potentially recover from degradation."""
-        self._consecutive_api_failures = 0
+        """Record successful API call with gradual recovery."""
+        # API success also contributes to recovery
+        self._success_count_for_recovery += 1
+        if self._success_count_for_recovery >= self._recovery_threshold:
+            if self._consecutive_api_failures > 0:
+                self._consecutive_api_failures -= 1
+            self._success_count_for_recovery = 0
         self._check_degradation_level()
 
     def _record_api_failure(self) -> None:
         """Record API failure and potentially increase degradation."""
         self._consecutive_api_failures += 1
+        self._success_count_for_recovery = 0  # Reset recovery progress
         self._check_degradation_level()
 
     async def _publish_degradation_event(
@@ -351,29 +433,103 @@ class CoordinatorAgent:
                 await asyncio.sleep(5)  # Back off on errors
 
     async def _execute_due_tasks(self) -> None:
-        """Execute tasks that are due for execution."""
+        """
+        Execute tasks that are due for execution.
+
+        F01: Concurrent task execution guard prevents same task running twice
+        F02: Parallel task execution prevents starvation from slow tasks
+        F03: Task dependency enforcement ensures correct execution order
+        F05: Parallel symbol execution within tasks for performance
+        F08: Individual task timeouts prevent indefinite blocking
+        """
         now = datetime.now(timezone.utc)
 
         # Execute scheduled DCA trades first
         await self._execute_scheduled_trades()
 
+        # Collect due tasks that satisfy dependencies
+        due_tasks = []
         for task in self._scheduled_tasks:
             if not task.is_due(now):
                 continue
+            # F03: Check dependencies
+            if not task.dependencies_satisfied(self._task_map):
+                logger.debug(f"Task {task.name} waiting for dependencies: {task.depends_on}")
+                continue
+            due_tasks.append(task)
 
-            for symbol in task.symbols:
+        if not due_tasks:
+            return
+
+        # F02: Execute tasks concurrently with semaphore to prevent starvation
+        semaphore = asyncio.Semaphore(self._max_concurrent_tasks)
+
+        async def execute_task(task: ScheduledTask) -> None:
+            """Execute a single task with all its symbols."""
+            # F01: Acquire lock and check if already running
+            async with task._lock:
+                if task._running:
+                    logger.debug(f"Task {task.name} already running, skipping")
+                    return
+                task._running = True
+                task._started_at = datetime.now(timezone.utc)
+
+            try:
+                async with semaphore:
+                    await self._execute_task_for_symbols(task)
+                    task.last_run = datetime.now(timezone.utc)
+            finally:
+                task._running = False
+                task._started_at = None
+
+        # Execute all due tasks concurrently
+        await asyncio.gather(
+            *[execute_task(t) for t in due_tasks],
+            return_exceptions=True
+        )
+
+    async def _execute_task_for_symbols(self, task: ScheduledTask) -> None:
+        """
+        Execute task for all symbols in parallel (F05).
+
+        Uses semaphore to limit concurrent symbol executions.
+        """
+        # F05: Execute symbols in parallel with semaphore
+        symbol_semaphore = asyncio.Semaphore(task.max_concurrent_symbols)
+
+        async def run_for_symbol(symbol: str) -> None:
+            async with symbol_semaphore:
                 try:
+                    # F08: Apply timeout to individual agent execution
                     logger.debug(f"Executing task {task.name} for {symbol}")
-                    await task.handler(symbol)
+                    await asyncio.wait_for(
+                        task.handler(symbol),
+                        timeout=task.timeout_seconds
+                    )
                     self._total_task_runs += 1
+                except asyncio.TimeoutError:
+                    logger.error(f"Task {task.name} timed out for {symbol} after {task.timeout_seconds}s")
+                    self._record_api_failure()
+                    await self._handle_task_error(
+                        task, symbol,
+                        TimeoutError(f"Task timed out after {task.timeout_seconds}s")
+                    )
                 except Exception as e:
                     logger.error(f"Task {task.name} failed for {symbol}: {e}", exc_info=True)
                     await self._handle_task_error(task, symbol, e)
 
-            task.last_run = now
+        await asyncio.gather(
+            *[run_for_symbol(s) for s in task.symbols],
+            return_exceptions=True
+        )
 
     def _setup_schedules(self) -> None:
-        """Configure scheduled tasks from config."""
+        """
+        Configure scheduled tasks from config.
+
+        F03: Now includes dependency loading from config.
+        F08: Includes timeout_seconds from config.
+        """
         schedules = self.config.get('schedules', {})
         symbols = self.config.get('symbols', ['BTC/USDT', 'XRP/USDT'])
 
@@ -386,7 +542,10 @@ class CoordinatorAgent:
                 interval_seconds=ta_config.get('interval_seconds', 60),
                 symbols=symbols,
                 handler=self._run_ta_agent,
-                run_on_start=True,
+                run_on_start=ta_config.get('run_on_start', True),
+                depends_on=[],  # No dependencies
+                timeout_seconds=ta_config.get('timeout_seconds', 30),
+                max_concurrent_symbols=ta_config.get('max_concurrent', 3),
             ))
 
         # Regime Detection - every 5 minutes
@@ -398,6 +557,10 @@ class CoordinatorAgent:
                 interval_seconds=regime_config.get('interval_seconds', 300),
                 symbols=symbols,
                 handler=self._run_regime_agent,
+                run_on_start=regime_config.get('run_on_start', False),
+                depends_on=regime_config.get('depends_on', ['ta_analysis']),  # F03
+                timeout_seconds=regime_config.get('timeout_seconds', 30),
+                max_concurrent_symbols=regime_config.get('max_concurrent', 3),
             ))
 
         # Sentiment Analysis - every 30 minutes (Phase 4, disabled by default)
@@ -409,6 +572,10 @@ class CoordinatorAgent:
                 interval_seconds=sentiment_config.get('interval_seconds', 1800),
                 symbols=symbols,
                 handler=self._run_sentiment_agent,
+                run_on_start=sentiment_config.get('run_on_start', False),
+                depends_on=sentiment_config.get('depends_on', []),
+                timeout_seconds=sentiment_config.get('timeout_seconds', 60),
+                max_concurrent_symbols=sentiment_config.get('max_concurrent', 3),
             ))
 
         # Trading Decision - every hour
@@ -420,6 +587,10 @@ class CoordinatorAgent:
                 interval_seconds=trading_config.get('interval_seconds', 3600),
                 symbols=symbols,
                 handler=self._run_trading_agent,
+                run_on_start=trading_config.get('run_on_start', False),
+                depends_on=trading_config.get('depends_on', ['ta_analysis', 'regime_detection']),  # F03
+                timeout_seconds=trading_config.get('timeout_seconds', 60),
+                max_concurrent_symbols=trading_config.get('max_concurrent', 3),
             ))
 
         # Portfolio Rebalance - every hour
@@ -431,7 +602,14 @@ class CoordinatorAgent:
                 interval_seconds=rebalance_config.get('interval_seconds', 3600),
                 symbols=["PORTFOLIO"],
                 handler=self._check_portfolio_allocation,
+                run_on_start=rebalance_config.get('run_on_start', False),
+                depends_on=rebalance_config.get('depends_on', []),
+                timeout_seconds=rebalance_config.get('timeout_seconds', 30),
+                max_concurrent_symbols=1,  # Portfolio is single entity
             ))
+
+        # F03/F06: Build task map for dependency lookup and in-flight tracking
+        self._task_map = {task.name: task for task in self._scheduled_tasks}
 
         logger.info(f"Configured {len(self._scheduled_tasks)} scheduled tasks")
 
@@ -457,6 +635,59 @@ class CoordinatorAgent:
             topic=MessageTopic.EXECUTION_EVENTS,
             handler=self._handle_execution_event,
         )
+
+        # F13: Subscribe to coordinator commands (pause, resume, etc.)
+        await self.bus.subscribe(
+            subscriber_id=self.agent_name,
+            topic=MessageTopic.COORDINATOR_COMMANDS,
+            handler=self._handle_coordinator_command,
+        )
+
+    async def _handle_coordinator_command(self, message: Message) -> None:
+        """
+        Handle coordinator commands (F13).
+
+        Supported commands:
+        - pause: Pause trading (analysis continues)
+        - resume: Resume trading
+        - halt: Emergency halt
+        - enable_task: Enable a specific task
+        - disable_task: Disable a specific task
+        - force_run: Force immediate task execution
+        """
+        command = message.payload.get("command", "")
+        params = message.payload.get("params", {})
+
+        logger.info(f"Received coordinator command: {command}")
+
+        if command == "pause":
+            await self.pause()
+        elif command == "resume":
+            await self.resume()
+        elif command == "halt":
+            self._state = CoordinatorState.HALTED
+            logger.warning("Coordinator halted via command")
+        elif command == "enable_task":
+            task_name = params.get("task_name", "")
+            if self.enable_task(task_name):
+                logger.info(f"Task {task_name} enabled via command")
+            else:
+                logger.warning(f"Failed to enable task: {task_name}")
+        elif command == "disable_task":
+            task_name = params.get("task_name", "")
+            if self.disable_task(task_name):
+                logger.info(f"Task {task_name} disabled via command")
+            else:
+                logger.warning(f"Failed to disable task: {task_name}")
+        elif command == "force_run":
+            task_name = params.get("task_name", "")
+            symbol = params.get("symbol", "")
+            if await self.force_run_task(task_name, symbol):
+                logger.info(f"Force ran task {task_name} for {symbol}")
+            else:
+                logger.warning(f"Failed to force run task: {task_name}")
+        else:
+            logger.warning(f"Unknown coordinator command: {command}")
 
     # -------------------------------------------------------------------------
     # Agent Execution Handlers
@@ -622,15 +853,104 @@ class CoordinatorAgent:
         await self._route_to_execution(signal)
 
     async def _handle_risk_alert(self, message: Message) -> None:
-        """Handle risk alerts (circuit breaker, etc.)."""
+        """
+        Handle risk alerts with config-driven responses (F15).
+
+        Uses emergency config to determine actions:
+        - daily_loss: pause_trading
+        - weekly_loss: reduce_positions
+        - max_drawdown: halt_all, close_positions
+
+        Falls back to severity-based handling if breach_type not configured.
+        """
         alert = message.payload
         alert_type = alert.get("alert_type", "")
+        breach_type = alert.get("breach_type", "")  # e.g., "daily_loss", "weekly_loss", "max_drawdown"
+        severity = alert.get("severity", "low")
 
         if alert_type == "circuit_breaker":
-            severity = alert.get("severity", "low")
-            if severity in ["high", "critical"]:
+            # F15: Get config-driven action for this breach type
+            cb_config = self._emergency_config.get('circuit_breaker', {})
+            breach_config = cb_config.get(breach_type, {})
+            action = breach_config.get('action', None)
+
+            # If no config for this breach_type, fall back to severity-based handling
+            if action is None:
+                if severity in ["high", "critical"]:
+                    action = 'halt_all'
+                else:
+                    action = 'pause_trading'
+
+            logger.warning(f"Circuit breaker triggered: {breach_type or severity} - {alert.get('message')}")
+
+            if action == 'halt_all':
                 self._state = CoordinatorState.HALTED
-                logger.warning(f"Circuit breaker triggered: {alert.get('message')}")
+                logger.warning("Emergency: Halting all operations")
+
+                # Check if we should close positions
+                if breach_config.get('close_positions', False):
+                    await self._emergency_close_positions()
+
+            elif action == 'pause_trading':
+                await self.pause()
+                logger.warning("Emergency: Paused trading")
+
+            elif action == 'reduce_positions':
+                reduction_pct = breach_config.get('reduction_pct', 50)
+                await self._emergency_reduce_positions(reduction_pct)
+                logger.warning(f"Emergency: Reducing positions by {reduction_pct}%")
+
+            # Notify if configured
+            if breach_config.get('notify', True):
+                await self._publish_emergency_notification(breach_type, action, alert)
+
+    async def _emergency_close_positions(self) -> None:
+        """Close all positions in emergency (F15)."""
+        if not self.execution_manager:
+            logger.error("Cannot close positions: no execution manager")
+            return
+
+        try:
+            # This would need to be implemented in execution manager
+            if hasattr(self.execution_manager, 'close_all_positions'):
+                await self.execution_manager.close_all_positions()
+                logger.warning("All positions closed due to emergency")
+        except Exception as e:
+            logger.error(f"Failed to close positions in emergency: {e}")
+
+    async def _emergency_reduce_positions(self, reduction_pct: int) -> None:
+        """Reduce positions by percentage in emergency (F15)."""
+        if not self.execution_manager:
+            logger.error("Cannot reduce positions: no execution manager")
+            return
+
+        try:
+            # This would need to be implemented in execution manager
+            if hasattr(self.execution_manager, 'reduce_positions'):
+                await self.execution_manager.reduce_positions(reduction_pct)
+                logger.warning(f"Positions reduced by {reduction_pct}% due to emergency")
+        except Exception as e:
+            logger.error(f"Failed to reduce positions in emergency: {e}")
+
+    async def _publish_emergency_notification(
+        self,
+        breach_type: str,
+        action: str,
+        alert: dict,
+    ) -> None:
+        """Publish emergency notification (F15)."""
+        await self.bus.publish(create_message(
+            topic=MessageTopic.SYSTEM_EVENTS,
+            source=self.agent_name,
+            payload={
+                "event": "emergency_action",
+                "breach_type": breach_type,
+                "action_taken": action,
+                "alert_message": alert.get("message", ""),
+                "severity": alert.get("severity", "unknown"),
+            },
+            priority=MessagePriority.URGENT,
+        ))
 
     async def _handle_execution_event(self, message: Message) -> None:
         """Handle execution events (fills, cancels, errors)."""
@@ -671,6 +991,9 @@ class CoordinatorAgent:
 
         When multiple agents agree on direction, amplify confidence.
         Returns a confidence multiplier (1.0 = no change, >1.0 = amplified).
+
+        F11: Documented consensus formula
+        F16: Uses configurable thresholds from config
         """
         agreement_count = 0
         total_agents = 0
@@ -719,19 +1042,60 @@ class CoordinatorAgent:
 
         agreement_ratio = agreement_count / total_agents
 
-        # Amplify confidence based on agreement
-        # 100% agreement = 1.3x, 66% = 1.15x, 33% = 1.0x, 0% = 0.85x
-        if agreement_ratio >= 0.66:
-            multiplier = 1.0 + (agreement_ratio - 0.5) * 0.6  # 1.0 to 1.3
-        elif agreement_ratio >= 0.33:
-            multiplier = 1.0  # Neutral
-        else:
-            multiplier = 0.85 + agreement_ratio * 0.45  # 0.85 to 1.0
+        # F11/F16: Calculate multiplier with documented formula and configurable thresholds
+        multiplier = self._calculate_consensus_multiplier(agreement_ratio)
 
         logger.info(
             f"Consensus: {agreement_count}/{total_agents} agents agree, "
             f"confidence multiplier: {multiplier:.2f}"
         )
+        return multiplier
+
+    def _calculate_consensus_multiplier(self, agreement_ratio: float) -> float:
+        """
+        Calculate confidence multiplier based on agent agreement (F11, F16).
+
+        Rationale:
+        - High agreement (default 66%+): Boost confidence up to 30%
+          When most independent signals agree, we have higher conviction
+        - Moderate agreement (33-66%): No adjustment
+          Mixed signals warrant neither boost nor penalty
+        - Low agreement (<33%): Reduce confidence up to 15%
+          Conflicting signals suggest caution
+
+        This encourages trading when multiple independent signals agree
+        while being cautious when signals conflict.
+
+        Formula:
+        - High: 1.0 + (agreement_ratio - 0.5) * (max_boost * 2)
+          At 66%, multiplier = 1.0 + (0.66 - 0.5) * 0.6 = 1.096
+          At 100%, multiplier = 1.0 + (1.0 - 0.5) * 0.6 = 1.3
+        - Low: (1.0 - max_penalty) + agreement_ratio * (max_penalty / low_threshold)
+          At 0%, multiplier = 0.85 + 0 = 0.85
+          At 33%, multiplier = 0.85 + 0.33 * 0.45 = ~1.0
+
+        Args:
+            agreement_ratio: Fraction of agents that agree (0.0 to 1.0)
+
+        Returns:
+            Confidence multiplier (typically 0.85 to 1.3)
+        """
+        # F16: Use configurable thresholds
+        high_threshold = self._consensus_high_threshold  # Default: 0.66
+        low_threshold = self._consensus_low_threshold    # Default: 0.33
+        max_boost = self._consensus_max_boost            # Default: 0.30
+        max_penalty = self._consensus_max_penalty        # Default: 0.15
+
+        if agreement_ratio >= high_threshold:
+            # High agreement: Linear interpolation from 1.0 at 50% to (1.0 + max_boost) at 100%
+            multiplier = 1.0 + (agreement_ratio - 0.5) * (max_boost * 2)
+        elif agreement_ratio >= low_threshold:
+            # Moderate agreement: No adjustment
+            multiplier = 1.0
+        else:
+            # Low agreement: Linear interpolation from (1.0 - max_penalty) at 0% to 1.0 at low_threshold
+            multiplier = (1.0 - max_penalty) + agreement_ratio * (max_penalty / low_threshold)
+
         return multiplier
 
     async def _detect_conflicts(self, signal: dict) -> list[ConflictInfo]:
@@ -902,7 +1266,13 @@ Based on this information, what action should be taken?
 Remember to respond in JSON format with action, confidence, reasoning, and optional modifications."""
 
     async def _call_llm_for_resolution(self, prompt: str) -> str:
-        """Call LLM for conflict resolution with fallback."""
+        """
+        Call LLM for conflict resolution with fallback (F14 fix).
+
+        Explicitly catches exceptions from both primary and fallback LLMs
+        to provide clear error messages.
+        """
+        # Try primary model
         try:
             response = await self.llm.generate(
                 model=self._primary_model,
@@ -912,8 +1282,10 @@ Remember to respond in JSON format with action, confidence, reasoning, and optio
             )
             return response.text
         except Exception as e:
-            logger.warning(f"Primary LLM failed, trying fallback: {e}")
-            # Fallback to Claude Sonnet
+            logger.warning(f"Primary LLM ({self._primary_model}) failed: {e}")
+
+        # F14: Try fallback with explicit exception handling
+        try:
             response = await self.llm.generate(
                 model=self._fallback_model,
                 system_prompt=COORDINATOR_SYSTEM_PROMPT,
@@ -921,6 +1293,9 @@ Remember to respond in JSON format with action, confidence, reasoning, and optio
                 max_tokens=500,
             )
             return response.text
+        except Exception as e:
+            logger.error(f"Fallback LLM ({self._fallback_model}) also failed: {e}")
+            raise RuntimeError(f"All LLM providers failed for conflict resolution") from e
 
     def _parse_resolution(self, response_text: str) -> ConflictResolution:
         """Parse LLM response into ConflictResolution."""
@@ -1082,13 +1457,16 @@ Remember to respond in JSON format with action, confidence, reasoning, and optio
                 logger.error(f"Rebalance trade error for {trade.symbol}: {e}")
 
     async def _store_scheduled_trades(self, trades: list) -> None:
-        """Store scheduled DCA trades for later execution."""
+        """
+        Store scheduled DCA trades for later execution (F07 fix).
+
+        Thread-safe: uses lock when modifying in-memory list.
+        """
         if not self.db:
             logger.warning("No database configured - scheduled trades will not persist")
-            # Store in memory as fallback
-            if not hasattr(self, '_scheduled_trades'):
-                self._scheduled_trades = []
-            self._scheduled_trades.extend(trades)
+            # F07: Store in memory with lock for thread safety
+            async with self._scheduled_trades_lock:
+                self._scheduled_trades.extend(trades)
             return
 
         try:
@@ -1111,17 +1489,27 @@ Remember to respond in JSON format with action, confidence, reasoning, and optio
             logger.error(f"Failed to store scheduled trades: {e}")
 
     async def _execute_scheduled_trades(self) -> None:
-        """Execute any scheduled trades that are due."""
+        """
+        Execute any scheduled trades that are due (F07 fix).
+
+        Thread-safe: uses lock when accessing in-memory list.
+        """
         now = datetime.now(timezone.utc)
 
-        # Check in-memory scheduled trades
-        if hasattr(self, '_scheduled_trades') and self._scheduled_trades:
-            due_trades = [t for t in self._scheduled_trades if t.scheduled_time <= now]
-            if due_trades:
-                logger.info(f"Executing {len(due_trades)} scheduled DCA trades from memory")
+        # F07: Check in-memory scheduled trades with lock
+        due_trades = []
+        async with self._scheduled_trades_lock:
+            if self._scheduled_trades:
+                due_trades = [t for t in self._scheduled_trades if t.scheduled_time <= now]
+                # Remove due trades from list while holding lock
                 for trade in due_trades:
-                    await self._execute_single_rebalance_trade(trade)
                     self._scheduled_trades.remove(trade)
+
+        # Execute outside lock to avoid blocking
+        if due_trades:
+            logger.info(f"Executing {len(due_trades)} scheduled DCA trades from memory")
+            for trade in due_trades:
+                await self._execute_single_rebalance_trade(trade)
 
         # Check database scheduled trades
         if self.db:
@@ -1268,10 +1656,10 @@ Remember to respond in JSON format with action, confidence, reasoning, and optio
 
     async def persist_state(self) -> bool:
         """
-        Persist coordinator state to database.
+        Persist coordinator state to database (F06 fix).
 
-        Saves task schedules, statistics, and enabled/disabled state
-        to survive restarts.
+        Saves task schedules, statistics, enabled/disabled state,
+        AND in-flight tasks to survive restarts.
 
         Returns:
             True if persisted successfully
@@ -1280,6 +1668,16 @@ Remember to respond in JSON format with action, confidence, reasoning, and optio
             return False
 
         try:
+            # F06: Track in-flight tasks
+            in_flight_tasks = [
+                {
+                    "name": t.name,
+                    "started_at": t._started_at.isoformat() if t._started_at else None,
+                }
+                for t in self._scheduled_tasks
+                if t._running
+            ]
+
             state_data = {
                 "state": self._state.value,
                 "statistics": {
@@ -1295,6 +1693,7 @@ Remember to respond in JSON format with action, confidence, reasoning, and optio
                     }
                     for t in self._scheduled_tasks
                 },
+                "in_flight_tasks": in_flight_tasks,  # F06
             }
 
             query = """
@@ -1319,10 +1718,10 @@ Remember to respond in JSON format with action, confidence, reasoning, and optio
 
     async def load_state(self) -> bool:
         """
-        Load coordinator state from database.
+        Load coordinator state from database (F06 fix).
 
-        Restores task schedules, statistics, and enabled/disabled state
-        from last session.
+        Restores task schedules, statistics, enabled/disabled state,
+        AND handles in-flight tasks from last session.
 
         Returns:
             True if state loaded successfully
@@ -1358,6 +1757,36 @@ Remember to respond in JSON format with action, confidence, reasoning, and optio
                     last_run = task_state.get("last_run")
                     if last_run:
                         task.last_run = datetime.fromisoformat(last_run)
+
+            # F06: Handle in-flight tasks from previous session
+            in_flight = state_data.get("in_flight_tasks", [])
+            if in_flight:
+                task_names = [t['name'] for t in in_flight]
+                logger.warning(
+                    f"Detected {len(in_flight)} in-flight tasks from previous session: "
+                    f"{task_names}"
+                )
+                # Mark these tasks for immediate re-run by setting last_run to None
+                # This ensures they run on next schedule check
+                for in_flight_task in in_flight:
+                    task_name = in_flight_task.get('name')
+                    if task_name in self._task_map:
+                        task = self._task_map[task_name]
+                        # Option: Re-run immediately by marking run_on_start
+                        task.run_on_start = True
+                        logger.info(f"Task {task_name} marked for immediate re-run")
+
+                # Publish alert about in-flight tasks
+                await self.bus.publish(create_message(
+                    topic=MessageTopic.SYSTEM_EVENTS,
+                    source=self.agent_name,
+                    payload={
+                        "event": "in_flight_tasks_recovered",
+                        "tasks": task_names,
+                        "action": "marked_for_rerun",
+                    },
+                    priority=MessagePriority.HIGH,
+                ))
 
             logger.info("Coordinator state loaded from database")
             return True

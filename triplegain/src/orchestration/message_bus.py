@@ -185,12 +185,25 @@ class MessageBus:
         Thread-safe: Handlers are called OUTSIDE the lock to prevent deadlock
         if a handler tries to publish a message.
 
+        F12: Validates message before publishing.
+
         Args:
             message: Message to publish
 
         Returns:
             Number of subscribers notified
+
+        Raises:
+            ValueError: If message is invalid
         """
+        # F12: Validate message before publishing
+        if not message.topic:
+            raise ValueError("Message must have a topic")
+        if not message.source:
+            raise ValueError("Message must have a source")
+        if message.ttl_seconds <= 0:
+            raise ValueError("Message TTL must be positive")
+
         # Phase 1: Under lock - update history and get subscribers snapshot
         async with self._lock:
             # Store in history
@@ -393,8 +406,29 @@ class MessageBus:
                 return len(self._subscriptions.get(topic, []))
             return sum(len(subs) for subs in self._subscriptions.values())
 
-    def get_stats(self) -> dict:
-        """Get message bus statistics."""
+    async def get_stats(self) -> dict:
+        """
+        Get message bus statistics (F10 fix).
+
+        Thread-safe: acquires lock to ensure consistent snapshot of stats.
+        """
+        async with self._lock:
+            return {
+                "total_published": self._total_published,
+                "total_delivered": self._total_delivered,
+                "delivery_errors": self._delivery_errors,
+                "history_size": len(self._message_history),
+                "subscriber_count": sum(len(s) for s in self._subscriptions.values()),
+                "topics_active": len([t for t, s in self._subscriptions.items() if s]),
+            }
+
+    def get_stats_sync(self) -> dict:
+        """
+        Get message bus statistics (synchronous version).
+
+        Note: May return slightly inconsistent data if called during publish.
+        Use async get_stats() for guaranteed consistency.
+        """
         return {
             "total_published": self._total_published,
             "total_delivered": self._total_delivered,

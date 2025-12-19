@@ -71,6 +71,10 @@ position_tracking:
   # How often to capture position snapshots (seconds)
   snapshot_interval_seconds: 60
 
+  # F09: How often to check SL/TP triggers (seconds)
+  # Faster than snapshots for quicker stop-loss execution
+  trigger_check_interval_seconds: 5
+
   # Maximum snapshots to keep in memory
   max_snapshots: 10000
 

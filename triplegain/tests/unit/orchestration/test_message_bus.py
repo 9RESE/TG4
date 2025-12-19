@@ -521,11 +521,16 @@ class TestMessageBus:
         msg = create_message(topic=MessageTopic.TA_SIGNALS, source="test", payload={})
         await message_bus.publish(msg)
 
-        stats = message_bus.get_stats()
+        # Use sync version for non-critical stats check
+        stats = message_bus.get_stats_sync()
         assert stats["total_published"] == 1
         assert stats["total_delivered"] == 1
         assert stats["history_size"] == 1
         assert stats["subscriber_count"] == 1
+
+        # Also test async version
+        async_stats = await message_bus.get_stats()
+        assert async_stats["total_published"] == 1
 
     @pytest.mark.asyncio
     async def test_start_stop(self, message_bus):

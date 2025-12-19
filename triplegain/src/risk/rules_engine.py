@@ -37,6 +37,19 @@ PAIR_CORRELATIONS = {
     ('XRP/USDT', 'XRP/BTC'): 0.85,
 }
 
+# Regime-based confidence thresholds - per design spec
+# Higher confidence required in choppy/volatile conditions
+REGIME_CONFIDENCE_THRESHOLDS = {
+    'trending_bull': 0.55,
+    'trending_bear': 0.55,
+    'ranging': 0.60,
+    'volatile_bull': 0.65,
+    'volatile_bear': 0.65,
+    'choppy': 0.75,
+    'breakout_potential': 0.60,
+    'unknown': 0.70,
+}
+
 
 class ValidationStatus(Enum):
     """Trade validation result status."""
@@ -195,6 +208,7 @@ class RiskState:
     # Trade tracking
     consecutive_losses: int = 0
     consecutive_wins: int = 0
+    trades_today: int = 0  # Track daily trade count
     open_positions: int = 0
     total_exposure_pct: float = 0.0
 
@@ -270,6 +284,7 @@ class RiskState:
             'max_drawdown_pct': self.max_drawdown_pct,
             'consecutive_losses': self.consecutive_losses,
             'consecutive_wins': self.consecutive_wins,
+            'trades_today': self.trades_today,
             'open_positions': self.open_positions,
             'total_exposure_pct': self.total_exposure_pct,
             'trading_halted': self.trading_halted,
@@ -303,6 +318,7 @@ class RiskState:
         state.max_drawdown_pct = data.get('max_drawdown_pct', 0.0)
         state.consecutive_losses = data.get('consecutive_losses', 0)
         state.consecutive_wins = data.get('consecutive_wins', 0)
+        state.trades_today = data.get('trades_today', 0)
         state.open_positions = data.get('open_positions', 0)
         state.total_exposure_pct = data.get('total_exposure_pct', 0.0)
         state.trading_halted = data.get('trading_halted', False)
@@ -566,7 +582,12 @@ class RiskManagementEngine:
             result.validation_time_ms = int((time.perf_counter() - start_time) * 1000)
             return result
 
-        # Check circuit breakers
+        # Secondary circuit breaker check (defense-in-depth)
+        # NOTE: This check is intentionally redundant with the check at the start of validate_trade.
+        # Purpose: Provides an additional safety layer in case state changes during validation
+        # (e.g., from external state or race condition). The first check uses internal state
+        # (cannot be bypassed), this one uses the provided state parameter.
+        # This dual-check pattern is a deliberate defense-in-depth design decision.
         breaker_result = self._check_circuit_breakers(state)
         if breaker_result['halt_trading']:
             result.status = ValidationStatus.HALTED
@@ -577,16 +598,26 @@ class RiskManagementEngine:
             return result
 
         # Apply modifications if any
+        # SAFETY NOTE: All modifications are REDUCTIVE (size/leverage decreased)
+        # Therefore the modified proposal is always safer than the original.
+        # This is by design - we never increase risk exposure during validation.
         if modified_size or modified_leverage:
             result.status = ValidationStatus.MODIFIED
+            final_size = modified_size or proposal.size_usd
+            final_leverage = modified_leverage or proposal.leverage
+
+            # Sanity check: modifications should only reduce, never increase
+            assert final_size <= proposal.size_usd, "Modified size must be <= original"
+            assert final_leverage <= proposal.leverage, "Modified leverage must be <= original"
+
             result.modified_proposal = TradeProposal(
                 symbol=proposal.symbol,
                 side=proposal.side,
-                size_usd=modified_size or proposal.size_usd,
+                size_usd=final_size,
                 entry_price=proposal.entry_price,
                 stop_loss=proposal.stop_loss,
                 take_profit=proposal.take_profit,
-                leverage=modified_leverage or proposal.leverage,
+                leverage=final_leverage,
                 confidence=proposal.confidence,
                 regime=proposal.regime,
             )
@@ -643,13 +674,15 @@ class RiskManagementEngine:
                 )
                 return False
 
-        # Validate risk/reward if take_profit set
+        # Validate risk/reward if take_profit set - MUST reject, not warn
         if proposal.stop_loss and proposal.take_profit:
             rr = proposal.calculate_risk_reward()
             if rr and rr < self.min_risk_reward:
-                result.warnings.append(
-                    f"LOW_RR: {rr:.2f} < {self.min_risk_reward} minimum"
+                result.status = ValidationStatus.REJECTED
+                result.rejections.append(
+                    f"LOW_RR: {rr:.2f} < {self.min_risk_reward} minimum R:R required"
                 )
+                return False
 
         return True
 
@@ -663,6 +696,12 @@ class RiskManagementEngine:
         """
         Validate confidence requirements.
 
+        Uses regime-based confidence thresholds per design spec:
+        - Trending: 0.55 (lower threshold for clear direction)
+        - Ranging: 0.60 (normal threshold)
+        - Volatile: 0.65 (higher threshold for uncertainty)
+        - Choppy: 0.75 (highest threshold - avoid false signals)
+
         Args:
             proposal: Trade proposal
             state: Current risk state
@@ -672,14 +711,19 @@ class RiskManagementEngine:
         Returns:
             True if confidence is valid
         """
-        # Get minimum confidence based on consecutive losses
-        min_conf = self.min_confidence
-        for losses, threshold in sorted(
-            self.confidence_thresholds.items(), reverse=True
-        ):
-            if state.consecutive_losses >= losses:
-                min_conf = threshold
-                break
+        # Start with regime-based minimum confidence
+        regime_min = REGIME_CONFIDENCE_THRESHOLDS.get(
+            proposal.regime, 0.60  # Default if unknown regime
+        )
+
+        # Apply consecutive loss adjustments ON TOP of regime minimum
+        loss_adjustment = 0.0
+        if state.consecutive_losses >= 5:
+            loss_adjustment = 0.20
+        elif state.consecutive_losses >= 3:
+            loss_adjustment = 0.10
+
+        min_conf = min(1.0, regime_min + loss_adjustment)
 
         # Apply entry strictness adjustment from regime detection
         strictness_adjustment = self.entry_strictness_adjustments.get(
@@ -687,17 +731,19 @@ class RiskManagementEngine:
         )
         adjusted_min_conf = min(1.0, min_conf + strictness_adjustment)
 
-        if strictness_adjustment != 0:
+        if strictness_adjustment != 0 or loss_adjustment != 0:
             logger.debug(
-                f"Entry strictness '{entry_strictness}' adjusted min confidence: "
-                f"{min_conf:.2f} -> {adjusted_min_conf:.2f}"
+                f"Confidence thresholds - regime={proposal.regime} base={regime_min:.2f}, "
+                f"loss_adj={loss_adjustment:.2f}, strictness_adj={strictness_adjustment:.2f}, "
+                f"final={adjusted_min_conf:.2f}"
             )
 
         if proposal.confidence < adjusted_min_conf:
             result.status = ValidationStatus.REJECTED
             result.rejections.append(
                 f"CONFIDENCE_TOO_LOW: {proposal.confidence:.2f} < {adjusted_min_conf:.2f} required "
-                f"(base={min_conf:.2f}, strictness={entry_strictness})"
+                f"(regime={proposal.regime}, base={regime_min:.2f}, losses={state.consecutive_losses}, "
+                f"strictness={entry_strictness})"
             )
             return False
 
@@ -765,6 +811,23 @@ class RiskManagementEngine:
                         'modified': safe_size,
                         'reason': f"Risk exceeds {self.max_risk_per_trade_pct}% of equity"
                     }
+
+        # Apply consecutive loss size reduction (50% after 5 losses per design)
+        if state.consecutive_losses >= 5:
+            reduction = 0.50  # 50% reduction
+            current_size = modified_size if modified_size else proposal.size_usd
+            reduced_size = current_size * (1 - reduction)
+            modified_size = reduced_size
+            result.modifications['consecutive_loss_reduction'] = {
+                'losses': state.consecutive_losses,
+                'reduction_pct': reduction * 100,
+                'original': current_size,
+                'modified': reduced_size,
+            }
+            result.warnings.append(
+                f"SIZE_REDUCED_LOSSES: {state.consecutive_losses} consecutive losses, "
+                f"size reduced by {reduction*100:.0f}% (${current_size:.2f} -> ${reduced_size:.2f})"
+            )
 
         return modified_size
 
@@ -945,6 +1008,9 @@ class RiskManagementEngine:
         Args:
             is_win: True if trade was profitable
         """
+        # Increment daily trade counter
+        self._risk_state.trades_today += 1
+
         if is_win:
             self._risk_state.consecutive_wins += 1
             self._risk_state.consecutive_losses = 0
@@ -989,6 +1055,7 @@ class RiskManagementEngine:
         """Reset daily tracking (call at UTC midnight)."""
         self._risk_state.daily_pnl = Decimal("0")
         self._risk_state.daily_pnl_pct = 0.0
+        self._risk_state.trades_today = 0  # Reset daily trade counter
 
         # Clear daily halt if it was triggered
         if 'daily_loss' in self._risk_state.triggered_breakers:
@@ -1222,14 +1289,19 @@ class RiskManagementEngine:
                 state.last_daily_reset = now
                 logger.info(f"Auto daily reset triggered at {now.isoformat()}")
 
-        # Check for weekly reset (Monday UTC midnight)
+        # Check for weekly reset (first validation after new week starts)
+        # Fixed: Removed Monday-only check - reset triggers on any day of new week
+        # to prevent missing reset if no trades occur on Monday
         if state.last_weekly_reset is None:
             state.last_weekly_reset = now
         else:
-            # Check if we're in a new week (Monday = 0)
+            # Check if we're in a new ISO week
             current_week = now.isocalendar()[1]
             last_week = state.last_weekly_reset.isocalendar()[1]
-            if current_week != last_week and now.weekday() == 0:
+            # Also check year to handle year boundary correctly
+            current_year = now.isocalendar()[0]
+            last_year = state.last_weekly_reset.isocalendar()[0]
+            if current_week != last_week or current_year != last_year:
                 self.reset_weekly()
                 state.last_weekly_reset = now
                 logger.info(f"Auto weekly reset triggered at {now.isoformat()}")
@@ -1288,9 +1360,12 @@ class RiskManagementEngine:
         self._risk_state.open_position_symbols = open_symbols
         self._risk_state.position_exposures = exposures
 
-    async def persist_state(self) -> bool:
+    async def persist_state(self, max_retries: int = 3) -> bool:
         """
-        Persist current risk state to database.
+        Persist current risk state to database with retry logic.
+
+        Args:
+            max_retries: Maximum number of retry attempts (default 3)
 
         Returns:
             True if persisted successfully
@@ -1299,23 +1374,31 @@ class RiskManagementEngine:
             logger.debug("No database configured, skipping state persistence")
             return False
 
-        try:
-            state_json = json.dumps(self._risk_state.to_dict())
+        query = """
+            INSERT INTO risk_state (id, state_data, updated_at)
+            VALUES ('current', $1, NOW())
+            ON CONFLICT (id) DO UPDATE SET
+                state_data = $1,
+                updated_at = NOW()
+        """
 
-            query = """
-                INSERT INTO risk_state (id, state_data, updated_at)
-                VALUES ('current', $1, NOW())
-                ON CONFLICT (id) DO UPDATE SET
-                    state_data = $1,
-                    updated_at = NOW()
-            """
-            await self.db.execute(query, state_json)
-            logger.debug("Risk state persisted to database")
-            return True
+        for attempt in range(max_retries):
+            try:
+                state_json = json.dumps(self._risk_state.to_dict())
+                await self.db.execute(query, state_json)
+                logger.debug("Risk state persisted to database")
+                return True
 
-        except Exception as e:
-            logger.error(f"Failed to persist risk state: {e}")
-            return False
+            except Exception as e:
+                logger.warning(
+                    f"Persist attempt {attempt + 1}/{max_retries} failed: {e}"
+                )
+                if attempt < max_retries - 1:
+                    # Exponential backoff: 100ms, 200ms, 400ms...
+                    await asyncio.sleep(0.1 * (2 ** attempt))
+
+        logger.error("Failed to persist risk state after all retries")
+        return False
 
     async def load_state(self) -> bool:
         """
