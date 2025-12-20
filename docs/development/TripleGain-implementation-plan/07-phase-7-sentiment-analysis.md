@@ -1,8 +1,10 @@
 # Phase 7: Sentiment Analysis Agent
 
-**Phase Status**: Ready to Start
+**Phase Status**: ✅ COMPLETE
+**Completion Date**: 2025-12-19
 **Dependencies**: Phase 3 (Message Bus), Phase 6 (Paper Trading)
 **Deliverable**: Dual-model sentiment agent providing market sentiment signals
+**Tests**: 37 unit tests passing
 
 ---
 
@@ -272,25 +274,33 @@ Return JSON format.
 
 ### 7.3.3 Aggregation Logic
 
-**Weighting Strategy**:
+**Dual-Source Design** (Implemented):
 
-| Source | Social Score Weight | News Score Weight |
-|--------|---------------------|-------------------|
-| Grok | 60% | 40% |
-| GPT | 40% | 60% |
+Grok and GPT measure **different data sources**, not the same thing:
+
+| Provider | Primary Source | Output Field |
+|----------|----------------|--------------|
+| Grok | Twitter/X, Social Media | `social_score`, `social_analysis` |
+| GPT | News, Web Articles | `news_score`, `news_analysis` |
+
+**Score Assignment**:
+```python
+# Each provider provides its own score directly
+social_score = grok_result.score  # From Grok's Twitter analysis
+news_score = gpt_result.score     # From GPT's news analysis
+overall_score = (social_score + news_score) / 2
+```
 
 **Confidence Calculation**:
 - Base confidence = average of provider confidences
-- Boost +10% when providers agree on bias
-- Reduce by variance when providers disagree
 - Minimum confidence = 30%
+- No agreement boost/penalty (providers measure different things)
 
-**Score Combination**:
-
-```
-social_score = (grok_score × 0.6) + (gpt_score × 0.4)
-news_score = (gpt_score × 0.6) + (grok_score × 0.4)
-overall_score = (social_score + news_score) / 2
+**Analysis Reasoning**:
+```python
+# Full reasoning passed to trading decision LLMs
+social_analysis = grok_result.reasoning  # Grok's Twitter analysis
+news_analysis = gpt_result.reasoning     # GPT's news analysis
 ```
 
 ---
@@ -341,7 +351,6 @@ agents:
 
     aggregation:
       min_providers: 1  # At least one must succeed
-      confidence_boost_on_agreement: 0.1
       min_confidence: 0.3
 
     output:
@@ -380,12 +389,15 @@ CREATE TABLE sentiment_outputs (
     -- Provider details
     grok_available BOOLEAN DEFAULT FALSE,
     gpt_available BOOLEAN DEFAULT FALSE,
-    providers_agreed BOOLEAN,
 
     -- Extended data (JSON for flexibility)
     key_events JSONB,
     market_narratives JSONB,
     reasoning TEXT,
+
+    -- Provider analysis (for trading decision context)
+    social_analysis TEXT,  -- Grok's Twitter analysis
+    news_analysis TEXT,    -- GPT's news analysis
 
     -- Metadata
     total_latency_ms INTEGER,
@@ -466,34 +478,26 @@ ScheduledTask(
 
 ### Trading Decision Enhancement
 
-Modify Trading Decision Agent to consume sentiment:
+Trading Decision Agent receives full sentiment context including analysis:
 
 ```python
-# In trading_decision.py - process method
-async def process(self, snapshot, ta_output, regime_output, sentiment_output=None):
-    """
-    Generate trading decision with optional sentiment context.
-    """
-    context = {
-        "technical_analysis": ta_output,
-        "regime": regime_output,
+# In trading_decision.py - process method (Implemented)
+if sentiment_output:
+    additional_context['sentiment'] = {
+        'bias': sentiment_output.bias.value,
+        'overall_score': sentiment_output.overall_score,
+        'social_score': sentiment_output.social_score,      # From Grok (Twitter/X)
+        'social_analysis': sentiment_output.social_analysis, # Grok's full reasoning
+        'news_score': sentiment_output.news_score,          # From GPT (news/web)
+        'news_analysis': sentiment_output.news_analysis,    # GPT's full reasoning
+        'confidence': sentiment_output.confidence,
+        'fear_greed': sentiment_output.fear_greed.value,
+        'key_events': [e.event for e in sentiment_output.key_events[:3]],
+        'market_narratives': sentiment_output.market_narratives[:2],
     }
-
-    if sentiment_output:
-        context["sentiment"] = {
-            "bias": sentiment_output.bias.value,
-            "confidence": sentiment_output.confidence,
-            "key_events": [e.__dict__ for e in sentiment_output.key_events],
-            "fear_greed": sentiment_output.fear_greed
-        }
-
-    # Include in prompt building
-    prompt = self.prompt_builder.build_prompt(
-        agent_name=self.agent_name,
-        snapshot=snapshot,
-        additional_context=context
-    )
 ```
+
+The trading decision LLMs receive both numerical scores AND full analysis text from each provider.
 
 ---
 
@@ -530,15 +534,34 @@ async def process(self, snapshot, ta_output, regime_output, sentiment_output=Non
 
 ## 7.9 Deliverables Checklist
 
-- [ ] `triplegain/src/agents/sentiment_analysis.py` - Agent implementation
-- [ ] `triplegain/src/api/routes_sentiment.py` - API endpoints
-- [ ] `config/agents.yaml` - Configuration updates
-- [ ] `migrations/007_sentiment_analysis.sql` - Database migration
-- [ ] `triplegain/tests/unit/agents/test_sentiment_analysis.py` - Unit tests
-- [ ] `triplegain/tests/integration/test_sentiment_integration.py` - Integration tests
-- [ ] Update `coordinator.py` to schedule sentiment agent
-- [ ] Update `trading_decision.py` to consume sentiment
-- [ ] Update prompt templates for Trading Decision Agent
+- [x] `triplegain/src/agents/sentiment_analysis.py` - Agent implementation (1,074 lines)
+- [x] `triplegain/src/api/routes_sentiment.py` - API endpoints (365 lines)
+- [x] `config/agents.yaml` - Configuration updates (sentiment_analysis section)
+- [x] `migrations/007_sentiment_analysis.sql` - Database migration (217 lines)
+- [x] `triplegain/tests/unit/agents/test_sentiment_analysis.py` - Unit tests (37 tests)
+- [ ] `triplegain/tests/integration/test_sentiment_integration.py` - Integration tests (Future)
+- [x] Update `coordinator.py` to schedule sentiment agent
+- [x] Update `trading_decision.py` to consume sentiment
+- [x] Update prompt templates for Trading Decision Agent
+
+### Implementation Notes
+
+**Key Design Decision**: Grok and GPT analyze **separate data sources**:
+- **Grok**: Social/Twitter sentiment (`social_score`, `social_analysis`)
+- **GPT**: News/web sentiment (`news_score`, `news_analysis`)
+
+Both scores and full analysis reasoning are passed to trading decision LLMs as separate inputs. There is no "agreement" logic since they measure different things.
+
+**SentimentOutput fields**:
+- `social_score`: -1 to 1 (from Grok)
+- `news_score`: -1 to 1 (from GPT)
+- `social_analysis`: Grok's full reasoning text
+- `news_analysis`: GPT's full reasoning text
+- `overall_score`: Weighted average
+- `bias`: very_bullish to very_bearish
+- `fear_greed`: extreme_fear to extreme_greed
+- `key_events`: Up to 5 significant market events
+- `market_narratives`: Up to 3 current narratives
 
 ---
 

@@ -524,6 +524,37 @@ def register_paper_trading_routes(app: FastAPI, app_state: dict) -> None:
         logger.warning(f"Failed to register paper trading routes: {e}")
 
 
+def register_sentiment_routes(app: FastAPI, app_state: dict) -> None:
+    """
+    Register sentiment analysis routes with the application.
+
+    Phase 7: Sentiment analysis API endpoints.
+    Should be called after sentiment agent is initialized.
+
+    Args:
+        app: FastAPI application instance
+        app_state: Dictionary with sentiment_agent and db_pool
+    """
+    global _app_state
+    _app_state.update(app_state)
+
+    try:
+        from .routes_sentiment import create_sentiment_router
+
+        sentiment_agent = app_state.get('sentiment_agent')
+        db_pool = app_state.get('db_pool') or _db_pool
+
+        router = create_sentiment_router(
+            sentiment_agent=sentiment_agent,
+            db_pool=db_pool,
+        )
+        if router:
+            app.include_router(router)
+            logger.info("Sentiment routes registered")
+    except Exception as e:
+        logger.warning(f"Failed to register sentiment routes: {e}")
+
+
 def get_app() -> FastAPI:
     """Get or create the singleton FastAPI app instance."""
     global _app

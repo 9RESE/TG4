@@ -915,9 +915,35 @@ class CoordinatorAgent:
             ))
 
     async def _run_sentiment_agent(self, symbol: str) -> None:
-        """Run Sentiment Analysis agent (Phase 4)."""
-        # Phase 4 - Sentiment agent not implemented yet
-        pass
+        """
+        Run Sentiment Analysis agent for a symbol.
+
+        Phase 7: Dual-model sentiment from Grok and GPT.
+        Publishes to SENTIMENT_UPDATES topic.
+        """
+        if 'sentiment_analysis' not in self.agents:
+            return
+
+        agent = self.agents['sentiment_analysis']
+
+        try:
+            # Sentiment agent can work with just a symbol (doesn't require snapshot)
+            output = await agent.process(symbol=symbol)
+
+            # Publish sentiment update
+            await self.bus.publish(create_message(
+                topic=MessageTopic.SENTIMENT_UPDATES,
+                source="sentiment_analysis",
+                payload=output.to_dict(),
+            ))
+
+            logger.debug(
+                f"Sentiment analysis for {symbol}: "
+                f"bias={output.bias.value}, confidence={output.confidence:.2f}"
+            )
+
+        except Exception as e:
+            logger.error(f"Sentiment agent failed for {symbol}: {e}")
 
     async def _run_trading_agent(self, symbol: str) -> None:
         """Run Trading Decision agent for a symbol."""
@@ -931,6 +957,7 @@ class CoordinatorAgent:
             # Get supporting agent outputs
             ta_output = None
             regime_output = None
+            sentiment_output = None
 
             if 'technical_analysis' in self.agents:
                 ta_output = self.agents['technical_analysis'].last_output
@@ -938,10 +965,15 @@ class CoordinatorAgent:
             if 'regime_detection' in self.agents:
                 regime_output = self.agents['regime_detection'].last_output
 
+            # Phase 7: Include sentiment analysis
+            if 'sentiment_analysis' in self.agents:
+                sentiment_output = self.agents['sentiment_analysis'].last_output
+
             output = await agent.process(
                 snapshot,
                 ta_output=ta_output,
                 regime_output=regime_output,
+                sentiment_output=sentiment_output,
             )
 
             # Publish trading signal

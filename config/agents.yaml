@@ -81,17 +81,63 @@ agents:
     latency_target_ms: 500
 
   # --------------------------------------------------------------------------
-  # Sentiment Analysis Agent (Phase 4)
+  # Sentiment Analysis Agent (Phase 7)
   # --------------------------------------------------------------------------
+  # Dual-model sentiment using Grok (xAI) and GPT (OpenAI) with web search.
+  # Grok focuses on social/Twitter sentiment, GPT focuses on news.
   sentiment_analysis:
-    enabled: false  # Phase 4
+    enabled: true
     tier: tier2_api
-    providers:
-      - xai  # Grok for X/Twitter
-      - openai  # GPT for news
+
     invocation:
-      frequency: every_30_minutes
-    template: "sentiment_analysis.txt"
+      trigger: scheduled
+      interval_seconds: 1800  # 30 minutes
+      symbols:
+        - BTC/USDT
+        - XRP/USDT
+
+    providers:
+      grok:
+        enabled: true
+        model: grok-2
+        timeout_ms: 30000
+        capabilities:
+          - web_search
+          - twitter_search
+        weight:
+          social: 0.6
+          news: 0.4
+        retry:
+          max_attempts: 2
+          backoff_ms: 5000
+
+      gpt:
+        enabled: true
+        model: gpt-4-turbo
+        timeout_ms: 30000
+        capabilities:
+          - web_search
+        weight:
+          social: 0.4
+          news: 0.6
+        retry:
+          max_attempts: 2
+          backoff_ms: 5000
+
+    aggregation:
+      min_providers: 1  # At least one must succeed
+      min_confidence: 0.3
+
+    output:
+      store_all: true
+      cache_ttl_seconds: 1750  # Just under 30 min
+      max_events: 5
+      max_narratives: 3
+
+    # Integration with other agents
+    integration:
+      publish_topic: sentiment_updates
+      ttl_seconds: 1800
 
   # --------------------------------------------------------------------------
   # Trading Decision Agent

@@ -181,6 +181,7 @@ class TradingDecisionOutput(AgentOutput):
     # Context
     regime: str = "ranging"
     ta_bias: str = "neutral"
+    sentiment_bias: str = "neutral"  # Phase 7: Sentiment from Grok + GPT
 
     # Model agreement details
     votes: dict = field(default_factory=dict)
@@ -290,6 +291,7 @@ class TradingDecisionAgent(BaseAgent):
         portfolio_context: Optional['PortfolioContext'] = None,
         ta_output: Optional['TAOutput'] = None,
         regime_output: Optional['RegimeOutput'] = None,
+        sentiment_output: Optional[Any] = None,
         **kwargs
     ) -> TradingDecisionOutput:
         """
@@ -300,6 +302,7 @@ class TradingDecisionAgent(BaseAgent):
             portfolio_context: Portfolio state
             ta_output: TA agent output
             regime_output: Regime detection output
+            sentiment_output: Sentiment analysis output (Phase 7)
 
         Returns:
             TradingDecisionOutput with consensus decision
@@ -326,6 +329,20 @@ class TradingDecisionAgent(BaseAgent):
                 'trend_strength': regime_output.trend_strength,
                 'position_size_multiplier': regime_output.position_size_multiplier,
                 'entry_strictness': regime_output.entry_strictness,
+            }
+        # Phase 7: Include sentiment context
+        if sentiment_output:
+            additional_context['sentiment'] = {
+                'bias': sentiment_output.bias.value if hasattr(sentiment_output.bias, 'value') else str(sentiment_output.bias),
+                'overall_score': sentiment_output.overall_score,
+                'social_score': sentiment_output.social_score,  # From Grok (Twitter/X)
+                'social_analysis': sentiment_output.social_analysis,  # Grok's reasoning
+                'news_score': sentiment_output.news_score,  # From GPT (news/web)
+                'news_analysis': sentiment_output.news_analysis,  # GPT's reasoning
+                'confidence': sentiment_output.confidence,
+                'fear_greed': sentiment_output.fear_greed.value if hasattr(sentiment_output.fear_greed, 'value') else str(sentiment_output.fear_greed),
+                'key_events': [e.event for e in sentiment_output.key_events[:3]] if sentiment_output.key_events else [],
+                'market_narratives': sentiment_output.market_narratives[:2] if sentiment_output.market_narratives else [],
             }
 
         # Build prompt
@@ -374,6 +391,7 @@ class TradingDecisionAgent(BaseAgent):
             position_size_pct=consensus.avg_position_size_pct,
             regime=regime_output.regime if regime_output else "ranging",
             ta_bias=ta_output.bias if ta_output else "neutral",
+            sentiment_bias=sentiment_output.bias.value if sentiment_output and hasattr(sentiment_output.bias, 'value') else "neutral",
             votes=consensus.votes,
             agreeing_models=consensus.agreeing_models,
             total_models=consensus.total_models,

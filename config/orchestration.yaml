@@ -63,13 +63,14 @@ schedules:
     depends_on:  # F03: Task dependencies
       - ta_analysis
 
-  # Sentiment Analysis - runs every 30 minutes (Phase 4)
+  # Sentiment Analysis - runs every 30 minutes (Phase 7)
+  # Uses Grok + GPT for dual-model sentiment from web/Twitter
   sentiment_analysis:
-    enabled: false  # Enable in Phase 4
-    interval_seconds: 1800
+    enabled: true  # Phase 7 enabled
+    interval_seconds: 1800  # 30 minutes
     run_on_start: false
     timeout_seconds: 60
-    max_concurrent: 3
+    max_concurrent: 2  # Only 2 symbols in parallel due to API costs
 
   # Trading Decision - runs hourly
   trading_decision:
@@ -81,6 +82,7 @@ schedules:
     depends_on:  # F03: Task dependencies
       - ta_analysis
       - regime_detection
+      - sentiment_analysis  # Phase 7: Include sentiment in trading decision
 
   # Portfolio Rebalance - runs hourly
   portfolio_rebalance:

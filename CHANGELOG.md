@@ -5,6 +5,36 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2025-12-19
+
+### Added
+- **Phase 7: Sentiment Analysis Agent** - Dual-model sentiment architecture with Grok and GPT
+- **SentimentAnalysisAgent**: New agent in `triplegain/src/agents/sentiment_analysis.py` (1,074 lines)
+- **Dual-Model Design**: Grok analyzes social/Twitter sentiment, GPT analyzes news sentiment (separate data sources)
+- **SentimentOutput**: Includes `social_score`, `news_score`, `social_analysis`, `news_analysis`, `key_events`, `market_narratives`
+- **Sentiment API Routes**: 5 new endpoints in `triplegain/src/api/routes_sentiment.py`
+  - GET `/api/v1/sentiment/{symbol}` - Latest sentiment
+  - GET `/api/v1/sentiment/{symbol}/history` - Historical sentiment
+  - POST `/api/v1/sentiment/{symbol}/refresh` - Force refresh
+  - GET `/api/v1/sentiment/all` - All symbols
+  - GET `/api/v1/sentiment/stats` - Provider statistics
+- **Database Migration 007**: `sentiment_outputs` and `sentiment_provider_responses` tables with views
+- **37 New Unit Tests**: Comprehensive coverage of sentiment analysis components
+- **Trading Decision Integration**: Sentiment scores AND full analysis reasoning passed to trading LLMs
+
+### Changed
+- Coordinator now schedules sentiment analysis every 30 minutes
+- Trading Decision Agent receives sentiment context with both scores and provider analysis
+- Test count: 1127 (up from 1106)
+- agents.yaml: Added sentiment_analysis configuration section
+- orchestration.yaml: Added sentiment_analysis to scheduled tasks
+
+### Documentation
+- [Phase 7 Implementation Plan](docs/development/TripleGain-implementation-plan/07-phase-7-sentiment-analysis.md) - Marked complete
+- Updated implementation plan README to v2.1
+
+---
+
 ## [0.4.2] - 2025-12-19
 
 ### Added

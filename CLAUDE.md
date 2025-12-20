@@ -5,7 +5,7 @@ Python trading system with TimescaleDB + 6-model LLM comparison
 
 ## Quick Commands
 ```bash
-pytest triplegain/tests/                            # Run all tests (1106 passing)
+pytest triplegain/tests/                            # Run all tests (1127 passing)
 pytest --cov=triplegain/src --cov-report=term       # Run with coverage (87%)
 docker-compose up -d timescaledb                    # Start database
 python -m data.kraken_db.gap_filler --db-url "$DB_URL"  # Fill data gaps
@@ -13,9 +13,9 @@ uvicorn triplegain.src.api.app:app --reload         # Start API server
 python -m triplegain.run_paper_trading              # Run paper trading system
 ```
 
-## Current Phase: Phase 6 Complete
+## Current Phase: Phase 7 Complete
 
-**Status**: Phase 6 COMPLETE - Paper Trading Integration with all review fixes (2025-12-19)
+**Status**: Phase 7 COMPLETE - Sentiment Analysis Agent with dual-model architecture (2025-12-19)
 
 | Phase | Status | Description |
 |-------|--------|-------------|
@@ -25,7 +25,7 @@ python -m triplegain.run_paper_trading              # Run paper trading system
 | 4. API Security | **COMPLETE** | Authentication, RBAC, rate limiting |
 | 5. Configuration | **COMPLETE** | Config validation, integration fixes |
 | 6. Paper Trading | **COMPLETE** | Simulated execution, session persistence |
-| 7. Sentiment | Ready | Grok + GPT sentiment analysis |
+| 7. Sentiment | **COMPLETE** | Grok (social) + GPT (news) dual-model |
 | 8. Hodl Bag | Ready | 10% profit allocation to BTC/XRP |
 | 9. A/B Testing | Ready | 6-model comparison framework |
 | 10. Dashboard | Ready | React monitoring UI |
@@ -59,7 +59,7 @@ python -m triplegain.run_paper_trading              # Run paper trading system
 |------|-------|-----------|
 | Technical Analysis | Qwen 2.5 7B (Local) | Per-minute |
 | Regime Detection | Qwen 2.5 7B (Local) | Every 5 min |
-| Sentiment | Grok + GPT (web search) | Every 30 min (Phase 4) |
+| Sentiment | Grok + GPT (web search) | Every 30 min (Phase 7) |
 | Trading Decision | 6-Model A/B | Hourly |
 | Coordinator | DeepSeek V3 / Claude | On conflict |
 | Portfolio Rebalance | DeepSeek V3 | Hourly (on deviation) |
@@ -77,17 +77,17 @@ python -m triplegain.run_paper_trading              # Run paper trading system
 triplegain/
 ├── run_paper_trading.py  # Paper trading entry point
 ├── src/
-│   ├── agents/         # Base, TA, Regime, Trading Decision, Portfolio Rebalance
+│   ├── agents/         # Base, TA, Regime, Trading Decision, Portfolio Rebalance, Sentiment
 │   ├── risk/           # Rules engine, circuit breakers, cooldowns
 │   ├── orchestration/  # Message bus, coordinator agent
 │   ├── execution/      # Order manager, position tracker, paper trading
 │   ├── data/           # Indicator library, market snapshot, database
 │   ├── llm/            # Prompt builder, LLM clients (5 providers)
-│   ├── api/            # FastAPI endpoints, agent routes, orchestration routes, paper trading
+│   ├── api/            # FastAPI endpoints, agent routes, orchestration routes, paper trading, sentiment
 │   └── utils/          # Config loader
 ├── tests/
-│   ├── unit/           # 1106 unit tests (87% coverage)
-│   │   ├── agents/     # Agent tests (215 tests)
+│   ├── unit/           # 1127 unit tests (87% coverage)
+│   │   ├── agents/     # Agent tests (252 tests, including 37 sentiment)
 │   │   ├── risk/       # Risk engine tests (90 tests)
 │   │   ├── orchestration/  # Message bus, coordinator tests (114 tests)
 │   │   ├── execution/  # Order manager, position tracker, paper trading (157 tests)
@@ -97,7 +97,7 @@ triplegain/
 config/                 # agents.yaml, risk.yaml, orchestration.yaml, portfolio.yaml, execution.yaml
 data/kraken_db/         # Data collectors (operational)
 docs/development/       # Design + Implementation plans + Reviews
-migrations/             # Database migrations (001-005)
+migrations/             # Database migrations (001-007)
 ```
 
 ## Documentation
@@ -109,7 +109,7 @@ migrations/             # Database migrations (001-005)
 - [Changelog](CHANGELOG.md)
 
 ## Version
-**v0.4.2** (2025-12-19) - Phase 3.5 deep review fixes complete (11 prior + 3 new = 14 issues fixed)
+**v0.5.0** (2025-12-19) - Phase 7 Sentiment Analysis complete (Grok + GPT dual-model, 37 new tests)
 
 ---
 *Uses global config from ~/.claude/CLAUDE.md*
