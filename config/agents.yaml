@@ -84,12 +84,14 @@ agents:
   # Sentiment Analysis Agent (Phase 7)
   # --------------------------------------------------------------------------
   # Dual-model sentiment using Grok (xAI) for social/Twitter and GPT (OpenAI)
-  # for fundamental/news analysis.
+  # for news analysis. Both providers now have web search capability.
   #
-  # NOTE: Grok has X/Twitter search capability. Standard GPT-4 models do NOT
-  # have web search - they use training data. For real-time news, consider
-  # integrating an external news API (CryptoPanic, NewsAPI) in future phases.
-  # OpenAI's gpt-4o-search-preview model supports web search but costs more.
+  # Architecture:
+  # - Grok: Social media sentiment (Twitter/X focus)
+  # - GPT: News sentiment (using gpt-4o-search-preview with web search)
+  #
+  # The overall sentiment score uses weighted aggregation:
+  # overall = (social_score * grok.weight.social + news_score * gpt.weight.news) / total_weight
   sentiment_analysis:
     enabled: true
     tier: tier2_api
@@ -110,20 +112,29 @@ agents:
           - web_search
           - twitter_search
         weight:
+          # USED: grok.weight.social is used for social sentiment aggregation
           social: 0.6  # Grok excels at social/Twitter sentiment
-          news: 0.4
+          # NOT USED: grok.weight.news is not used in aggregation (GPT handles news)
+          news: 0.4  # Reserved for future cross-provider weighting
         retry:
           max_attempts: 2
           backoff_ms: 5000
 
       gpt:
         enabled: true
-        model: gpt-4-turbo  # Uses training data, not real-time search
+        # Uses gpt-4o-search-preview for real-time web search capability
+        # The client automatically switches to search-enabled model
+        model: gpt-4o-search-preview
         timeout_ms: 30000
-        capabilities: []  # No real-time web search capability
+        capabilities:
+          - web_search  # Real-time news search enabled
+        web_search_options:
+          search_context_size: medium  # low=fast/cheap, medium=balanced, high=thorough
         weight:
-          social: 0.4
-          news: 0.6  # GPT excels at fundamental analysis
+          # NOT USED: gpt.weight.social is not used in aggregation (Grok handles social)
+          social: 0.4  # Reserved for future cross-provider weighting
+          # USED: gpt.weight.news is used for news sentiment aggregation
+          news: 0.6  # GPT excels at news/fundamental analysis
         retry:
           max_attempts: 2
           backoff_ms: 5000

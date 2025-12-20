@@ -8,7 +8,7 @@ address all issues and implement the fixes/recommendations outlined in docs/deve
 
 do a deep code and logic review of the implementation of docs/development/TripleGain-implementation-plan/07-phase-7-sentiment-analysis.md and the implementation of the fixes from the reviews in docs/development/reviews/phase-7/ Provide a document of your findings and recommendations in this folder docs/development/reviews/phase-7/. ultrathink
 
-address all issues and implement the fixes/recommendations outlined in docs/development/reviews/phase-7/deep-review.md ultrathink
+address all issues and implement the fixes/recommendations outlined in docs/development/reviews/phase-7/deep-review-v2.md ultrathink
 
 
 what issues do we have with any test?

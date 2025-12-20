@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.2] - 2025-12-20
+
+### Added
+- **OpenAI Web Search**: `generate_with_search()` method for GPT models using `gpt-4o-search-preview` with real-time news search
+- **RateLimiter Memory Cleanup**: `cleanup_old_users()` method with periodic auto-cleanup every 5 minutes to prevent memory leaks
+- **Circuit Breaker Half-Open Logic**: `max_half_open_attempts` field limits test requests (default: 3), proper state transitions
+- **CircuitBreaker `get_state()` Method**: Returns human-readable state ("CLOSED", "OPEN", "HALF_OPEN")
+- **19 New Unit Tests**: 9 CircuitBreakerState tests, 8 RateLimiter tests, 2 WeightedAggregation tests
+- **11 Integration Tests**: End-to-end sentiment module testing (message bus, coordinator, API, database)
+
+### Fixed
+- **Half-Open Circuit Breaker**: Now properly limits test requests and re-opens on failure during half-open state
+- **Latency Tracking**: Changed from cumulative to per-attempt tracking in `_query_grok()` and `_query_gpt()`
+- **GPT Web Search**: Now uses `generate_with_search()` with `gpt-4o-search-preview` for real-time news
+
+### Changed
+- `agents.yaml`: Updated GPT model to `gpt-4o-search-preview`, added `web_search_options` config
+- Config weights documented: Clarified which weights are USED vs NOT USED in aggregation formula
+- RateLimiter: Added `cleanup_interval` parameter (default: 5 minutes) and thread-safety documentation
+- Test count: 1156 (up from 1127)
+
+### Documentation
+- [Phase 7 Deep Review v2](docs/development/reviews/phase-7/deep-review-v2.md) - All 9 issues addressed
+- Updated sentiment feature documentation with web search capability
+
+---
+
 ## [0.5.1] - 2025-12-19
 
 ### Added

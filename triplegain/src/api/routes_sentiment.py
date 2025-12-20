@@ -29,19 +29,34 @@ class RateLimiter:
 
     Uses a sliding window approach to limit requests per user.
     For production, consider using Redis-based rate limiting.
+
+    Thread Safety Note:
+    -------------------
+    This implementation is NOT thread-safe. It's designed for async contexts
+    (FastAPI with uvicorn) where the GIL provides sufficient protection for
+    dict operations. For multi-process deployments (e.g., gunicorn workers),
+    use Redis-based rate limiting instead.
     """
 
-    def __init__(self, max_requests: int = 5, window_seconds: int = 60):
+    def __init__(
+        self,
+        max_requests: int = 5,
+        window_seconds: int = 60,
+        cleanup_interval: int = 300,  # 5 minutes
+    ):
         """
         Initialize rate limiter.
 
         Args:
             max_requests: Maximum requests allowed per window
             window_seconds: Time window in seconds
+            cleanup_interval: Seconds between automatic cleanup of stale users
         """
         self.max_requests = max_requests
         self.window_seconds = window_seconds
+        self.cleanup_interval = cleanup_interval
         self._requests: dict[str, list[datetime]] = defaultdict(list)
+        self._last_cleanup: datetime = datetime.now(timezone.utc)
 
     def is_allowed(self, user_id: str) -> bool:
         """
@@ -56,7 +71,10 @@ class RateLimiter:
         now = datetime.now(timezone.utc)
         cutoff = now - timedelta(seconds=self.window_seconds)
 
-        # Clean old requests
+        # Periodically cleanup stale users to prevent memory leak
+        self._maybe_cleanup(now)
+
+        # Clean old requests for this user
         self._requests[user_id] = [
             ts for ts in self._requests[user_id]
             if ts > cutoff
@@ -69,6 +87,45 @@ class RateLimiter:
         # Record new request
         self._requests[user_id].append(now)
         return True
+
+    def _maybe_cleanup(self, now: datetime) -> None:
+        """Trigger cleanup if enough time has passed since last cleanup."""
+        elapsed = (now - self._last_cleanup).total_seconds()
+        if elapsed >= self.cleanup_interval:
+            self.cleanup_old_users()
+            self._last_cleanup = now
+
+    def cleanup_old_users(self, max_age_seconds: int | None = None) -> int:
+        """
+        Remove users with no recent requests to prevent memory leak.
+
+        Long-running servers can accumulate entries for users who stop
+        using the system. This method removes stale entries.
+
+        Args:
+            max_age_seconds: Maximum age for user entries (default: window_seconds * 2)
+
+        Returns:
+            Number of users removed
+        """
+        if max_age_seconds is None:
+            max_age_seconds = self.window_seconds * 2
+
+        now = datetime.now(timezone.utc)
+        cutoff = now - timedelta(seconds=max_age_seconds)
+
+        stale_users = [
+            user for user, requests in self._requests.items()
+            if not requests or max(requests) < cutoff
+        ]
+
+        for user in stale_users:
+            del self._requests[user]
+
+        if stale_users:
+            logger.debug(f"RateLimiter cleanup: removed {len(stale_users)} stale users")
+
+        return len(stale_users)
 
     def get_retry_after(self, user_id: str) -> int:
         """

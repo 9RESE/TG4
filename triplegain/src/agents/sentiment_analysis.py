@@ -40,23 +40,46 @@ class CircuitBreakerState:
     States:
     - CLOSED: Normal operation, requests pass through
     - OPEN: Failures exceeded threshold, requests are blocked
-    - HALF_OPEN: Testing if provider has recovered
+    - HALF_OPEN: Testing if provider has recovered (limited test requests)
+
+    The circuit breaker protects against cascading failures by:
+    1. Opening after consecutive failures exceed threshold
+    2. Blocking requests during cooldown period
+    3. Allowing limited test requests in half-open state
+    4. Closing on success or re-opening on continued failure
     """
     consecutive_failures: int = 0
     last_failure_time: Optional[datetime] = None
     is_open: bool = False
     half_open_attempts: int = 0
+    max_half_open_attempts: int = 3  # Maximum test requests in half-open state
 
     def record_success(self) -> None:
-        """Reset on success."""
+        """Reset circuit breaker on successful request."""
+        if self.is_open:
+            logger.info("Circuit breaker CLOSED after successful half-open test")
         self.consecutive_failures = 0
         self.is_open = False
         self.half_open_attempts = 0
 
     def record_failure(self, failure_threshold: int, cooldown_seconds: int) -> None:
-        """Record failure and potentially open circuit."""
+        """
+        Record failure and potentially open circuit.
+
+        In half-open state, any failure immediately re-opens the circuit.
+        """
         self.consecutive_failures += 1
         self.last_failure_time = datetime.now(timezone.utc)
+
+        # If we were in half-open state, failure means provider still down
+        if self.half_open_attempts > 0:
+            logger.warning(
+                f"Circuit breaker RE-OPENED: half-open test failed. "
+                f"Next retry after {cooldown_seconds}s cooldown."
+            )
+            self.half_open_attempts = 0  # Reset for next half-open period
+            self.is_open = True
+            return
 
         if self.consecutive_failures >= failure_threshold:
             self.is_open = True
@@ -66,7 +89,12 @@ class CircuitBreakerState:
             )
 
     def should_allow_request(self, cooldown_seconds: int) -> bool:
-        """Check if request should be allowed."""
+        """
+        Check if request should be allowed.
+
+        Returns:
+            True if request is allowed, False if blocked by circuit breaker.
+        """
         if not self.is_open:
             return True
 
@@ -74,12 +102,35 @@ class CircuitBreakerState:
         if self.last_failure_time:
             elapsed = (datetime.now(timezone.utc) - self.last_failure_time).total_seconds()
             if elapsed >= cooldown_seconds:
-                # Enter half-open state
+                # Check if we've exceeded half-open attempt limit
+                if self.half_open_attempts >= self.max_half_open_attempts:
+                    # Too many failed half-open attempts, reset and wait for next cooldown
+                    logger.warning(
+                        f"Circuit breaker OPEN: {self.half_open_attempts} half-open "
+                        f"attempts failed. Waiting for next cooldown period."
+                    )
+                    self.half_open_attempts = 0
+                    self.last_failure_time = datetime.now(timezone.utc)
+                    return False
+
+                # Allow test request in half-open state
                 self.half_open_attempts += 1
-                logger.info(f"Circuit breaker HALF-OPEN, attempt {self.half_open_attempts}")
+                logger.info(
+                    f"Circuit breaker HALF-OPEN, test attempt "
+                    f"{self.half_open_attempts}/{self.max_half_open_attempts}"
+                )
                 return True
 
         return False
+
+    def get_state(self) -> str:
+        """Get human-readable circuit breaker state."""
+        if not self.is_open:
+            return "CLOSED"
+        elif self.half_open_attempts > 0:
+            return "HALF_OPEN"
+        else:
+            return "OPEN"
 
 
 class SentimentBias(Enum):
@@ -417,20 +468,17 @@ Important:
 
 GPT_SENTIMENT_PROMPT = """Analyze current market sentiment for {asset} cryptocurrency.
 
-TASK: Provide fundamental and news-based sentiment analysis for {asset}.
+TASK: Search the web for recent news and provide news-based sentiment analysis for {asset}.
 
-ANALYZE BASED ON YOUR KNOWLEDGE:
-- Recent regulatory developments affecting {asset}
-- Known institutional investment trends
-- Fundamental analysis and market conditions
+WEB SEARCH - Look for:
+- Breaking news (last 24-48 hours) about {asset}
+- Regulatory developments and government actions
+- Institutional investment news and ETF updates
+- Major partnership or integration announcements
+- Technical developments and network upgrades
 - Macro economic factors affecting crypto markets
-- Known upcoming events (upgrades, halvings, token unlocks)
-- General market structure and sentiment indicators
 
-Focus on FUNDAMENTAL FACTORS rather than short-term price action.
-
-NOTE: This analysis is based on model knowledge up to training cutoff.
-For real-time news, Grok social analysis provides complementary data.
+Focus on NEWS AND FUNDAMENTAL FACTORS rather than social media chatter.
 
 RESPOND WITH JSON ONLY:
 {{
@@ -439,10 +487,10 @@ RESPOND WITH JSON ONLY:
   "confidence": <number from 0.0 to 1.0>,
   "key_events": [
     {{
-      "event": "Brief description of significant factor",
+      "event": "Brief description of news event",
       "impact": "positive|negative|neutral",
       "significance": "low|medium|high",
-      "source": "Source name"
+      "source": "News source name"
     }}
   ],
   "narratives": ["Current market narrative 1", "Narrative 2"],
@@ -450,11 +498,11 @@ RESPOND WITH JSON ONLY:
 }}
 
 Important:
-- Include up to 5 key factors, prioritize by significance
+- Include up to 5 key news events, prioritize by significance and recency
 - Include up to 3 current market narratives
 - Be objective and evidence-based
-- Acknowledge knowledge limitations with lower confidence
-- If limited knowledge, return neutral sentiment with low confidence"""
+- Cite actual news sources when possible
+- If no significant recent news, return neutral with medium confidence"""
 
 
 class SentimentAnalysisAgent(BaseAgent):
@@ -688,12 +736,14 @@ class SentimentAnalysisAgent(BaseAgent):
 
         # Retry with exponential backoff
         for attempt in range(self.max_retries + 1):
+            attempt_start = time.perf_counter()  # Track per-attempt latency
             try:
                 if attempt > 0:
                     # Exponential backoff: backoff_ms * 2^(attempt-1)
                     wait_ms = self.backoff_ms * (2 ** (attempt - 1))
                     logger.info(f"Grok retry attempt {attempt + 1}, waiting {wait_ms}ms")
                     await asyncio.sleep(wait_ms / 1000)
+                    attempt_start = time.perf_counter()  # Reset after backoff
 
                 client = self.llm_clients.get("grok")
                 if not client:
@@ -730,7 +780,8 @@ class SentimentAnalysisAgent(BaseAgent):
                         timeout=timeout_seconds,
                     )
 
-                latency_ms = int((time.perf_counter() - start_time) * 1000)
+                # Track per-attempt latency (not cumulative with retries)
+                latency_ms = int((time.perf_counter() - attempt_start) * 1000)
 
                 # Parse response
                 parsed = self._parse_provider_response(response.text, provider)
@@ -780,22 +831,22 @@ class SentimentAnalysisAgent(BaseAgent):
 
     async def _query_gpt(self, asset: str) -> ProviderResult:
         """
-        Query GPT for sentiment with web search.
+        Query GPT for news sentiment with web search.
 
         Implements:
+        - Web search via gpt-4o-search-preview model
         - Timeout enforcement (asyncio.wait_for)
         - Retry with exponential backoff
         - Circuit breaker pattern
 
-        NOTE: For actual web search, use gpt-4o-search-preview model or
-        OpenAI's Responses API with web_search tool. Standard GPT-4 models
-        do not have web search capability and will use training data only.
+        Uses OpenAI's web search capability for real-time news analysis,
+        complementing Grok's social media analysis.
 
         Args:
             asset: Asset symbol
 
         Returns:
-            ProviderResult with GPT's analysis
+            ProviderResult with GPT's news analysis
         """
         provider = "gpt"
         circuit_breaker = self._circuit_breakers[provider]
@@ -819,12 +870,14 @@ class SentimentAnalysisAgent(BaseAgent):
 
         # Retry with exponential backoff
         for attempt in range(self.max_retries + 1):
+            attempt_start = time.perf_counter()  # Track per-attempt latency
             try:
                 if attempt > 0:
                     # Exponential backoff: backoff_ms * 2^(attempt-1)
                     wait_ms = self.backoff_ms * (2 ** (attempt - 1))
                     logger.info(f"GPT retry attempt {attempt + 1}, waiting {wait_ms}ms")
                     await asyncio.sleep(wait_ms / 1000)
+                    attempt_start = time.perf_counter()  # Reset after backoff
 
                 client = self.llm_clients.get("gpt")
                 if not client:
@@ -833,27 +886,41 @@ class SentimentAnalysisAgent(BaseAgent):
                 # Build prompt
                 prompt = GPT_SENTIMENT_PROMPT.format(asset=asset)
                 system_prompt = (
-                    "You are a cryptocurrency market analyst. "
-                    "Provide objective sentiment analysis based on your knowledge. "
-                    "Respond only with valid JSON."
+                    "You are a cryptocurrency news analyst with web search capability. "
+                    "Search for recent news about the asset and provide objective "
+                    "sentiment analysis. Respond only with valid JSON."
                 )
 
-                # Call GPT with timeout
-                # NOTE: For web search, use gpt-4o-search-preview or Responses API
                 timeout_seconds = self.gpt_timeout_ms / 1000
 
-                response = await asyncio.wait_for(
-                    client.generate(
-                        model=self.gpt_model,
-                        system_prompt=system_prompt,
-                        user_message=prompt,
-                        temperature=0.3,
-                        max_tokens=2048,
-                    ),
-                    timeout=timeout_seconds,
-                )
+                # Use web search if available, otherwise fall back to standard generate
+                if hasattr(client, 'generate_with_search'):
+                    response = await asyncio.wait_for(
+                        client.generate_with_search(
+                            model=self.gpt_model,
+                            system_prompt=system_prompt,
+                            user_message=prompt,
+                            search_context_size="medium",
+                            temperature=0.3,
+                            max_tokens=2048,
+                        ),
+                        timeout=timeout_seconds,
+                    )
+                else:
+                    # Fallback if generate_with_search not available
+                    response = await asyncio.wait_for(
+                        client.generate(
+                            model=self.gpt_model,
+                            system_prompt=system_prompt,
+                            user_message=prompt,
+                            temperature=0.3,
+                            max_tokens=2048,
+                        ),
+                        timeout=timeout_seconds,
+                    )
 
-                latency_ms = int((time.perf_counter() - start_time) * 1000)
+                # Track per-attempt latency (not cumulative with retries)
+                latency_ms = int((time.perf_counter() - attempt_start) * 1000)
 
                 # Parse response
                 parsed = self._parse_provider_response(response.text, provider)
@@ -863,7 +930,7 @@ class SentimentAnalysisAgent(BaseAgent):
 
                 return ProviderResult(
                     provider=provider,
-                    model=self.gpt_model,
+                    model=response.model,  # May differ if search model was used
                     bias=SentimentBias(parsed.get("bias", "neutral")),
                     score=parsed.get("score", 0.0),
                     confidence=parsed.get("confidence", 0.5),
@@ -885,7 +952,7 @@ class SentimentAnalysisAgent(BaseAgent):
                 last_error = str(e)
                 logger.warning(f"GPT query failed (attempt {attempt + 1}/{self.max_retries + 1}): {e}")
 
-        # All retries failed
+        # All retries failed - use overall start_time for failure latency
         latency_ms = int((time.perf_counter() - start_time) * 1000)
         circuit_breaker.record_failure(self.cb_failure_threshold, self.cb_cooldown_seconds)
         logger.error(f"GPT query failed after {self.max_retries + 1} attempts: {last_error}")

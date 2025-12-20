@@ -24,6 +24,7 @@ from triplegain.src.agents.sentiment_analysis import (
     ProviderResult,
     EventImpact,
     EventSignificance,
+    CircuitBreakerState,
     SENTIMENT_OUTPUT_SCHEMA,
 )
 
@@ -140,9 +141,25 @@ def mock_llm_clients():
         }),
         tokens_used=500,
         cost_usd=0.005,
+        model="grok-2",
     ))
 
     gpt_client = AsyncMock()
+    # GPT now uses generate_with_search for web search capability
+    gpt_client.generate_with_search = AsyncMock(return_value=MagicMock(
+        text=json.dumps({
+            "bias": "bullish",
+            "score": 0.4,
+            "confidence": 0.7,
+            "key_events": [{"event": "News event", "impact": "positive", "significance": "medium", "source": "news"}],
+            "narratives": ["News narrative"],
+            "reasoning": "News reasoning"
+        }),
+        tokens_used=800,
+        cost_usd=0.02,
+        model="gpt-4o-search-preview",
+    ))
+    # Keep generate for backward compatibility
     gpt_client.generate = AsyncMock(return_value=MagicMock(
         text=json.dumps({
             "bias": "bullish",
@@ -154,6 +171,7 @@ def mock_llm_clients():
         }),
         tokens_used=800,
         cost_usd=0.02,
+        model="gpt-4-turbo",
     ))
 
     return {"grok": grok_client, "gpt": gpt_client}
@@ -524,8 +542,22 @@ class TestSentimentAnalysisAgent:
         self, mock_prompt_builder, agent_config
     ):
         """Agent should handle single provider failure gracefully."""
-        # Only GPT available
+        # Only GPT available (with web search)
         gpt_client = AsyncMock()
+        gpt_client.generate_with_search = AsyncMock(return_value=MagicMock(
+            text=json.dumps({
+                "bias": "neutral",
+                "score": 0.0,
+                "confidence": 0.5,
+                "key_events": [],
+                "narratives": [],
+                "reasoning": "No strong signals"
+            }),
+            tokens_used=500,
+            cost_usd=0.01,
+            model="gpt-4o-search-preview",
+        ))
+        # Also provide generate for fallback
         gpt_client.generate = AsyncMock(return_value=MagicMock(
             text=json.dumps({
                 "bias": "neutral",
@@ -537,6 +569,7 @@ class TestSentimentAnalysisAgent:
             }),
             tokens_used=500,
             cost_usd=0.01,
+            model="gpt-4-turbo",
         ))
 
         agent = SentimentAnalysisAgent(
@@ -834,3 +867,320 @@ class TestSentimentOutputSchema:
         bias_schema = SENTIMENT_OUTPUT_SCHEMA["properties"]["bias"]
         valid_biases = ["very_bullish", "bullish", "neutral", "bearish", "very_bearish"]
         assert bias_schema["enum"] == valid_biases
+
+
+# =============================================================================
+# CircuitBreakerState Tests
+# =============================================================================
+
+class TestCircuitBreakerState:
+    """Test CircuitBreakerState transitions and behavior."""
+
+    def test_initial_state_is_closed(self):
+        """New circuit breaker should be in CLOSED state."""
+        cb = CircuitBreakerState()
+        assert cb.is_open is False
+        assert cb.consecutive_failures == 0
+        assert cb.half_open_attempts == 0
+        assert cb.get_state() == "CLOSED"
+
+    def test_allows_request_when_closed(self):
+        """CLOSED circuit breaker should allow all requests."""
+        cb = CircuitBreakerState()
+        assert cb.should_allow_request(cooldown_seconds=300) is True
+
+    def test_opens_after_failure_threshold(self):
+        """Circuit breaker should OPEN after reaching failure threshold."""
+        cb = CircuitBreakerState()
+        failure_threshold = 3
+        cooldown = 300
+
+        # Record failures up to threshold
+        for i in range(failure_threshold):
+            cb.record_failure(failure_threshold, cooldown)
+
+        assert cb.is_open is True
+        assert cb.consecutive_failures == failure_threshold
+        assert cb.get_state() == "OPEN"
+
+    def test_blocks_requests_when_open(self):
+        """OPEN circuit breaker should block requests during cooldown."""
+        cb = CircuitBreakerState()
+        cb.is_open = True
+        cb.last_failure_time = datetime.now(timezone.utc)
+
+        # Request during cooldown should be blocked
+        assert cb.should_allow_request(cooldown_seconds=300) is False
+
+    def test_enters_half_open_after_cooldown(self):
+        """Circuit breaker should enter HALF_OPEN after cooldown expires."""
+        cb = CircuitBreakerState()
+        cb.is_open = True
+        # Set failure time in the past (beyond cooldown)
+        from datetime import timedelta
+        cb.last_failure_time = datetime.now(timezone.utc) - timedelta(seconds=400)
+
+        # Should allow request (enters half-open)
+        assert cb.should_allow_request(cooldown_seconds=300) is True
+        assert cb.half_open_attempts == 1
+        assert cb.get_state() == "HALF_OPEN"
+
+    def test_success_resets_circuit_breaker(self):
+        """Successful request should reset circuit breaker to CLOSED."""
+        cb = CircuitBreakerState()
+        cb.is_open = True
+        cb.consecutive_failures = 5
+        cb.half_open_attempts = 2
+
+        cb.record_success()
+
+        assert cb.is_open is False
+        assert cb.consecutive_failures == 0
+        assert cb.half_open_attempts == 0
+        assert cb.get_state() == "CLOSED"
+
+    def test_half_open_failure_reopens_circuit(self):
+        """Failure during HALF_OPEN should reopen circuit."""
+        cb = CircuitBreakerState()
+        cb.is_open = True
+        cb.half_open_attempts = 1  # In half-open state
+
+        cb.record_failure(failure_threshold=3, cooldown_seconds=300)
+
+        assert cb.is_open is True
+        assert cb.half_open_attempts == 0  # Reset for next cooldown period
+
+    def test_half_open_attempt_limit(self):
+        """Circuit breaker should limit half-open test attempts."""
+        cb = CircuitBreakerState()
+        cb.is_open = True
+        cb.max_half_open_attempts = 3
+        from datetime import timedelta
+        cb.last_failure_time = datetime.now(timezone.utc) - timedelta(seconds=400)
+
+        # First 3 attempts should be allowed
+        for i in range(3):
+            assert cb.should_allow_request(cooldown_seconds=300) is True
+
+        # Update failure time as if tests happened
+        cb.last_failure_time = datetime.now(timezone.utc) - timedelta(seconds=400)
+
+        # 4th attempt should be blocked (limit reached, reset required)
+        assert cb.should_allow_request(cooldown_seconds=300) is False
+
+    def test_get_state_returns_correct_states(self):
+        """get_state should return correct human-readable state."""
+        cb = CircuitBreakerState()
+
+        # CLOSED
+        assert cb.get_state() == "CLOSED"
+
+        # OPEN
+        cb.is_open = True
+        assert cb.get_state() == "OPEN"
+
+        # HALF_OPEN
+        cb.half_open_attempts = 1
+        assert cb.get_state() == "HALF_OPEN"
+
+
+# =============================================================================
+# RateLimiter Tests
+# =============================================================================
+
+class TestRateLimiter:
+    """Test RateLimiter behavior and memory management."""
+
+    def test_allows_requests_under_limit(self):
+        """Requests under limit should be allowed."""
+        from triplegain.src.api.routes_sentiment import RateLimiter
+
+        limiter = RateLimiter(max_requests=5, window_seconds=60)
+
+        # First 5 requests should be allowed
+        for i in range(5):
+            assert limiter.is_allowed("user1") is True
+
+    def test_blocks_requests_over_limit(self):
+        """Requests over limit should be blocked."""
+        from triplegain.src.api.routes_sentiment import RateLimiter
+
+        limiter = RateLimiter(max_requests=3, window_seconds=60)
+
+        # First 3 allowed
+        for _ in range(3):
+            assert limiter.is_allowed("user1") is True
+
+        # 4th should be blocked
+        assert limiter.is_allowed("user1") is False
+
+    def test_different_users_have_separate_limits(self):
+        """Each user should have their own rate limit."""
+        from triplegain.src.api.routes_sentiment import RateLimiter
+
+        limiter = RateLimiter(max_requests=2, window_seconds=60)
+
+        # User1 makes 2 requests
+        assert limiter.is_allowed("user1") is True
+        assert limiter.is_allowed("user1") is True
+        assert limiter.is_allowed("user1") is False
+
+        # User2 should still be allowed
+        assert limiter.is_allowed("user2") is True
+        assert limiter.is_allowed("user2") is True
+        assert limiter.is_allowed("user2") is False
+
+    def test_retry_after_calculation(self):
+        """get_retry_after should return correct wait time."""
+        from triplegain.src.api.routes_sentiment import RateLimiter
+
+        limiter = RateLimiter(max_requests=1, window_seconds=60)
+
+        # Make a request
+        limiter.is_allowed("user1")
+
+        # Retry after should be close to window_seconds
+        retry_after = limiter.get_retry_after("user1")
+        assert 0 < retry_after <= 60
+
+    def test_retry_after_returns_zero_for_unknown_user(self):
+        """get_retry_after should return 0 for unknown user."""
+        from triplegain.src.api.routes_sentiment import RateLimiter
+
+        limiter = RateLimiter(max_requests=5, window_seconds=60)
+        assert limiter.get_retry_after("unknown_user") == 0
+
+    def test_cleanup_removes_stale_users(self):
+        """cleanup_old_users should remove users with no recent requests."""
+        from triplegain.src.api.routes_sentiment import RateLimiter
+        from datetime import timedelta
+
+        limiter = RateLimiter(max_requests=5, window_seconds=60)
+
+        # Add some requests
+        limiter.is_allowed("user1")
+        limiter.is_allowed("user2")
+
+        # Manually age the requests
+        old_time = datetime.now(timezone.utc) - timedelta(seconds=200)
+        limiter._requests["user1"] = [old_time]
+        limiter._requests["user2"] = [old_time]
+
+        # Cleanup with 120 second max age
+        removed = limiter.cleanup_old_users(max_age_seconds=120)
+
+        assert removed == 2
+        assert "user1" not in limiter._requests
+        assert "user2" not in limiter._requests
+
+    def test_cleanup_preserves_active_users(self):
+        """cleanup_old_users should not remove users with recent requests."""
+        from triplegain.src.api.routes_sentiment import RateLimiter
+        from datetime import timedelta
+
+        limiter = RateLimiter(max_requests=5, window_seconds=60)
+
+        # Add requests for user1 (current) and user2 (old)
+        limiter.is_allowed("user1")
+        old_time = datetime.now(timezone.utc) - timedelta(seconds=200)
+        limiter._requests["user2"] = [old_time]
+
+        # Cleanup
+        removed = limiter.cleanup_old_users(max_age_seconds=120)
+
+        assert removed == 1
+        assert "user1" in limiter._requests  # Preserved
+        assert "user2" not in limiter._requests  # Removed
+
+    def test_automatic_cleanup_triggers_periodically(self):
+        """Cleanup should trigger automatically based on cleanup_interval."""
+        from triplegain.src.api.routes_sentiment import RateLimiter
+        from datetime import timedelta
+
+        limiter = RateLimiter(max_requests=5, window_seconds=60, cleanup_interval=60)
+
+        # Simulate old cleanup time
+        limiter._last_cleanup = datetime.now(timezone.utc) - timedelta(seconds=120)
+
+        # Add a stale user
+        old_time = datetime.now(timezone.utc) - timedelta(seconds=200)
+        limiter._requests["stale_user"] = [old_time]
+
+        # This call should trigger cleanup
+        limiter.is_allowed("new_user")
+
+        # Stale user should be removed
+        assert "stale_user" not in limiter._requests
+
+
+# =============================================================================
+# Weighted Aggregation Tests
+# =============================================================================
+
+class TestWeightedAggregation:
+    """Test the weighted aggregation formula used for sentiment scoring."""
+
+    def test_weighted_aggregation_calculation(
+        self, mock_llm_clients, mock_prompt_builder, agent_config
+    ):
+        """Verify the exact weighted aggregation formula."""
+        agent = SentimentAnalysisAgent(
+            llm_clients=mock_llm_clients,
+            prompt_builder=mock_prompt_builder,
+            config=agent_config,
+        )
+
+        # Grok (social) result
+        grok_result = ProviderResult(
+            provider="grok",
+            model="grok-2",
+            bias=SentimentBias.BULLISH,
+            score=0.5,  # Social score
+            confidence=0.8,
+            success=True,
+        )
+
+        # GPT (news) result
+        gpt_result = ProviderResult(
+            provider="gpt",
+            model="gpt-4-turbo",
+            bias=SentimentBias.NEUTRAL,
+            score=0.0,  # News score
+            confidence=0.7,
+            success=True,
+        )
+
+        output = agent._aggregate_results("BTC/USDT", [grok_result, gpt_result])
+
+        # Verify the formula:
+        # grok_social_weight = 0.6, gpt_news_weight = 0.6
+        # overall = (0.5 * 0.6 + 0.0 * 0.6) / 1.2 = 0.3 / 1.2 = 0.25
+        expected_overall = (0.5 * 0.6 + 0.0 * 0.6) / (0.6 + 0.6)
+        assert abs(output.overall_score - expected_overall) < 0.01
+
+    def test_single_provider_uses_direct_score(
+        self, mock_llm_clients, mock_prompt_builder, agent_config
+    ):
+        """Single provider result should use its score directly."""
+        agent = SentimentAnalysisAgent(
+            llm_clients=mock_llm_clients,
+            prompt_builder=mock_prompt_builder,
+            config=agent_config,
+        )
+
+        # Only Grok available
+        grok_result = ProviderResult(
+            provider="grok",
+            model="grok-2",
+            bias=SentimentBias.BULLISH,
+            score=0.6,
+            confidence=0.8,
+            success=True,
+        )
+
+        output = agent._aggregate_results("BTC/USDT", [grok_result])
+
+        # Should use Grok's social score directly
+        assert output.overall_score == 0.6
+        assert output.social_score == 0.6
+        assert output.news_score == 0.0

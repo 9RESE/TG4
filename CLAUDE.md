@@ -5,7 +5,7 @@ Python trading system with TimescaleDB + 6-model LLM comparison
 
 ## Quick Commands
 ```bash
-pytest triplegain/tests/                            # Run all tests (1127 passing)
+pytest triplegain/tests/                            # Run all tests (1156 passing)
 pytest --cov=triplegain/src --cov-report=term       # Run with coverage (87%)
 docker-compose up -d timescaledb                    # Start database
 python -m data.kraken_db.gap_filler --db-url "$DB_URL"  # Fill data gaps
@@ -86,8 +86,8 @@ triplegain/
 │   ├── api/            # FastAPI endpoints, agent routes, orchestration routes, paper trading, sentiment
 │   └── utils/          # Config loader
 ├── tests/
-│   ├── unit/           # 1127 unit tests (87% coverage)
-│   │   ├── agents/     # Agent tests (252 tests, including 37 sentiment)
+│   ├── unit/           # 1156 unit tests (87% coverage)
+│   │   ├── agents/     # Agent tests (271 tests, including 56 sentiment)
 │   │   ├── risk/       # Risk engine tests (90 tests)
 │   │   ├── orchestration/  # Message bus, coordinator tests (114 tests)
 │   │   ├── execution/  # Order manager, position tracker, paper trading (157 tests)
@@ -109,7 +109,7 @@ migrations/             # Database migrations (001-008)
 - [Changelog](CHANGELOG.md)
 
 ## Version
-**v0.5.1** (2025-12-19) - Phase 7 Deep Review Fixes (circuit breaker, rate limiting, weighted aggregation)
+**v0.5.2** (2025-12-20) - Phase 7 Deep Review v2 Fixes (OpenAI web search, memory cleanup, circuit breaker improvements)
 
 ---
 *Uses global config from ~/.claude/CLAUDE.md*
