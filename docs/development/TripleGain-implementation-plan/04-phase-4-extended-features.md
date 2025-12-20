@@ -1,12 +1,26 @@
-# Phase 4: Extended Features
+# Phase 4: Extended Features (DEPRECATED)
 
-**Phase Status**: Pending Phase 3 Completion
+> **DEPRECATED**: This document has been split into separate, more manageable phases.
+> Please refer to the following updated documents:
+>
+> | New Phase | Document | Description |
+> |-----------|----------|-------------|
+> | Phase 7 | [07-phase-7-sentiment-analysis.md](./07-phase-7-sentiment-analysis.md) | Sentiment Analysis Agent (Grok + GPT) |
+> | Phase 8 | [08-phase-8-hodl-bag-system.md](./08-phase-8-hodl-bag-system.md) | Hodl Bag Accumulation System |
+> | Phase 9 | [09-phase-9-model-ab-testing.md](./09-phase-9-model-ab-testing.md) | 6-Model A/B Testing Framework |
+> | Phase 10 | [10-phase-10-react-dashboard.md](./10-phase-10-react-dashboard.md) | React Monitoring Dashboard |
+>
+> This document is retained for historical reference only. Do not use for implementation.
+>
+> ---
+
+**Phase Status**: ~~Pending Phase 3 Completion~~ **DEPRECATED - See above**
 **Dependencies**: Phase 3 (Orchestration, Execution)
 **Deliverable**: Full feature set with monitoring and A/B tracking
 
 ---
 
-## Overview
+## Overview (Historical Reference Only)
 
 Phase 4 adds extended features that enhance the core trading system: sentiment analysis with web search, the hodl bag accumulation system, the 6-model A/B testing framework, and the monitoring dashboard.
 

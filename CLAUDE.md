@@ -38,6 +38,7 @@ uvicorn triplegain.src.api.app:app --reload         # Start API server
 ### Infrastructure Ready
 - Ollama: `/media/rese/2tb_drive/ollama_config/` (Qwen 2.5 7B ready)
 - Collectors: WebSocket writer, gap filler, order book, private data
+- Database `Docker data/kraken_db/`
 
 ### Critical Design Decisions
 | Decision | Rationale |
@@ -98,7 +99,6 @@ migrations/             # Database migrations (001-005)
 - [Master Design](docs/development/TripleGain-master-design/README.md)
 - [Implementation Plan](docs/development/TripleGain-implementation-plan/README.md)
 - [Architecture Decisions (ADRs)](docs/architecture/09-decisions/README.md)
-- [Phase 6: Paper Trading](docs/development/features/phase-6-paper-trading.md)
 - [Code Reviews](docs/development/reviews/)
 - [Kraken API](docs/api/kraken/kraken-api-reference.md)
 - [Changelog](CHANGELOG.md)

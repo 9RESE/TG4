@@ -36,9 +36,11 @@ This directory contains detailed documentation for each major feature, including
 | Paper Portfolio | 6 | **COMPLETE** | [phase-6-paper-trading.md](./phase-6-paper-trading.md#2-paper-portfolio) |
 | Paper Order Executor | 6 | **COMPLETE** | [phase-6-paper-trading.md](./phase-6-paper-trading.md#3-paper-order-executor) |
 | Session Persistence | 6 | **COMPLETE** | [phase-6-paper-trading.md](./phase-6-paper-trading.md#code-review-issues-addressed) |
-| Sentiment Analysis | 7 | Planned | Pending |
-| Hodl Bag Tracking | 7 | Planned | Pending |
-| Dashboard | 7 | Planned | Pending |
+| Sentiment Analysis | 7 | Ready | [Implementation Plan](../TripleGain-implementation-plan/07-phase-7-sentiment-analysis.md) |
+| Hodl Bag System | 8 | Ready | [Implementation Plan](../TripleGain-implementation-plan/08-phase-8-hodl-bag-system.md) |
+| 6-Model A/B Testing | 9 | Ready | [Implementation Plan](../TripleGain-implementation-plan/09-phase-9-model-ab-testing.md) |
+| React Dashboard | 10 | Ready | [Implementation Plan](../TripleGain-implementation-plan/10-phase-10-react-dashboard.md) |
+| Production Deployment | 11 | Not Started | [Implementation Plan](../TripleGain-implementation-plan/05-phase-5-production.md) |
 
 ## Archived Features (v2)
 

@@ -1,9 +1,9 @@
 # TripleGain Implementation Plan
 
-**Version**: 1.2
-**Status**: Phase 2 Complete, Phase 3 Ready
+**Version**: 2.0
+**Status**: Phase 6 Complete, Phases 7-10 Ready
 **Date**: December 2025
-**Last Updated**: 2025-12-18
+**Last Updated**: 2025-12-19
 **Source Design**: [TripleGain Master Design](../TripleGain-master-design/README.md)
 
 ## Current Status
@@ -12,41 +12,29 @@
 |-------|--------|------------|-------|----------|
 | **Phase 1: Foundation** | **COMPLETE** | 2025-12-18 | 232 | 82% |
 | **Phase 2: Core Agents** | **COMPLETE** | 2025-12-18 | 136 | 67% |
-| Phase 3: Orchestration | Ready to Start | - | - | - |
-| Phase 4: Extended | Not Started | - | - | - |
-| Phase 5: Production | Not Started | - | - | - |
+| **Phase 3: Orchestration** | **COMPLETE** | 2025-12-18 | 227 | - |
+| **Phase 4: API Security** | **COMPLETE** | 2025-12-18 | 110 | - |
+| **Phase 5: Configuration** | **COMPLETE** | 2025-12-18 | - | - |
+| **Phase 6: Paper Trading** | **COMPLETE** | 2025-12-19 | 157 | 87% |
+| Phase 7: Sentiment Analysis | Ready | - | - | - |
+| Phase 8: Hodl Bag System | Ready | - | - | - |
+| Phase 9: 6-Model A/B Testing | Ready | - | - | - |
+| Phase 10: React Dashboard | Ready | - | - | - |
+| Phase 11: Production | Not Started | - | - | - |
 
-**Total Tests**: 368 passing
+**Total Tests**: 1106 passing (87% coverage)
 
-### Phase 2 Deliverables
+### Recent Updates
 
-- Base Agent Framework (abstract interface, AgentOutput dataclass)
-- Technical Analysis Agent (Qwen 2.5 7B, trend/momentum analysis)
-- Regime Detection Agent (7 regime types, parameter adjustment)
-- Risk Management Engine (rules-based, <10ms, circuit breakers)
-- Trading Decision Agent (6-model A/B testing, consensus)
-- LLM Clients (Ollama, OpenAI, Anthropic, DeepSeek, xAI)
-- Configuration Files (agents.yaml, risk.yaml)
-- Database Migration (model_comparisons table)
+**Phase 6 Complete (v0.4.2)**: Paper Trading with session persistence, simulated execution, and deep review fixes.
 
-See [Phase 2 Feature Documentation](../features/phase-2-core-agents.md) for details.
-
-### Phase 1 Deliverables
-
-- Indicator Library (17+ indicators, 91% coverage)
-- Market Snapshot Builder (multi-timeframe, 74% coverage)
-- Prompt Template System (tier-aware, 92% coverage)
-- Database Schema (7 tables with retention/compression)
-- API Endpoints (health, indicators, snapshots, debug)
-- Configuration System (YAML with validation, 83% coverage)
-
-See [Phase 1 Review](../reviews/phase-1/phase-1-comprehensive-review.md) for details.
+**Extended Features Split (v2.0)**: The original Phase 4 "Extended Features" has been split into four manageable phases (7-10) for better implementation focus.
 
 ---
 
 ## Executive Summary
 
-This document provides a detailed implementation roadmap for the TripleGain LLM-assisted cryptocurrency trading system. The implementation follows the 5-phase dependency structure defined in the master design, with each phase building upon the previous phase's deliverables.
+This document provides a detailed implementation roadmap for the TripleGain LLM-assisted cryptocurrency trading system. The implementation follows an 11-phase dependency structure defined in the master design, with each phase building upon the previous phase's deliverables.
 
 ### Implementation Principles
 
@@ -115,40 +103,67 @@ This document provides a detailed implementation roadmap for the TripleGain LLM-
 │                         IMPLEMENTATION PHASES                                    │
 ├─────────────────────────────────────────────────────────────────────────────────┤
 │                                                                                  │
-│  PHASE 1: FOUNDATION                                                             │
-│  ├── 1.1 Data Pipeline Extensions                                               │
-│  ├── 1.2 Indicator Library                                                      │
-│  ├── 1.3 Market Snapshot Builder                                                │
-│  └── 1.4 Prompt Template System                                                 │
-│      └── Deliverable: Working data→prompt pipeline                              │
+│  PHASE 1: FOUNDATION ✅                                                          │
+│  ├── Data Pipeline Extensions                                                   │
+│  ├── Indicator Library                                                          │
+│  ├── Market Snapshot Builder                                                    │
+│  └── Prompt Template System                                                     │
 │                                                                                  │
-│  PHASE 2: CORE AGENTS                                                            │
-│  ├── 2.1 Technical Analysis Agent                                               │
-│  ├── 2.2 Regime Detection Agent                                                 │
-│  ├── 2.3 Risk Management Engine                                                 │
-│  └── 2.4 Trading Decision Agent                                                 │
-│      └── Deliverable: Individual agents producing signals                       │
+│  PHASE 2: CORE AGENTS ✅                                                         │
+│  ├── Technical Analysis Agent                                                   │
+│  ├── Regime Detection Agent                                                     │
+│  ├── Risk Management Engine                                                     │
+│  └── Trading Decision Agent                                                     │
 │                                                                                  │
-│  PHASE 3: ORCHESTRATION                                                          │
-│  ├── 3.1 Agent Communication Protocol                                           │
-│  ├── 3.2 Coordinator Agent                                                      │
-│  ├── 3.3 Portfolio Rebalancing Agent                                            │
-│  └── 3.4 Order Execution Manager                                                │
-│      └── Deliverable: Agents working together, executing trades                 │
+│  PHASE 3: ORCHESTRATION ✅                                                       │
+│  ├── Agent Communication Protocol                                               │
+│  ├── Coordinator Agent                                                          │
+│  ├── Portfolio Rebalancing Agent                                                │
+│  └── Order Execution Manager                                                    │
 │                                                                                  │
-│  PHASE 4: EXTENDED FEATURES                                                      │
-│  ├── 4.1 Sentiment Analysis Agent                                               │
-│  ├── 4.2 Hodl Bag System                                                        │
-│  ├── 4.3 LLM 6-Model A/B Testing Framework                                      │
-│  └── 4.4 Dashboard                                                              │
-│      └── Deliverable: Full feature set with monitoring                          │
+│  PHASE 4: API SECURITY ✅                                                        │
+│  ├── JWT Authentication                                                         │
+│  ├── RBAC Authorization                                                         │
+│  └── Rate Limiting                                                              │
 │                                                                                  │
-│  PHASE 5: PRODUCTION                                                             │
-│  ├── 5.1 Comprehensive Testing                                                  │
-│  ├── 5.2 Paper Trading Validation                                               │
-│  ├── 5.3 Live Trading Deployment                                                │
-│  └── 5.4 Monitoring & Alerting                                                  │
-│      └── Deliverable: Production-ready trading system                           │
+│  PHASE 5: CONFIGURATION ✅                                                       │
+│  ├── Config Validation                                                          │
+│  └── Integration Fixes                                                          │
+│                                                                                  │
+│  PHASE 6: PAPER TRADING ✅                                                       │
+│  ├── Simulated Execution                                                        │
+│  ├── Session Persistence                                                        │
+│  └── Paper Portfolio Tracking                                                   │
+│                                                                                  │
+│  PHASE 7: SENTIMENT ANALYSIS 🔵                                                  │
+│  ├── Grok Integration (web + Twitter)                                          │
+│  ├── GPT Integration (web search)                                              │
+│  └── Dual-Model Aggregation                                                    │
+│                                                                                  │
+│  PHASE 8: HODL BAG SYSTEM 🔵                                                     │
+│  ├── Profit Allocation (10%)                                                    │
+│  ├── BTC/XRP Accumulation                                                       │
+│  └── Long-term Holdings Tracking                                                │
+│                                                                                  │
+│  PHASE 9: 6-MODEL A/B TESTING 🔵                                                 │
+│  ├── Decision Recording                                                         │
+│  ├── Outcome Tracking (1h, 4h, 24h)                                            │
+│  ├── Model Leaderboard                                                          │
+│  └── Pairwise Significance Tests                                                │
+│                                                                                  │
+│  PHASE 10: REACT DASHBOARD 🔵                                                    │
+│  ├── Portfolio Overview                                                         │
+│  ├── Position Monitoring                                                        │
+│  ├── Agent Status Display                                                       │
+│  ├── Model Comparison Views                                                     │
+│  └── Control Panel                                                              │
+│                                                                                  │
+│  PHASE 11: PRODUCTION ⚪                                                         │
+│  ├── Live Trading Deployment                                                    │
+│  ├── Monitoring & Alerting                                                      │
+│  └── Operational Runbooks                                                       │
+│                                                                                  │
+│  Legend: ✅ Complete  🔵 Ready  ⚪ Not Started                                   │
 │                                                                                  │
 └─────────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -167,42 +182,48 @@ This document provides a detailed implementation roadmap for the TripleGain LLM-
 │  [Existing Ollama]      ─────────────────────────────────────────────┤          │
 │                                                                      ↓          │
 │                                                              ┌───────────────┐  │
-│                                                              │   PHASE 1     │  │
+│                                                              │   PHASE 1 ✅   │  │
 │                                                              │  Foundation   │  │
 │                                                              └───────┬───────┘  │
 │                                                                      │          │
-│                                       ┌──────────────────────────────┼──────┐   │
-│                                       ↓                              ↓      ↓   │
+│                                                                      ↓          │
+│                                                              ┌───────────────┐  │
+│                                                              │   PHASE 2 ✅   │  │
+│                                                              │  Core Agents  │  │
+│                                                              └───────┬───────┘  │
+│                                                                      │          │
+│                                                                      ↓          │
+│                                                              ┌───────────────┐  │
+│                                                              │   PHASE 3 ✅   │  │
+│                                                              │ Orchestration │  │
+│                                                              └───────┬───────┘  │
+│                                                                      │          │
+│                                       ┌──────────────────────────────┤          │
+│                                       ↓                              ↓          │
 │                              ┌───────────────┐              ┌───────────────┐   │
-│                              │   PHASE 2     │              │   PHASE 2     │   │
-│                              │  TA + Regime  │              │Risk (no deps) │   │
+│                              │   PHASE 4 ✅   │              │   PHASE 5 ✅   │   │
+│                              │  API Security │              │ Configuration │   │
 │                              └───────┬───────┘              └───────┬───────┘   │
-│                                      │                              │           │
 │                                      └──────────────┬───────────────┘           │
 │                                                     ↓                           │
 │                                            ┌───────────────┐                    │
-│                                            │   PHASE 2     │                    │
-│                                            │Trading Decision│                    │
+│                                            │   PHASE 6 ✅   │                    │
+│                                            │ Paper Trading │                    │
 │                                            └───────┬───────┘                    │
 │                                                    │                            │
-│                                                    ↓                            │
-│                                            ┌───────────────┐                    │
-│                                            │   PHASE 3     │                    │
-│                                            │ Orchestration │                    │
-│                                            └───────┬───────┘                    │
-│                                                    │                            │
-│                              ┌─────────────────────┼─────────────────────┐      │
-│                              ↓                     ↓                     ↓      │
-│                     ┌───────────────┐     ┌───────────────┐     ┌───────────────┐
-│                     │   PHASE 4     │     │   PHASE 4     │     │   PHASE 4     │
-│                     │  Sentiment    │     │  Hodl Bag     │     │  Dashboard    │
-│                     └───────┬───────┘     └───────┬───────┘     └───────┬───────┘
-│                             └─────────────────────┼─────────────────────┘       │
-│                                                   ↓                             │
-│                                           ┌───────────────┐                     │
-│                                           │   PHASE 5     │                     │
-│                                           │  Production   │                     │
-│                                           └───────────────┘                     │
+│                  ┌─────────────────────────────────┼──────────────────────────┐ │
+│                  ↓                 ↓               ↓                          ↓ │
+│         ┌───────────────┐ ┌───────────────┐ ┌───────────────┐ ┌───────────────┐│
+│         │   PHASE 7 🔵   │ │   PHASE 8 🔵   │ │   PHASE 9 🔵   │ │  PHASE 10 🔵  ││
+│         │  Sentiment    │ │   Hodl Bag    │ │  A/B Testing  │ │   Dashboard   ││
+│         └───────┬───────┘ └───────┬───────┘ └───────┬───────┘ └───────┬───────┘│
+│                 └─────────────────┴─────────────────┴─────────────────┘        │
+│                                            │                                    │
+│                                            ↓                                    │
+│                                    ┌───────────────┐                           │
+│                                    │  PHASE 11 ⚪   │                           │
+│                                    │  Production   │                           │
+│                                    └───────────────┘                           │
 │                                                                                  │
 └─────────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -211,13 +232,37 @@ This document provides a detailed implementation roadmap for the TripleGain LLM-
 
 ## Implementation Documents
 
-| Document | Description | Phase |
-|----------|-------------|-------|
-| [01-phase-1-foundation.md](./01-phase-1-foundation.md) | Data pipeline, indicators, snapshots, prompts | Phase 1 |
-| [02-phase-2-core-agents.md](./02-phase-2-core-agents.md) | TA, Regime, Risk, Trading Decision agents | Phase 2 |
-| [03-phase-3-orchestration.md](./03-phase-3-orchestration.md) | Communication, Coordinator, Execution | Phase 3 |
-| [04-phase-4-extended-features.md](./04-phase-4-extended-features.md) | Sentiment, Hodl Bag, A/B Testing, Dashboard | Phase 4 |
-| [05-phase-5-production.md](./05-phase-5-production.md) | Testing, Paper Trading, Live Deployment | Phase 5 |
+### Core Phases (Complete)
+
+| Document | Description | Status |
+|----------|-------------|--------|
+| [01-phase-1-foundation.md](./01-phase-1-foundation.md) | Data pipeline, indicators, snapshots, prompts | ✅ Complete |
+| [02-phase-2-core-agents.md](./02-phase-2-core-agents.md) | TA, Regime, Risk, Trading Decision agents | ✅ Complete |
+| [03-phase-3-orchestration.md](./03-phase-3-orchestration.md) | Communication, Coordinator, Execution | ✅ Complete |
+| [phase-3_5-paper-trading-plan.md](./phase-3_5-paper-trading-plan.md) | Paper Trading Integration (Phase 6) | ✅ Complete |
+
+### Extended Features (Ready)
+
+| Document | Description | Status |
+|----------|-------------|--------|
+| [07-phase-7-sentiment-analysis.md](./07-phase-7-sentiment-analysis.md) | Sentiment Agent (Grok + GPT) | 🔵 Ready |
+| [08-phase-8-hodl-bag-system.md](./08-phase-8-hodl-bag-system.md) | Hodl Bag Accumulation | 🔵 Ready |
+| [09-phase-9-model-ab-testing.md](./09-phase-9-model-ab-testing.md) | 6-Model Comparison Framework | 🔵 Ready |
+| [10-phase-10-react-dashboard.md](./10-phase-10-react-dashboard.md) | React Monitoring Dashboard | 🔵 Ready |
+
+### Production
+
+| Document | Description | Status |
+|----------|-------------|--------|
+| [05-phase-5-production.md](./05-phase-5-production.md) | Live Trading, Monitoring | ⚪ Not Started |
+
+### Deprecated
+
+| Document | Description | Status |
+|----------|-------------|--------|
+| [04-phase-4-extended-features.md](./04-phase-4-extended-features.md) | Original combined extended features | ❌ Deprecated |
+
+> **Note**: The original Phase 4 has been split into Phases 7-10 for better implementation focus. See the individual phase documents above.
 
 ---
 
@@ -231,70 +276,76 @@ triplegain/
 │   │   ├── base_agent.py          # Abstract base agent class
 │   │   ├── technical_analysis.py  # Technical Analysis Agent
 │   │   ├── regime_detection.py    # Regime Detection Agent
-│   │   ├── sentiment_analysis.py  # Sentiment Analysis Agent
+│   │   ├── sentiment_analysis.py  # Sentiment Analysis Agent (Phase 7)
 │   │   ├── trading_decision.py    # Trading Decision Agent
-│   │   ├── risk_management.py     # Risk Management Engine
-│   │   ├── portfolio_rebalance.py # Portfolio Rebalancing Agent
-│   │   └── coordinator.py         # Coordinator Agent
+│   │   └── portfolio_rebalance.py # Portfolio Rebalancing Agent
 │   │
 │   ├── data/                      # Data layer
 │   │   ├── __init__.py
 │   │   ├── market_snapshot.py     # Market Snapshot Builder
 │   │   ├── indicator_library.py   # Technical Indicator Library
-│   │   ├── feature_engineering.py # Feature calculation
-│   │   └── data_quality.py        # Data validation
+│   │   └── database.py            # Database utilities
 │   │
 │   ├── llm/                       # LLM integration
 │   │   ├── __init__.py
-│   │   ├── client.py              # LLM client (Ollama + API)
+│   │   ├── clients/               # Provider clients (OpenAI, Anthropic, etc.)
 │   │   ├── prompt_builder.py      # Prompt assembly
-│   │   ├── output_parser.py       # Response parsing
-│   │   └── model_comparison.py    # 6-model A/B framework
+│   │   └── model_comparison.py    # 6-model A/B framework (Phase 9)
 │   │
 │   ├── risk/                      # Risk management
 │   │   ├── __init__.py
-│   │   ├── rules_engine.py        # Rules-based risk engine
-│   │   ├── position_sizing.py     # Position size calculator
-│   │   ├── circuit_breakers.py    # Circuit breaker logic
-│   │   └── cooldown_manager.py    # Cooldown tracking
+│   │   └── rules_engine.py        # Rules-based risk engine
 │   │
 │   ├── execution/                 # Order execution
 │   │   ├── __init__.py
 │   │   ├── order_manager.py       # Order lifecycle
 │   │   ├── position_tracker.py    # Position monitoring
-│   │   ├── trade_logger.py        # Trade audit log
-│   │   └── hodl_bag.py            # Hodl bag management
+│   │   ├── paper_executor.py      # Paper trading execution
+│   │   ├── paper_portfolio.py     # Paper portfolio tracking
+│   │   └── hodl_bag.py            # Hodl bag management (Phase 8)
 │   │
 │   ├── orchestration/             # Agent orchestration
 │   │   ├── __init__.py
 │   │   ├── message_bus.py         # Inter-agent communication
-│   │   ├── scheduler.py           # Agent invocation scheduler
-│   │   └── consensus.py           # Consensus logic
+│   │   └── coordinator.py         # Coordinator agent
 │   │
 │   └── api/                       # API layer
 │       ├── __init__.py
-│       ├── main.py                # FastAPI application
-│       ├── routes/                # API routes
-│       └── websocket.py           # WebSocket handlers
+│       ├── app.py                 # FastAPI application
+│       ├── security.py            # JWT/RBAC authentication
+│       ├── routes_agents.py       # Agent endpoints
+│       ├── routes_orchestration.py # Orchestration endpoints
+│       └── routes_paper_trading.py # Paper trading endpoints
 │
-├── dashboard/                     # React dashboard
+├── dashboard/                     # React dashboard (Phase 10)
 │   ├── src/
 │   └── package.json
 │
 ├── config/                        # Configuration files
 │   ├── agents.yaml                # Agent configuration
-│   ├── llm.yaml                   # LLM providers configuration
 │   ├── risk.yaml                  # Risk parameters
-│   └── system.yaml                # System settings
+│   ├── orchestration.yaml         # Orchestration settings
+│   ├── portfolio.yaml             # Portfolio settings
+│   ├── execution.yaml             # Execution settings
+│   └── hodl.yaml                  # Hodl bag settings (Phase 8)
 │
-├── tests/                         # Test suite
+├── tests/                         # Test suite (1106 tests)
 │   ├── unit/
-│   ├── integration/
-│   └── backtests/
+│   │   ├── agents/
+│   │   ├── risk/
+│   │   ├── orchestration/
+│   │   ├── execution/
+│   │   ├── llm/
+│   │   └── api/
+│   └── integration/
 │
-└── scripts/                       # Utility scripts
-    ├── backtest.py
-    └── paper_trade.py
+└── migrations/                    # Database migrations
+    ├── 001_initial_schema.sql
+    ├── 002_phase2_agents.sql
+    ├── 003_phase3_orchestration.sql
+    ├── 004_paper_trading.sql
+    ├── 005_session_persistence.sql
+    └── ...
 ```
 
 ---
@@ -325,7 +376,7 @@ class BaseAgent(ABC):
 | `AgentOutput` | Agent response | Validated JSON | Parsed agent decision |
 | `RiskValidation` | Trade proposal | Approved/Modified/Rejected | Risk-checked trade |
 
-### Database Tables (New)
+### Database Tables
 
 | Table | Purpose | Phase |
 |-------|---------|-------|
@@ -333,7 +384,11 @@ class BaseAgent(ABC):
 | `trading_decisions` | Trade decision audit | Phase 2 |
 | `trade_executions` | Executed trades | Phase 3 |
 | `portfolio_snapshots` | Portfolio history | Phase 3 |
-| `model_comparisons` | 6-model A/B results | Phase 4 |
+| `paper_sessions` | Paper trading sessions | Phase 6 |
+| `sentiment_outputs` | Sentiment analysis | Phase 7 |
+| `hodl_bags` | Hodl bag holdings | Phase 8 |
+| `model_decisions` | Model comparison | Phase 9 |
+| `model_leaderboard` | Model rankings | Phase 9 |
 
 ---
 
@@ -341,13 +396,19 @@ class BaseAgent(ABC):
 
 ### Phase Completion Gates
 
-| Phase | Gate Criteria |
-|-------|--------------|
-| Phase 1 | Indicators calculated correctly, snapshots generated <500ms |
-| Phase 2 | Agents produce valid outputs, risk engine rejects invalid trades |
-| Phase 3 | Agents communicate, trades execute on paper |
-| Phase 4 | Sentiment integrated, dashboard functional, A/B tracking 6 models |
-| Phase 5 | Paper trading profitable, all tests pass, live deployment ready |
+| Phase | Gate Criteria | Status |
+|-------|--------------|--------|
+| Phase 1 | Indicators correct, snapshots <500ms | ✅ |
+| Phase 2 | Agents valid outputs, risk rejects invalid | ✅ |
+| Phase 3 | Agents communicate, trades execute on paper | ✅ |
+| Phase 4 | JWT auth works, RBAC enforced | ✅ |
+| Phase 5 | Config validates, integration works | ✅ |
+| Phase 6 | Paper trading functional, sessions persist | ✅ |
+| Phase 7 | Sentiment aggregates from Grok + GPT | 🔵 |
+| Phase 8 | Hodl bags accumulate from profits | 🔵 |
+| Phase 9 | All 6 models tracked, leaderboard accurate | 🔵 |
+| Phase 10 | Dashboard displays all data, controls work | 🔵 |
+| Phase 11 | Live trading profitable, monitoring active | ⚪ |
 
 ### System Targets (From Design)
 
@@ -374,5 +435,5 @@ class BaseAgent(ABC):
 
 ---
 
-*Implementation Plan v1.0 - December 2025*
-*Ready for Phase 1 Development*
+*Implementation Plan v2.0 - December 2025*
+*Phase 6 Complete - Phases 7-10 Ready for Development*

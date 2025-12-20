@@ -1,4 +1,4 @@
-# Phase 6: Paper Trading Integration Plan
+# Phase 3.5: Paper Trading Integration Plan
 
 **Version**: 1.0
 **Date**: 2025-12-19
@@ -66,7 +66,7 @@ The TripleGain system has foundational infrastructure for paper trading but lack
 
 ## Detailed Implementation Plan
 
-### Phase 6.1: Trading Mode Infrastructure
+### Phase 3.5.1: Trading Mode Infrastructure
 
 **Goal**: Create a system-wide trading mode flag that defaults to PAPER.
 
@@ -186,7 +186,7 @@ def validate_trading_mode_on_startup():
 
 ---
 
-### Phase 6.2: Paper Portfolio Tracker
+### Phase 3.5.2: Paper Portfolio Tracker
 
 **Goal**: Track simulated balances, P&L, and position limits in paper mode.
 
@@ -392,7 +392,7 @@ class InsufficientBalanceError(Exception):
 
 ---
 
-### Phase 6.3: Paper Order Executor
+### Phase 3.5.3: Paper Order Executor
 
 **Goal**: Replace hardcoded mock logic with configurable, realistic simulation.
 
@@ -556,7 +556,7 @@ class PaperOrderExecutor:
 
 ---
 
-### Phase 6.4: Price Source Integration
+### Phase 3.5.4: Price Source Integration
 
 **Goal**: Provide realistic prices for paper trading.
 
@@ -638,7 +638,7 @@ class PaperPriceSource:
 
 ---
 
-### Phase 6.5: Database Isolation
+### Phase 3.5.5: Database Isolation
 
 **Goal**: Separate paper trading data from live trading data.
 
@@ -786,7 +786,7 @@ END $$;
 
 ---
 
-### Phase 6.6: Integration with Coordinator
+### Phase 3.5.6: Integration with Coordinator
 
 **Goal**: Modify coordinator to use paper or live execution based on mode.
 
@@ -844,7 +844,7 @@ async def _execute_validated_trade(self, trade: ValidatedTrade) -> bool:
 
 ---
 
-### Phase 6.7: API Endpoints for Paper Trading
+### Phase 3.5.7: API Endpoints for Paper Trading
 
 **Goal**: Add API endpoints to manage paper trading.
 
