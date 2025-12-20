@@ -10,6 +10,7 @@ pytest --cov=triplegain/src --cov-report=term       # Run with coverage (87%)
 docker-compose up -d timescaledb                    # Start database
 python -m data.kraken_db.gap_filler --db-url "$DB_URL"  # Fill data gaps
 uvicorn triplegain.src.api.app:app --reload         # Start API server
+python -m triplegain.run_paper_trading              # Run paper trading system
 ```
 
 ## Current Phase: Phase 6 Complete
@@ -24,8 +25,11 @@ uvicorn triplegain.src.api.app:app --reload         # Start API server
 | 4. API Security | **COMPLETE** | Authentication, RBAC, rate limiting |
 | 5. Configuration | **COMPLETE** | Config validation, integration fixes |
 | 6. Paper Trading | **COMPLETE** | Simulated execution, session persistence |
-| 7. Extended | Ready to Start | Sentiment, Hodl Bag tracking, Dashboard |
-| 8. Production | Not Started | Live Trading, Deployment |
+| 7. Sentiment | Ready | Grok + GPT sentiment analysis |
+| 8. Hodl Bag | Ready | 10% profit allocation to BTC/XRP |
+| 9. A/B Testing | Ready | 6-model comparison framework |
+| 10. Dashboard | Ready | React monitoring UI |
+| 11. Production | Not Started | Live Trading, Deployment |
 
 ## Key Facts (Memory)
 
@@ -71,6 +75,7 @@ uvicorn triplegain.src.api.app:app --reload         # Start API server
 ## Project Structure
 ```
 triplegain/
+├── run_paper_trading.py  # Paper trading entry point
 ├── src/
 │   ├── agents/         # Base, TA, Regime, Trading Decision, Portfolio Rebalance
 │   ├── risk/           # Rules engine, circuit breakers, cooldowns

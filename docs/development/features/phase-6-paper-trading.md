@@ -347,12 +347,40 @@ if self.trading_mode == TradingMode.PAPER:
 
 ---
 
+## Running Paper Trading
+
+### Entry Point Script
+
+**File**: `triplegain/run_paper_trading.py`
+
+Start the paper trading system with:
+
+```bash
+python -m triplegain.run_paper_trading
+```
+
+**What it does**:
+1. Loads environment from `.env`
+2. Connects to TimescaleDB
+3. Initializes all LLM clients (Ollama, DeepSeek, Anthropic, OpenAI, xAI)
+4. Starts agents (TA, Regime, Trading Decision)
+5. Runs coordinator in PAPER mode
+6. Displays initial portfolio balances
+7. Graceful shutdown on Ctrl+C
+
+**Requirements**:
+- `.env` file with API keys
+- Docker running with TimescaleDB (`docker-compose up -d timescaledb`)
+- Ollama running with at least one model
+
+---
+
 ## Related Documents
 
-- [Phase 6 Implementation Plan](../TripleGain-implementation-plan/phase-6-paper-trading-plan.md)
-- [Phase 6 Code Review](../reviews/phase-6/phase-6-code-review.md)
+- [Phase 6 Implementation Plan](../TripleGain-implementation-plan/phase-3_5-paper-trading-plan.md)
+- [Phase 6 Code Review](../reviews/phase-3_5/phase-6-code-review.md)
+- [Phase 3.5 Deep Code Review](../reviews/phase-3_5/deep-code-review.md)
 - [ADR-013: Paper Trading Design](../../architecture/09-decisions/ADR-013-paper-trading-design.md)
-- [Execution Layer Architecture](../../architecture/07-deployment/README.md)
 
 ---
 
@@ -360,17 +388,18 @@ if self.trading_mode == TradingMode.PAPER:
 
 With Phase 6 complete, the system is ready for:
 
-1. **Paper Trading Validation** (1-2 weeks)
-   - Run 24/7 paper trading with all agents
+1. **Paper Trading Validation**
+   - Run paper trading with all agents
    - Validate signal generation → execution flow
    - Analyze performance metrics
 
-2. **Phase 7: Extended Features**
-   - Sentiment agent integration
-   - Hodl bag tracking
-   - Dashboard UI
+2. **Extended Features (Phases 7-10)**
+   - Phase 7: Sentiment Analysis Agent (Grok + GPT)
+   - Phase 8: Hodl Bag System (10% profit allocation)
+   - Phase 9: 6-Model A/B Testing Framework
+   - Phase 10: React Dashboard UI
 
-3. **Phase 8: Production** (after successful paper trading)
+3. **Phase 11: Production** (after successful paper trading)
    - Live trading with small positions
    - Gradual position scaling
    - Full production deployment
