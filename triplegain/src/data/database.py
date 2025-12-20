@@ -177,6 +177,66 @@ class DatabasePool:
             f"Failed to reconnect after {self.config.max_retries} attempts: {last_error}"
         )
 
+    async def fetch(self, query: str, *args) -> list:
+        """
+        Execute a query and return all rows.
+
+        Convenience method that delegates to execute_with_retry.
+
+        Args:
+            query: SQL query to execute
+            *args: Query arguments
+
+        Returns:
+            List of rows
+        """
+        return await self.execute_with_retry('fetch', query, *args)
+
+    async def fetchrow(self, query: str, *args) -> Optional[asyncpg.Record]:
+        """
+        Execute a query and return the first row.
+
+        Convenience method that delegates to execute_with_retry.
+
+        Args:
+            query: SQL query to execute
+            *args: Query arguments
+
+        Returns:
+            First row or None
+        """
+        return await self.execute_with_retry('fetchrow', query, *args)
+
+    async def fetchval(self, query: str, *args) -> Any:
+        """
+        Execute a query and return the first column of the first row.
+
+        Convenience method that delegates to execute_with_retry.
+
+        Args:
+            query: SQL query to execute
+            *args: Query arguments
+
+        Returns:
+            Single value or None
+        """
+        return await self.execute_with_retry('fetchval', query, *args)
+
+    async def execute(self, query: str, *args) -> str:
+        """
+        Execute a query without returning results.
+
+        Convenience method that delegates to execute_with_retry.
+
+        Args:
+            query: SQL query to execute
+            *args: Query arguments
+
+        Returns:
+            Command status string
+        """
+        return await self.execute_with_retry('execute', query, *args)
+
     async def execute_with_retry(
         self,
         operation: str,
@@ -258,27 +318,28 @@ class DatabasePool:
         if end_time is None:
             end_time = datetime.now(timezone.utc)
 
-        # Map timeframe to aggregate table name
+        # Map timeframe to interval_minutes value
         timeframe_map = {
-            '1m': 'candles_1m',
-            '5m': 'candles_5m',
-            '15m': 'candles_15m',
-            '30m': 'candles_30m',
-            '1h': 'candles_1h',
-            '4h': 'candles_4h',
-            '12h': 'candles_12h',
-            '1d': 'candles_1d',
-            '1w': 'candles_1w',
+            '1m': 1,
+            '5m': 5,
+            '15m': 15,
+            '30m': 30,
+            '1h': 60,
+            '4h': 240,
+            '12h': 720,
+            '1d': 1440,
+            '1w': 10080,
         }
 
-        table_name = timeframe_map.get(timeframe)
-        if not table_name:
+        interval_minutes = timeframe_map.get(timeframe)
+        if interval_minutes is None:
             raise ValueError(f"Unsupported timeframe: {timeframe}")
 
-        # Normalize symbol format (remove slash if present)
-        normalized_symbol = symbol.replace('/', '')
+        # Symbol format in database includes slash (e.g., "BTC/USDT")
+        # Try both formats to handle different database conventions
+        normalized_symbol = symbol if '/' in symbol else f"{symbol[:3]}/{symbol[3:]}"
 
-        query = f"""
+        query = """
             SELECT
                 timestamp,
                 open,
@@ -286,15 +347,16 @@ class DatabasePool:
                 low,
                 close,
                 volume
-            FROM {table_name}
+            FROM candles
             WHERE symbol = $1
-                AND timestamp <= $2
+                AND interval_minutes = $2
+                AND timestamp <= $3
             ORDER BY timestamp DESC
-            LIMIT $3
+            LIMIT $4
         """
 
         async with self.acquire() as conn:
-            rows = await conn.fetch(query, normalized_symbol, end_time, limit)
+            rows = await conn.fetch(query, normalized_symbol, interval_minutes, end_time, limit)
 
         # Convert to list of dicts (oldest first)
         candles = [
