@@ -126,7 +126,14 @@ class PaperPriceSource:
 
         # Fallback to mock prices
         if symbol in self._mock_prices:
-            logger.debug(f"Using mock price for {symbol}: {self._mock_prices[symbol]}")
+            # NEW-MEDIUM-01: Warn when using mock prices in live_feed mode
+            if self.source_type == "live_feed":
+                logger.warning(
+                    f"NEW-MEDIUM-01: Using mock price for {symbol} in live_feed mode - "
+                    f"WebSocket/cache unavailable. Mock price: {self._mock_prices[symbol]}"
+                )
+            else:
+                logger.debug(f"Using mock price for {symbol}: {self._mock_prices[symbol]}")
             return self._mock_prices[symbol]
 
         logger.warning(f"No price available for {symbol}")
@@ -177,7 +184,14 @@ class PaperPriceSource:
 
         # Fallback to mock prices
         if symbol in self._mock_prices:
-            logger.debug(f"Using mock price for {symbol}: {self._mock_prices[symbol]}")
+            # NEW-MEDIUM-01: Warn when using mock prices in live_feed mode
+            if self.source_type == "live_feed":
+                logger.warning(
+                    f"NEW-MEDIUM-01: Using mock price for {symbol} in live_feed mode - "
+                    f"WebSocket/cache unavailable. Mock price: {self._mock_prices[symbol]}"
+                )
+            else:
+                logger.debug(f"Using mock price for {symbol}: {self._mock_prices[symbol]}")
             return self._mock_prices[symbol]
 
         logger.warning(f"No price available for {symbol}")

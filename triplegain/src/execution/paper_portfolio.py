@@ -47,7 +47,7 @@ class PaperTradeRecord:
     notes: str = ""
 
     def to_dict(self) -> dict:
-        """Serialize to dictionary."""
+        """Serialize to dictionary (includes all fields)."""
         return {
             "id": self.id,
             "timestamp": self.timestamp.isoformat(),
@@ -59,6 +59,25 @@ class PaperTradeRecord:
             "fee": str(self.fee),
             "fee_currency": self.fee_currency,
             "balance_after": {k: str(v) for k, v in self.balance_after.items()},
+            "notes": self.notes,
+        }
+
+    def to_dict_public(self) -> dict:
+        """
+        Serialize to dictionary for public API responses.
+
+        NEW-LOW-04: Excludes balance_after to avoid exposing internal state.
+        """
+        return {
+            "id": self.id,
+            "timestamp": self.timestamp.isoformat(),
+            "symbol": self.symbol,
+            "side": self.side,
+            "size": str(self.size),
+            "price": str(self.price),
+            "value": str(self.value),
+            "fee": str(self.fee),
+            "fee_currency": self.fee_currency,
             "notes": self.notes,
         }
 

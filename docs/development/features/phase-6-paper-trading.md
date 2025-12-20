@@ -1,9 +1,9 @@
 # Phase 6: Paper Trading Integration
 
-**Version**: 1.0
+**Version**: 1.1
 **Date**: 2025-12-19
 **Status**: COMPLETE
-**Review**: All 8 issues from code review addressed
+**Review**: All 8 initial issues + 8 Phase 3.5 deep review issues addressed
 
 ---
 
@@ -22,7 +22,7 @@ Phase 6 implements comprehensive paper trading infrastructure as the **default e
 | API Routes | COMPLETE | Portfolio, trades, positions, reset endpoints |
 | DB Isolation | COMPLETE | Separate paper_* tables (migration 005) |
 | Session Persistence | COMPLETE | Save/restore paper sessions across restarts |
-| 53 Unit Tests | PASSING | Full coverage of paper trading components |
+| 56 Unit Tests | PASSING | Full coverage of paper trading components |
 
 ---
 
@@ -209,6 +209,40 @@ paper_trading:
 
 ---
 
+## Phase 3.5 Deep Code Review Issues Addressed
+
+A secondary deep review (Phase 3.5) identified and fixed 8 additional issues:
+
+### NEW-HIGH Priority (1 issue)
+
+| ID | Issue | Fix |
+|----|-------|-----|
+| NEW-HIGH-01 | `_persist_orders_before_trim()` was placeholder only | Implemented actual DB persistence to `paper_orders` table |
+
+### NEW-MEDIUM Priority (3 issues)
+
+| ID | Issue | Fix |
+|----|-------|-----|
+| NEW-MEDIUM-01 | No warning when using mock prices in live_feed mode | Added warning log when falling back to mock prices |
+| NEW-MEDIUM-02 | Rate limiting on `/paper/trade` | Already existed in `security.py` (verified) |
+| NEW-MEDIUM-03 | TradeProposal imported inside function body | Moved import to module level for better performance |
+
+### NEW-LOW Priority (4 issues)
+
+| ID | Issue | Fix |
+|----|-------|-----|
+| NEW-LOW-01 | Inconsistent error response keys (`error` vs `error_message`) | Standardized to `error_message` everywhere |
+| NEW-LOW-02 | Portfolio reset used generic `RISK_RESET` event | Added specific `PAPER_RESET` security event type |
+| NEW-LOW-03 | No concurrent DB persistence tests | Added 3 tests for persistence, error handling, no-DB graceful skip |
+| NEW-LOW-04 | Trade history exposed `balance_after` internal state | Added `to_dict_public()` method excluding sensitive fields |
+
+### Review Documents
+
+- [Phase 3.5 Deep Code Review](../reviews/phase-3_5/phase-3-5-deep-code-logic-review.md)
+- [Original Phase 6 Code Review](../reviews/phase-3_5/phase-6-code-review.md)
+
+---
+
 ## Test Coverage
 
 **File**: `triplegain/tests/unit/execution/test_paper_trading.py`
@@ -227,9 +261,10 @@ paper_trading:
 | TestHigh02SizeCalculationPrecision | 1 | Size quantization |
 | TestMedium02PriceCacheTimestamp | 2 | Stale price rejection |
 | TestEdgeCases | 2 | Zero balance, no price |
+| TestConcurrentDatabasePersistence | 3 | NEW-LOW-03: DB persistence tests |
 | TestSessionPersistence | 1 | Serialization roundtrip |
 
-**Total**: 53 tests passing
+**Total**: 56 tests passing
 
 ---
 
@@ -267,7 +302,7 @@ if self.trading_mode == TradingMode.PAPER:
 - [x] Coordinator logs trading mode at startup
 - [x] Position tracker respects trading mode
 - [x] Risk engine works identically in both modes
-- [x] All 1098 tests pass
+- [x] All 1087 tests pass (including 56 paper trading tests)
 
 ---
 

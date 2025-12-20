@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.1] - 2025-12-19
+
+### Added
+- **PAPER_RESET Security Event**: New `SecurityEventType.PAPER_RESET` for clearer audit trails (NEW-LOW-02)
+- **DATA_ACCESS Security Event**: General data access logging event type
+- **Public Trade API Response**: `to_dict_public()` method excludes internal state from API responses (NEW-LOW-04)
+- **3 New Persistence Tests**: Concurrent DB persistence, error handling, and graceful no-DB skip (NEW-LOW-03)
+
+### Fixed
+- **Order History Persistence**: `_persist_orders_before_trim()` now actually persists to `paper_orders` table (NEW-HIGH-01)
+- **Mock Price Warning**: Logs warning when falling back to mock prices in `live_feed` mode (NEW-MEDIUM-01)
+- **TradeProposal Import**: Moved to module level for better performance (NEW-MEDIUM-03)
+- **Error Response Keys**: Standardized to `error_message` for consistency (NEW-LOW-01)
+- **Paper Reset Audit**: Uses `PAPER_RESET` instead of `RISK_RESET` for clearer logging (NEW-LOW-02)
+- **Balance Exposure**: Trade history API no longer exposes `balance_after` field (NEW-LOW-04)
+
+### Changed
+- Test count: 1087 (including 3 new persistence tests)
+- Rate limiting for `/paper/trade` already existed (verified in Phase 3.5 review)
+
+### Documentation
+- [Phase 3.5 Deep Code Review](docs/development/reviews/phase-3_5/phase-3-5-deep-code-logic-review.md)
+
 ## [0.4.0] - 2025-12-19
 
 ### Added

@@ -405,6 +405,9 @@ class SecurityEventType(Enum):
     RISK_RESET = "risk_reset"
     TRADING_PAUSED = "trading_paused"
     TRADING_RESUMED = "trading_resumed"
+    # NEW-LOW-02: Specific event type for paper portfolio reset
+    PAPER_RESET = "paper_reset"
+    DATA_ACCESS = "data_access"  # For general data access logging
 
 
 async def log_security_event(
@@ -439,6 +442,7 @@ async def log_security_event(
         SecurityEventType.AUTHZ_DENIED,
         SecurityEventType.ADMIN_OVERRIDE,
         SecurityEventType.RISK_RESET,
+        SecurityEventType.PAPER_RESET,  # NEW-LOW-02: Paper reset is also a warning
     }:
         audit_logger.warning(f"SECURITY_EVENT: {event}")
     else:

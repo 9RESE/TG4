@@ -1026,6 +1026,133 @@ class TestEdgeCases:
         assert result.success is True or result.error_message is not None
 
 
+class TestConcurrentDatabasePersistence:
+    """Tests for NEW-LOW-03: Concurrent database persistence."""
+
+    @pytest.mark.asyncio
+    async def test_concurrent_order_persistence(self):
+        """NEW-LOW-03: Test concurrent database persistence operations."""
+        from triplegain.src.execution.order_manager import (
+            Order, OrderSide, OrderType, OrderStatus
+        )
+
+        config = {"paper_trading": {"fill_delay_ms": 1}}  # Very fast
+        portfolio = PaperPortfolio(balances={"USDT": Decimal("1000000")})
+        price_source = MockPriceSource({"BTC/USDT": Decimal("45000")})
+
+        executor = PaperOrderExecutor(
+            config=config,
+            paper_portfolio=portfolio,
+            price_source=price_source.get_price,
+        )
+
+        # Create a mock database
+        mock_db = AsyncMock()
+        mock_db.execute = AsyncMock(return_value=None)
+        executor.set_database(mock_db)
+
+        # Create orders to persist
+        orders = [
+            Order(
+                id=str(uuid.uuid4()),
+                symbol="BTC/USDT",
+                side=OrderSide.BUY,
+                order_type=OrderType.MARKET,
+                size=Decimal("0.001"),
+            )
+            for _ in range(5)
+        ]
+
+        # Mark orders as filled for persistence
+        for order in orders:
+            order.status = OrderStatus.FILLED
+            order.filled_size = order.size
+            order.filled_price = Decimal("45000")
+            order.fee_amount = Decimal("0.11")
+            order.fee_currency = "USDT"
+
+        # Persist concurrently (simulating what happens during trim)
+        await executor._persist_orders_before_trim(orders)
+
+        # Verify database was called for each order
+        assert mock_db.execute.call_count == 5
+
+    @pytest.mark.asyncio
+    async def test_persistence_handles_db_error_gracefully(self):
+        """NEW-LOW-03: Test that DB errors during persistence don't crash the system."""
+        from triplegain.src.execution.order_manager import (
+            Order, OrderSide, OrderType, OrderStatus
+        )
+
+        config = {"paper_trading": {"fill_delay_ms": 1}}
+        portfolio = PaperPortfolio(balances={"USDT": Decimal("10000")})
+        price_source = MockPriceSource({"BTC/USDT": Decimal("45000")})
+
+        executor = PaperOrderExecutor(
+            config=config,
+            paper_portfolio=portfolio,
+            price_source=price_source.get_price,
+        )
+
+        # Create a mock database that fails
+        mock_db = AsyncMock()
+        mock_db.execute = AsyncMock(side_effect=Exception("Database connection lost"))
+        executor.set_database(mock_db)
+
+        orders = [
+            Order(
+                id=str(uuid.uuid4()),
+                symbol="BTC/USDT",
+                side=OrderSide.BUY,
+                order_type=OrderType.MARKET,
+                size=Decimal("0.001"),
+            )
+        ]
+        orders[0].status = OrderStatus.FILLED
+
+        # Should not raise exception, just log error
+        await executor._persist_orders_before_trim(orders)
+
+        # Verify execution completed without exception
+        assert True  # If we get here, the test passes
+
+    @pytest.mark.asyncio
+    async def test_persistence_skipped_when_no_db(self):
+        """NEW-LOW-03: Test that persistence is skipped gracefully when no DB."""
+        from triplegain.src.execution.order_manager import (
+            Order, OrderSide, OrderType, OrderStatus
+        )
+
+        config = {"paper_trading": {"fill_delay_ms": 1}}
+        portfolio = PaperPortfolio(balances={"USDT": Decimal("10000")})
+        price_source = MockPriceSource({"BTC/USDT": Decimal("45000")})
+
+        executor = PaperOrderExecutor(
+            config=config,
+            paper_portfolio=portfolio,
+            price_source=price_source.get_price,
+        )
+
+        # Don't set database - executor._db should be None
+
+        orders = [
+            Order(
+                id=str(uuid.uuid4()),
+                symbol="BTC/USDT",
+                side=OrderSide.BUY,
+                order_type=OrderType.MARKET,
+                size=Decimal("0.001"),
+            )
+        ]
+        orders[0].status = OrderStatus.FILLED
+
+        # Should complete without error even though no DB is set
+        await executor._persist_orders_before_trim(orders)
+
+        # If we get here, test passes
+        assert True
+
+
 class TestSessionPersistence:
     """Tests for HIGH-01: Session persistence."""
 

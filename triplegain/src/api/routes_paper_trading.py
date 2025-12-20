@@ -38,6 +38,8 @@ from .security import (
     log_security_event,
     SecurityEventType,
 )
+# NEW-MEDIUM-03: Import TradeProposal at module level for better performance
+from ..risk.rules_engine import TradeProposal
 
 logger = logging.getLogger(__name__)
 
@@ -199,8 +201,9 @@ def create_paper_trading_routes(app_state: Dict[str, Any]) -> 'APIRouter':
             symbol = symbol.upper()
             trades = [t for t in trades if t.symbol == symbol]
 
+        # NEW-LOW-04: Use to_dict_public() to exclude balance_after from API response
         return {
-            "trades": [t.to_dict() for t in trades],
+            "trades": [t.to_dict_public() for t in trades],
             "total_count": len(portfolio.trade_history),
             "returned_count": len(trades),
         }
@@ -229,9 +232,7 @@ def create_paper_trading_routes(app_state: Dict[str, Any]) -> 'APIRouter':
         # Validate symbol
         validate_symbol_or_raise(request.symbol)
 
-        # Create trade proposal
-        from ..risk.rules_engine import TradeProposal
-
+        # Create trade proposal (NEW-MEDIUM-03: TradeProposal imported at module level)
         # MEDIUM-01: Use None for entry_price when not specified (not 0)
         # 0 could be misinterpreted as a valid price, None clearly means "market order"
         proposal = TradeProposal(
@@ -250,9 +251,10 @@ def create_paper_trading_routes(app_state: Dict[str, Any]) -> 'APIRouter':
         if coordinator.risk_engine:
             validation = coordinator.risk_engine.validate_trade(proposal)
             if not validation.is_approved():
+                # NEW-LOW-01: Standardize on 'error_message' for consistency
                 return {
                     "success": False,
-                    "error": "Trade rejected by risk engine",
+                    "error_message": "Trade rejected by risk engine",
                     "rejections": validation.rejections,
                 }
             proposal = validation.modified_proposal or proposal
@@ -315,9 +317,9 @@ def create_paper_trading_routes(app_state: Dict[str, Any]) -> 'APIRouter':
         else:
             portfolio.reset()
 
-        # Audit logging: Use RISK_RESET for portfolio resets (critical operation)
+        # NEW-LOW-02: Use PAPER_RESET for paper portfolio resets (clearer audit trail)
         log_security_event(
-            SecurityEventType.RISK_RESET,
+            SecurityEventType.PAPER_RESET,
             current_user.id,
             f"Paper portfolio reset by ADMIN. Session: {portfolio.session_id}, "
             f"Old trades: {old_trade_count}, Old balances: {old_balances}, "

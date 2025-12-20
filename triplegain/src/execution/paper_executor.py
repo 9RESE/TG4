@@ -501,28 +501,86 @@ class PaperOrderExecutor:
         """
         Persist orders to database before trimming from memory.
 
-        MEDIUM-03: Ensures order history is not lost when memory limit is reached.
+        MEDIUM-03 / NEW-HIGH-01: Ensures order history is not lost when memory
+        limit is reached. Orders are persisted to paper_orders table.
 
         Args:
             orders: List of orders to persist
         """
-        # Check if we have a database connection via portfolio
-        # (PaperPortfolio may have a db reference, or we can use coordinator's db)
         if not orders:
             return
 
-        try:
-            # For now, log that we would persist (actual DB connection needs to be passed)
-            # This is a placeholder - full implementation requires DB reference
-            logger.info(f"MEDIUM-03: Persisting {len(orders)} orders before trimming from memory")
+        # Check if we have a database connection
+        if not hasattr(self, '_db') or self._db is None:
+            logger.warning(
+                f"NEW-HIGH-01: No database connection - {len(orders)} orders will be lost. "
+                "Call set_database() to enable order persistence."
+            )
+            return
 
-            # If we had db access, we would do:
-            # for order in orders:
-            #     await db.execute("""
-            #         INSERT INTO paper_trades (order_id, symbol, side, size, price, status, ...)
-            #         VALUES ($1, $2, $3, $4, $5, $6, ...)
-            #         ON CONFLICT (order_id) DO NOTHING
-            #     """, order.id, order.symbol, ...)
+        try:
+            # Get session_id from portfolio if available
+            session_id = getattr(self.portfolio, 'session_id', None)
+
+            persisted_count = 0
+            for order in orders:
+                try:
+                    # Map OrderStatus enum to database-compatible string
+                    status_map = {
+                        OrderStatus.PENDING: 'pending',
+                        OrderStatus.OPEN: 'open',
+                        OrderStatus.PARTIALLY_FILLED: 'partially_filled',
+                        OrderStatus.FILLED: 'filled',
+                        OrderStatus.CANCELLED: 'cancelled',
+                        OrderStatus.EXPIRED: 'expired',
+                        OrderStatus.ERROR: 'error',
+                        OrderStatus.REJECTED: 'error',  # Map REJECTED to 'error' for DB
+                    }
+                    db_status = status_map.get(order.status, 'error')
+
+                    # Map OrderType to database-compatible string
+                    order_type_str = order.order_type.value if hasattr(order.order_type, 'value') else str(order.order_type)
+
+                    await self._db.execute(
+                        """
+                        INSERT INTO paper_orders (
+                            external_id, session_id, symbol, side, order_type,
+                            size, price, filled_size, filled_price,
+                            fee_amount, fee_currency, leverage, status,
+                            created_at, updated_at, error_message
+                        ) VALUES (
+                            $1, $2, $3, $4, $5,
+                            $6, $7, $8, $9,
+                            $10, $11, $12, $13,
+                            $14, $15, $16
+                        )
+                        ON CONFLICT DO NOTHING
+                        """,
+                        order.id,  # external_id
+                        session_id,
+                        order.symbol,
+                        order.side.value if hasattr(order.side, 'value') else str(order.side),
+                        order_type_str,
+                        float(order.size),
+                        float(order.price) if order.price else None,
+                        float(order.filled_size) if order.filled_size else 0,
+                        float(order.filled_price) if order.filled_price else None,
+                        float(order.fee_amount) if order.fee_amount else 0,
+                        order.fee_currency if hasattr(order, 'fee_currency') else None,
+                        order.leverage if hasattr(order, 'leverage') else 1,
+                        db_status,
+                        order.created_at if hasattr(order, 'created_at') else datetime.now(timezone.utc),
+                        order.updated_at if hasattr(order, 'updated_at') else datetime.now(timezone.utc),
+                        order.error_message if hasattr(order, 'error_message') else None,
+                    )
+                    persisted_count += 1
+                except Exception as order_err:
+                    logger.debug(f"Failed to persist order {order.id}: {order_err}")
+
+            logger.info(
+                f"NEW-HIGH-01: Persisted {persisted_count}/{len(orders)} orders "
+                f"to database before trimming from memory"
+            )
 
         except Exception as e:
             logger.error(f"Failed to persist orders before trim: {e}")
