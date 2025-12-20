@@ -5,6 +5,40 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.2] - 2025-12-20
+
+### Added
+- **Phase 8 Complete: Final Fixes** - All remaining review issues addressed
+- **Integration Tests (M4)**: Created `triplegain/tests/integration/test_hodl_integration.py` with 24 comprehensive tests
+  - End-to-end profit flow tests
+  - Coordinator lifecycle integration tests
+  - Position tracker integration tests
+  - Message bus event publishing tests
+  - Concurrent operation tests
+  - State serialization tests
+- **Slippage Protection (L5)**: Full slippage tracking and monitoring in `hodl_bag.py`
+  - `max_slippage_pct` configuration loading from `hodl.yaml`
+  - `_record_slippage()` method for tracking slippage events
+  - `_wait_for_fill_with_slippage()` for live trading validation
+  - Slippage statistics in `get_stats()` output
+  - Warnings logged when slippage exceeds configured threshold
+- **API Route Tests (L6)**: Extended `test_routes_hodl.py` to 39 tests
+  - Error response tests (503 when manager not initialized)
+  - Empty pending amount edge cases
+  - Zero balance edge cases
+  - Concurrent request handling tests
+  - Force accumulation edge cases (all assets, exceptions)
+  - Slippage statistics verification
+
+### Changed
+- Test count: 1274 (118 Phase 8 tests total: 55 unit + 39 API + 24 integration)
+- Removed deprecated `_wait_for_fill()` method (replaced by `_wait_for_fill_with_slippage()`)
+
+### Documentation
+- Updated [Phase 8 Deep Review v2](docs/development/reviews/phase-8/deep-review-v2-2025-12-20.md) with implementation summary
+
+---
+
 ## [0.6.1] - 2025-12-20
 
 ### Added

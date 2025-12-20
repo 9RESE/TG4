@@ -2,7 +2,8 @@
 
 **Status**: COMPLETE
 **Completion Date**: 2025-12-20
-**Test Coverage**: 56 tests (45 manager, 11 API)
+**Version**: v0.6.2
+**Test Coverage**: 118 tests (55 manager, 39 API, 24 integration)
 
 ---
 
@@ -37,6 +38,9 @@ Core manager for hodl bag operations.
 | `get_hodl_state()` | Returns current balances and P&L |
 | `get_pending()` | Returns pending accumulation amounts |
 | `calculate_metrics()` | Computes performance metrics |
+| `create_daily_snapshot()` | Creates daily value snapshots |
+| `_record_slippage()` | Tracks slippage events (L5) |
+| `_wait_for_fill_with_slippage()` | Waits for order fill with slippage validation |
 
 ### 2. API Routes
 
@@ -90,6 +94,12 @@ hodl_bags:
     usdt: 1                    # $1 (no purchase needed)
     xrp: 25                    # $25 minimum for XRP
     btc: 15                    # $15 minimum for BTC
+
+  execution:
+    order_type: market
+    max_retries: 3             # Retry failed purchases
+    retry_delay_seconds: 30
+    max_slippage_pct: 0.5      # L5: Slippage alert threshold
 
   limits:
     max_single_accumulation_usd: 1000
@@ -227,6 +237,28 @@ class HodlTransaction:
 | Max Single Accumulation | $1,000 | Prevents large single allocations |
 | Daily Accumulation Limit | $5,000 | Prevents runaway accumulation |
 | Minimum Profit | $1.00 | Avoids micro-allocations |
+| Max Slippage | 0.5% | Alerts on excessive slippage (L5) |
+
+### Slippage Protection (L5)
+
+The system tracks slippage on all hodl purchases:
+
+- **Configuration**: `max_slippage_pct` in `hodl.yaml` (default 0.5%)
+- **Tracking**: Every purchase records expected vs actual price
+- **Alerting**: Warnings logged when slippage exceeds threshold
+- **Statistics**: Available via `get_stats()` API response
+
+```python
+# Slippage statistics in get_stats() response
+{
+    "slippage": {
+        "max_slippage_pct": 0.5,      # Configured threshold
+        "total_events": 10,            # Total tracked purchases
+        "max_observed_pct": 0.25,      # Worst slippage seen
+        "warnings": 0                  # Threshold breach count
+    }
+}
+```
 
 ### Paper Trading
 
@@ -234,6 +266,7 @@ class HodlTransaction:
 - Separate `is_paper` flag in all records
 - Same API and behavior as live mode
 - No real orders placed in paper mode
+- Slippage tracked as 0% (simulated instant fill)
 
 ---
 
@@ -241,7 +274,7 @@ class HodlTransaction:
 
 ### Unit Tests
 
-**Location**: `triplegain/tests/unit/execution/test_hodl_bag.py`
+**Location**: `triplegain/tests/unit/execution/test_hodl_bag.py` (55 tests)
 
 | Category | Tests |
 |----------|-------|
@@ -257,19 +290,49 @@ class HodlTransaction:
 | StateAndMetrics | 5 tests (state, pending, metrics, stats) |
 | PriceSource | 2 tests (fallback, custom) |
 | Integration | 2 tests (full flow, threshold triggers) |
+| SlippageProtection | 10 tests (L5: config, tracking, warnings, stats) |
 
 ### API Tests
 
-**Location**: `triplegain/tests/unit/api/test_routes_hodl.py`
+**Location**: `triplegain/tests/unit/api/test_routes_hodl.py` (39 tests)
 
 | Category | Tests |
 |----------|-------|
+| HodlStatus | 4 tests |
+| HodlThresholds | 1 test |
 | RouterCreation | 3 tests |
 | ForceAccumulation | 2 tests |
 | Metrics | 2 tests |
 | TransactionHistory | 2 tests |
-| HodlThresholds | 1 test |
-| HodlStatus | 1 test |
+| Snapshots | 2 tests |
+| RetryLogic | 3 tests |
+| ThreadSafety | 2 tests |
+| AdminOperations | 3 tests |
+| EdgeCases | 3 tests |
+| ErrorResponses | 2 tests (L6) |
+| EmptyPendingCases | 2 tests (L6) |
+| ZeroBalanceCases | 1 test (L6) |
+| ConcurrentRequests | 3 tests (L6) |
+| ForceAccumulationEdgeCases | 3 tests (L6) |
+| SlippageStatistics | 1 test (L5) |
+
+### Integration Tests
+
+**Location**: `triplegain/tests/integration/test_hodl_integration.py` (24 tests)
+
+| Category | Tests |
+|----------|-------|
+| ProfitFlowIntegration | 4 tests (allocation, threshold execution, force, daily limit) |
+| CoordinatorIntegration | 2 tests (lifecycle, stats display) |
+| PositionTrackerIntegration | 3 tests (profit allocation, loss handling, minimum) |
+| MessageBusIntegration | 2 tests (allocation events, execution events) |
+| StateSerialization | 2 tests (state, metrics) |
+| ConcurrentOperations | 2 tests (profit processing, state access) |
+| RetryLogicIntegration | 2 tests (config applied, paper mode) |
+| SnapshotIntegration | 2 tests (creation, retrieval) |
+| PriceCacheIntegration | 1 test (concurrent access) |
+| ConfigurationIntegration | 3 tests (allocation %, thresholds, split) |
+| DisabledMode | 1 test (no allocation when disabled) |
 
 ---
 
@@ -277,4 +340,15 @@ class HodlTransaction:
 
 - [ADR-014: Hodl Bag System Architecture](../../architecture/09-decisions/ADR-014-hodl-bag-system.md)
 - [Phase 8 Implementation Plan](../TripleGain-implementation-plan/08-phase-8-hodl-bag-system.md)
-- [CHANGELOG v0.6.0](../../../CHANGELOG.md)
+- [Phase 8 Deep Review v2](../reviews/phase-8/deep-review-v2-2025-12-20.md)
+- [CHANGELOG v0.6.2](../../../CHANGELOG.md)
+
+---
+
+## Version History
+
+| Version | Date | Changes |
+|---------|------|---------|
+| v0.6.0 | 2025-12-20 | Initial implementation |
+| v0.6.1 | 2025-12-20 | Coordinator integration, retry logic, daily snapshots |
+| v0.6.2 | 2025-12-20 | Integration tests (M4), slippage protection (L5), API tests (L6) |

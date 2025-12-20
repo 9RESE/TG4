@@ -794,3 +794,164 @@ class TestIntegration:
 
         # Check that executions happened
         assert hodl_manager._total_executions >= 1
+
+
+# =============================================================================
+# L5 Fix: Slippage Protection Tests
+# =============================================================================
+
+class TestSlippageProtection:
+    """L5 Fix: Tests for slippage tracking and protection."""
+
+    @pytest.fixture
+    def hodl_manager_with_slippage(self):
+        """Create HodlBagManager with slippage config."""
+        config = {
+            "hodl_bags": {
+                "enabled": True,
+                "allocation_pct": 10,
+                "split": {"usdt_pct": 33.34, "xrp_pct": 33.33, "btc_pct": 33.33},
+                "min_accumulation": {"usdt": 1, "xrp": 25, "btc": 15},
+                "execution": {
+                    "order_type": "market",
+                    "max_retries": 3,
+                    "retry_delay_seconds": 1,
+                    "max_slippage_pct": 0.5,  # L5: Slippage config
+                },
+                "limits": {
+                    "max_single_accumulation_usd": 1000,
+                    "daily_accumulation_limit_usd": 5000,
+                    "min_profit_to_allocate_usd": 1.0,
+                },
+                "prices": {
+                    "fallback": {"BTC/USDT": 100000, "XRP/USDT": 2.50},
+                },
+            }
+        }
+        return HodlBagManager(
+            config=config,
+            db_pool=None,
+            kraken_client=None,
+            price_source=lambda s: {
+                "BTC/USDT": Decimal("100000"),
+                "XRP/USDT": Decimal("2.50"),
+            }.get(s),
+            message_bus=None,
+            is_paper_mode=True,
+        )
+
+    def test_slippage_config_loaded(self, hodl_manager_with_slippage):
+        """Test slippage configuration is loaded."""
+        manager = hodl_manager_with_slippage
+        assert manager.max_slippage_pct == Decimal("0.5")
+
+    def test_slippage_stats_initialized(self, hodl_manager_with_slippage):
+        """Test slippage statistics are initialized."""
+        manager = hodl_manager_with_slippage
+        assert manager._total_slippage_events == 0
+        assert manager._max_slippage_observed == Decimal(0)
+        assert manager._slippage_warnings == 0
+
+    def test_record_slippage_zero(self, hodl_manager_with_slippage):
+        """Test recording zero slippage."""
+        manager = hodl_manager_with_slippage
+        slippage = manager._record_slippage("BTC/USDT", Decimal("100000"), Decimal("100000"))
+
+        assert slippage == Decimal("0.00")
+        assert manager._total_slippage_events == 1
+        assert manager._slippage_warnings == 0
+
+    def test_record_slippage_within_threshold(self, hodl_manager_with_slippage):
+        """Test slippage within acceptable threshold."""
+        manager = hodl_manager_with_slippage
+        # 0.3% slippage (below 0.5% threshold)
+        expected = Decimal("100000")
+        actual = Decimal("100300")  # 0.3% higher
+        slippage = manager._record_slippage("BTC/USDT", expected, actual)
+
+        assert slippage == Decimal("0.30")
+        assert manager._total_slippage_events == 1
+        assert manager._slippage_warnings == 0  # Below threshold, no warning
+
+    def test_record_slippage_exceeds_threshold(self, hodl_manager_with_slippage):
+        """Test slippage exceeding threshold triggers warning."""
+        manager = hodl_manager_with_slippage
+        # 1% slippage (above 0.5% threshold)
+        expected = Decimal("100000")
+        actual = Decimal("101000")  # 1% higher
+        slippage = manager._record_slippage("BTC/USDT", expected, actual)
+
+        assert slippage == Decimal("1.00")
+        assert manager._total_slippage_events == 1
+        assert manager._slippage_warnings == 1  # Above threshold
+
+    def test_max_slippage_tracked(self, hodl_manager_with_slippage):
+        """Test maximum slippage is tracked."""
+        manager = hodl_manager_with_slippage
+
+        # First event: 0.2%
+        manager._record_slippage("BTC/USDT", Decimal("100000"), Decimal("100200"))
+        assert manager._max_slippage_observed == Decimal("0.20")
+
+        # Second event: 0.5% (higher)
+        manager._record_slippage("BTC/USDT", Decimal("100000"), Decimal("100500"))
+        assert manager._max_slippage_observed == Decimal("0.50")
+
+        # Third event: 0.1% (lower, max unchanged)
+        manager._record_slippage("BTC/USDT", Decimal("100000"), Decimal("100100"))
+        assert manager._max_slippage_observed == Decimal("0.50")
+
+    def test_negative_slippage_favorable(self, hodl_manager_with_slippage):
+        """Test negative slippage (got better price) is tracked."""
+        manager = hodl_manager_with_slippage
+        # Favorable slippage: paid less than expected (exceeds threshold)
+        expected = Decimal("100000")
+        actual = Decimal("99400")  # 0.6% lower (favorable, exceeds 0.5% threshold)
+        slippage = manager._record_slippage("BTC/USDT", expected, actual)
+
+        assert slippage == Decimal("-0.60")
+        assert manager._total_slippage_events == 1
+        # Absolute value exceeds threshold (0.6 > 0.5)
+        assert manager._slippage_warnings == 1
+
+    def test_slippage_in_stats(self, hodl_manager_with_slippage):
+        """Test slippage included in get_stats."""
+        manager = hodl_manager_with_slippage
+
+        # Record some slippage
+        manager._record_slippage("BTC/USDT", Decimal("100000"), Decimal("100200"))
+        manager._record_slippage("BTC/USDT", Decimal("100000"), Decimal("100800"))  # Warning
+
+        stats = manager.get_stats()
+
+        assert "slippage" in stats
+        assert stats["slippage"]["max_slippage_pct"] == 0.5
+        assert stats["slippage"]["total_events"] == 2
+        assert stats["slippage"]["max_observed_pct"] == 0.8  # 0.8%
+        assert stats["slippage"]["warnings"] == 1
+
+    def test_slippage_with_zero_expected_price(self, hodl_manager_with_slippage):
+        """Test slippage calculation handles zero expected price."""
+        manager = hodl_manager_with_slippage
+        slippage = manager._record_slippage("BTC/USDT", Decimal("0"), Decimal("100"))
+
+        assert slippage == Decimal(0)
+
+    @pytest.mark.asyncio
+    async def test_paper_mode_records_zero_slippage(self, hodl_manager_with_slippage):
+        """Test paper mode records zero slippage on execution."""
+        manager = hodl_manager_with_slippage
+        await manager.start()
+
+        # Process trades to trigger execution
+        for i in range(8):
+            await manager.process_trade_profit(
+                trade_id=f"trade-{i}",
+                profit_usd=Decimal("100"),
+                source_symbol="BTC/USDT",
+            )
+
+        # Slippage events should be recorded (paper mode = 0% slippage each time)
+        assert manager._total_slippage_events > 0
+        assert manager._max_slippage_observed == Decimal("0.00")
+        assert manager._slippage_warnings == 0

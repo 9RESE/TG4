@@ -242,6 +242,8 @@ class HodlBagManager:
         self.order_type = execution.get('order_type', 'market')
         self.max_retries = execution.get('max_retries', 3)
         self.retry_delay_seconds = execution.get('retry_delay_seconds', 30)
+        # L5 Fix: Load slippage configuration
+        self.max_slippage_pct = Decimal(str(execution.get('max_slippage_pct', 0.5)))
 
         # Safety limits
         limits = hodl_config.get('limits', {})
@@ -267,6 +269,10 @@ class HodlBagManager:
         self._total_allocations = 0
         self._total_allocated_usd = Decimal(0)
         self._total_executions = 0
+        # L5 Fix: Slippage tracking statistics
+        self._total_slippage_events = 0
+        self._max_slippage_observed = Decimal(0)
+        self._slippage_warnings = 0
 
         logger.info(
             f"HodlBagManager initialized: allocation={self.allocation_pct}%, "
@@ -491,11 +497,17 @@ class HodlBagManager:
         price: Decimal,
         value_usd: Decimal,
     ) -> Optional[str]:
-        """Execute purchase on exchange or simulate in paper mode."""
+        """
+        Execute purchase on exchange or simulate in paper mode.
+
+        L5 Enhancement: Includes slippage tracking and validation.
+        """
         if self.is_paper_mode:
-            # Paper mode - simulate purchase
+            # Paper mode - simulate purchase with slippage tracking
             order_id = f"paper_hodl_{uuid.uuid4().hex[:8]}"
             logger.info(f"Paper hodl purchase: {symbol} {float(amount)} @ ${float(price):.2f}")
+            # Paper mode assumes 0 slippage
+            self._record_slippage(symbol, price, price)
             return order_id
 
         # Live mode - place actual order
@@ -525,15 +537,111 @@ class HodlBagManager:
                 order_id = txids[0]
                 logger.info(f"Hodl purchase placed: {order_id}")
 
-                # Wait for fill
-                await self._wait_for_fill(order_id)
-                return order_id
+                # Wait for fill and check slippage (L5)
+                fill_result = await self._wait_for_fill_with_slippage(order_id, price)
+                if fill_result:
+                    return order_id
 
             return None
 
         except Exception as e:
             logger.error(f"Failed to execute hodl purchase: {e}")
             return None
+
+    def _record_slippage(
+        self,
+        symbol: str,
+        expected_price: Decimal,
+        actual_price: Decimal,
+    ) -> Decimal:
+        """
+        Record and validate slippage for a hodl purchase.
+
+        L5 Fix: Implements slippage tracking and warnings.
+
+        Args:
+            symbol: Trading symbol
+            expected_price: Price at order time
+            actual_price: Actual fill price
+
+        Returns:
+            Slippage percentage (positive means paid more than expected)
+        """
+        if expected_price <= 0:
+            return Decimal(0)
+
+        slippage_pct = ((actual_price - expected_price) / expected_price * 100)
+        slippage_pct = slippage_pct.quantize(Decimal("0.01"))
+
+        self._total_slippage_events += 1
+        abs_slippage = abs(slippage_pct)
+
+        if abs_slippage > self._max_slippage_observed:
+            self._max_slippage_observed = abs_slippage
+
+        # Log based on severity
+        if abs_slippage > self.max_slippage_pct:
+            self._slippage_warnings += 1
+            logger.warning(
+                f"L5 Slippage alert: {symbol} slippage {float(slippage_pct):.2f}% "
+                f"exceeds max {float(self.max_slippage_pct):.2f}% "
+                f"(expected ${float(expected_price):.2f}, got ${float(actual_price):.2f})"
+            )
+        elif abs_slippage > 0:
+            logger.debug(
+                f"Hodl slippage: {symbol} {float(slippage_pct):.2f}% "
+                f"(expected ${float(expected_price):.2f}, got ${float(actual_price):.2f})"
+            )
+
+        return slippage_pct
+
+    async def _wait_for_fill_with_slippage(
+        self,
+        order_id: str,
+        expected_price: Decimal,
+        timeout_seconds: int = 60,
+    ) -> bool:
+        """
+        Wait for order fill and validate slippage.
+
+        L5 Fix: Enhanced fill waiting with slippage validation.
+        """
+        if not self.kraken:
+            return False
+
+        start_time = asyncio.get_event_loop().time()
+
+        while asyncio.get_event_loop().time() - start_time < timeout_seconds:
+            try:
+                result = await self.kraken.query_orders(txid=order_id)
+                if result.get("error"):
+                    logger.warning(f"Order query error: {result['error']}")
+                    await asyncio.sleep(2)
+                    continue
+
+                order_info = result.get("result", {}).get(order_id, {})
+                status = order_info.get("status", "")
+
+                if status == "closed":
+                    # Order filled - check slippage
+                    fill_price = order_info.get("price")
+                    if fill_price:
+                        fill_price = Decimal(str(fill_price))
+                        self._record_slippage(order_id, expected_price, fill_price)
+                    return True
+
+                elif status in ["canceled", "expired"]:
+                    logger.warning(f"Hodl order {order_id} {status}")
+                    return False
+
+                await asyncio.sleep(2)
+
+            except Exception as e:
+                logger.warning(f"Error waiting for fill: {e}")
+                await asyncio.sleep(2)
+
+        logger.warning(f"Timeout waiting for hodl order {order_id}")
+        return False
 
     async def _execute_purchase_with_retry(
         self,
@@ -588,39 +696,6 @@ class HodlBagManager:
             logger.error(f"Hodl purchase returned None after {self.max_retries} attempts")
 
         return None
-
-    async def _wait_for_fill(self, order_id: str, timeout_seconds: int = 60) -> bool:
-        """Wait for order to fill."""
-        if not self.kraken:
-            return False
-
-        start_time = asyncio.get_event_loop().time()
-
-        while asyncio.get_event_loop().time() - start_time < timeout_seconds:
-            try:
-                result = await self.kraken.query_orders(txid=order_id)
-                if result.get("error"):
-                    logger.warning(f"Order query error: {result['error']}")
-                    await asyncio.sleep(2)
-                    continue
-
-                order_info = result.get("result", {}).get(order_id, {})
-                status = order_info.get("status", "")
-
-                if status == "closed":
-                    return True
-                elif status in ["canceled", "expired"]:
-                    logger.warning(f"Hodl order {order_id} {status}")
-                    return False
-
-                await asyncio.sleep(2)
-
-            except Exception as e:
-                logger.warning(f"Error waiting for fill: {e}")
-                await asyncio.sleep(2)
-
-        logger.warning(f"Timeout waiting for hodl order {order_id}")
-        return False
 
     async def _record_transaction(
         self,
@@ -1161,6 +1236,13 @@ class HodlBagManager:
             "daily_limit_usd": float(self.daily_accumulation_limit_usd),
             "pending": {k: float(v) for k, v in self._pending.items()},
             "thresholds": self.thresholds.to_dict(),
+            # L5 Fix: Slippage statistics
+            "slippage": {
+                "max_slippage_pct": float(self.max_slippage_pct),
+                "total_events": self._total_slippage_events,
+                "max_observed_pct": float(self._max_slippage_observed),
+                "warnings": self._slippage_warnings,
+            },
         }
 
     async def create_daily_snapshot(self) -> int:
