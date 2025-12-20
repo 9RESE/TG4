@@ -5,6 +5,35 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.1] - 2025-12-19
+
+### Added
+- **Circuit Breaker Pattern**: Per-provider failure tracking with configurable thresholds (3 failures, 5min cooldown)
+- **Rate Limiting**: In-memory rate limiter for refresh endpoint (5 requests/minute/user)
+- **Database Migration 008**: Added `social_analysis` and `news_analysis` columns to `sentiment_outputs`
+- **CircuitBreakerState Dataclass**: Tracks consecutive failures, cooldown state, half-open attempts
+
+### Fixed
+- **API Route Ordering**: Moved `/all` and `/stats` routes before `/{symbol}` to prevent path conflicts
+- **Coordinator Key Mismatch**: Fixed `sentiment_bias` → `bias` key access in consensus and conflict detection
+- **Timeout Enforcement**: Wrapped LLM calls in `asyncio.wait_for()` with configurable timeouts
+- **Retry Logic**: Implemented exponential backoff (5s base, 2x per attempt) for provider queries
+- **Weighted Aggregation**: Overall score now uses configured weights from `agents.yaml`
+- **Score Boundary Consistency**: Aligned `FearGreedLevel.from_score()` with `SentimentBias` using `>=` operator
+- **Import Location**: Moved `json` import to module level in `routes_sentiment.py`
+- **Cleanup Function**: Updated to use ID-based FK deletion instead of timestamp matching
+- **GPT Web Search**: Clarified in prompt and config that GPT uses training data, not real-time search
+
+### Changed
+- Updated `agents.yaml` with circuit_breaker and rate_limit configuration sections
+- Coordinator now properly handles sentiment bias values (very_bullish, bullish, neutral, bearish, very_bearish)
+- SentimentResponse model now includes `social_analysis` and `news_analysis` fields
+
+### Documentation
+- [Phase 7 Deep Review Fixes](docs/development/reviews/phase-7/deep-review-fixes.md) - Implementation summary
+
+---
+
 ## [0.5.0] - 2025-12-19
 
 ### Added

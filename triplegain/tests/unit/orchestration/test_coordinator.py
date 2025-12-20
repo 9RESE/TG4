@@ -375,11 +375,11 @@ class TestCoordinatorAgent:
             source="technical_analysis",
             payload={"bias": "long", "confidence": 0.7},
         )
-        # Mock sentiment - bearish
+        # Mock sentiment - bearish (uses "bias" key per SentimentOutput.to_dict())
         sentiment_msg = Message(
             topic=MessageTopic.SENTIMENT_UPDATES,
             source="sentiment_analysis",
-            payload={"sentiment_bias": "bearish", "confidence": 0.75},
+            payload={"bias": "bearish", "confidence": 0.75},
         )
 
         def mock_get_latest(topic, **kwargs):

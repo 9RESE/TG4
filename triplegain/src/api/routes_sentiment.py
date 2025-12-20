@@ -4,17 +4,93 @@ Sentiment API Routes - Endpoints for sentiment analysis.
 Phase 7 Endpoints:
 - GET /api/v1/sentiment/{symbol} - Latest sentiment for symbol
 - GET /api/v1/sentiment/{symbol}/history - Historical sentiment
-- POST /api/v1/sentiment/{symbol}/refresh - Force sentiment refresh
+- POST /api/v1/sentiment/{symbol}/refresh - Force sentiment refresh (rate limited)
 - GET /api/v1/sentiment/all - Latest for all symbols
 
 Security:
 - All endpoints require authentication
-- Refresh endpoint has rate limiting
+- Refresh endpoint has rate limiting (5 requests per minute per user)
 """
 
+import json
 import logging
+from collections import defaultdict
 from datetime import datetime, timezone, timedelta
 from typing import Optional, Any
+
+
+# =============================================================================
+# Simple In-Memory Rate Limiter
+# =============================================================================
+
+class RateLimiter:
+    """
+    Simple in-memory rate limiter for API endpoints.
+
+    Uses a sliding window approach to limit requests per user.
+    For production, consider using Redis-based rate limiting.
+    """
+
+    def __init__(self, max_requests: int = 5, window_seconds: int = 60):
+        """
+        Initialize rate limiter.
+
+        Args:
+            max_requests: Maximum requests allowed per window
+            window_seconds: Time window in seconds
+        """
+        self.max_requests = max_requests
+        self.window_seconds = window_seconds
+        self._requests: dict[str, list[datetime]] = defaultdict(list)
+
+    def is_allowed(self, user_id: str) -> bool:
+        """
+        Check if request is allowed for user.
+
+        Args:
+            user_id: User identifier
+
+        Returns:
+            True if allowed, False if rate limited
+        """
+        now = datetime.now(timezone.utc)
+        cutoff = now - timedelta(seconds=self.window_seconds)
+
+        # Clean old requests
+        self._requests[user_id] = [
+            ts for ts in self._requests[user_id]
+            if ts > cutoff
+        ]
+
+        # Check limit
+        if len(self._requests[user_id]) >= self.max_requests:
+            return False
+
+        # Record new request
+        self._requests[user_id].append(now)
+        return True
+
+    def get_retry_after(self, user_id: str) -> int:
+        """
+        Get seconds until rate limit resets.
+
+        Args:
+            user_id: User identifier
+
+        Returns:
+            Seconds until oldest request expires
+        """
+        if not self._requests[user_id]:
+            return 0
+
+        oldest = min(self._requests[user_id])
+        reset_at = oldest + timedelta(seconds=self.window_seconds)
+        remaining = (reset_at - datetime.now(timezone.utc)).total_seconds()
+        return max(0, int(remaining))
+
+
+# Rate limiter for refresh endpoint (5 requests per minute per user)
+_refresh_rate_limiter = RateLimiter(max_requests=5, window_seconds=60)
 
 try:
     from fastapi import APIRouter, HTTPException, Query, Depends, Request
@@ -57,12 +133,14 @@ if FASTAPI_AVAILABLE:
         social_score: float = Field(..., ge=-1, le=1, description="Social media sentiment")
         news_score: float = Field(..., ge=-1, le=1, description="News sentiment")
         overall_score: float = Field(..., ge=-1, le=1, description="Overall sentiment")
+        social_analysis: str = Field("", description="Grok's Twitter/X sentiment analysis")
+        news_analysis: str = Field("", description="GPT's news sentiment analysis")
         fear_greed: str = Field(..., description="Fear/Greed assessment")
         key_events: list[KeyEventResponse] = Field(default_factory=list)
         market_narratives: list[str] = Field(default_factory=list)
         grok_available: bool = Field(False, description="Grok provider succeeded (social sentiment)")
         gpt_available: bool = Field(False, description="GPT provider succeeded (news sentiment)")
-        reasoning: str = Field("", description="Reasoning for the sentiment")
+        reasoning: str = Field("", description="Combined reasoning for the sentiment")
 
     class SentimentHistoryParams(BaseModel):
         """Query parameters for sentiment history."""
@@ -92,6 +170,85 @@ def create_sentiment_router(
         raise RuntimeError("FastAPI not available")
 
     router = APIRouter(prefix="/api/v1/sentiment", tags=["sentiment"])
+
+    # =========================================================================
+    # STATIC ROUTES FIRST - Must be defined before parameterized routes
+    # =========================================================================
+    # FastAPI matches routes in order, so /all and /stats must come before
+    # /{symbol} to prevent "all" or "stats" being interpreted as symbols.
+
+    # -------------------------------------------------------------------------
+    # GET /api/v1/sentiment/all
+    # -------------------------------------------------------------------------
+    @router.get(
+        "/all",
+        response_model=dict[str, SentimentResponse],
+        summary="Get all latest sentiments",
+        description="Returns latest sentiment for all configured symbols.",
+    )
+    async def get_all_sentiments(
+        current_user: User = Depends(get_current_user),
+    ) -> dict[str, SentimentResponse]:
+        """Get latest sentiment for all symbols."""
+        if not db_pool:
+            raise HTTPException(
+                status_code=503,
+                detail="Database not available",
+            )
+
+        try:
+            # Use the latest_sentiment view
+            query = """
+                SELECT * FROM latest_sentiment
+                ORDER BY symbol
+            """
+            rows = await db_pool.fetch(query)
+            return {row['symbol']: _row_to_response(row) for row in rows}
+        except Exception as e:
+            logger.error(f"Database query failed: {e}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to retrieve sentiments: {e}",
+            )
+
+    # -------------------------------------------------------------------------
+    # GET /api/v1/sentiment/stats
+    # -------------------------------------------------------------------------
+    @router.get(
+        "/stats",
+        response_model=dict,
+        summary="Get provider statistics",
+        description="Returns performance statistics for sentiment providers.",
+    )
+    async def get_provider_stats(
+        current_user: User = Depends(get_current_user),
+    ) -> dict:
+        """Get provider performance statistics."""
+        if not db_pool:
+            raise HTTPException(
+                status_code=503,
+                detail="Database not available",
+            )
+
+        try:
+            query = """
+                SELECT * FROM sentiment_provider_stats
+            """
+            rows = await db_pool.fetch(query)
+            return {
+                "providers": [dict(row) for row in rows],
+                "retrieved_at": datetime.now(timezone.utc).isoformat(),
+            }
+        except Exception as e:
+            logger.error(f"Database query failed: {e}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to retrieve provider stats: {e}",
+            )
+
+    # =========================================================================
+    # PARAMETERIZED ROUTES - After static routes
+    # =========================================================================
 
     # -------------------------------------------------------------------------
     # GET /api/v1/sentiment/{symbol}
@@ -186,7 +343,7 @@ def create_sentiment_router(
         "/{symbol}/refresh",
         response_model=SentimentResponse,
         summary="Force sentiment refresh",
-        description="Triggers a fresh sentiment analysis for a symbol.",
+        description="Triggers a fresh sentiment analysis for a symbol. Rate limited to 5 requests per minute.",
     )
     async def refresh_sentiment(
         request: Request,
@@ -194,8 +351,23 @@ def create_sentiment_router(
         include_twitter: bool = Query(True, description="Include Twitter analysis"),
         current_user: User = Depends(get_current_user),
     ) -> SentimentResponse:
-        """Force a fresh sentiment analysis."""
+        """Force a fresh sentiment analysis (rate limited)."""
         validate_symbol_or_raise(symbol)
+
+        # Check rate limit (5 requests per minute per user)
+        if not _refresh_rate_limiter.is_allowed(current_user.user_id):
+            retry_after = _refresh_rate_limiter.get_retry_after(current_user.user_id)
+            log_security_event(
+                request,
+                SecurityEventType.RATE_LIMIT,
+                user_id=current_user.user_id,
+                details={"action": "sentiment_refresh", "symbol": symbol, "retry_after": retry_after},
+            )
+            raise HTTPException(
+                status_code=429,
+                detail=f"Rate limit exceeded. Retry after {retry_after} seconds.",
+                headers={"Retry-After": str(retry_after)},
+            )
 
         if not sentiment_agent:
             raise HTTPException(
@@ -224,75 +396,6 @@ def create_sentiment_router(
                 detail=f"Sentiment analysis failed: {e}",
             )
 
-    # -------------------------------------------------------------------------
-    # GET /api/v1/sentiment/all
-    # -------------------------------------------------------------------------
-    @router.get(
-        "/all",
-        response_model=dict[str, SentimentResponse],
-        summary="Get all latest sentiments",
-        description="Returns latest sentiment for all configured symbols.",
-    )
-    async def get_all_sentiments(
-        current_user: User = Depends(get_current_user),
-    ) -> dict[str, SentimentResponse]:
-        """Get latest sentiment for all symbols."""
-        if not db_pool:
-            raise HTTPException(
-                status_code=503,
-                detail="Database not available",
-            )
-
-        try:
-            # Use the latest_sentiment view
-            query = """
-                SELECT * FROM latest_sentiment
-                ORDER BY symbol
-            """
-            rows = await db_pool.fetch(query)
-            return {row['symbol']: _row_to_response(row) for row in rows}
-        except Exception as e:
-            logger.error(f"Database query failed: {e}")
-            raise HTTPException(
-                status_code=500,
-                detail=f"Failed to retrieve sentiments: {e}",
-            )
-
-    # -------------------------------------------------------------------------
-    # GET /api/v1/sentiment/stats
-    # -------------------------------------------------------------------------
-    @router.get(
-        "/stats",
-        response_model=dict,
-        summary="Get provider statistics",
-        description="Returns performance statistics for sentiment providers.",
-    )
-    async def get_provider_stats(
-        current_user: User = Depends(get_current_user),
-    ) -> dict:
-        """Get provider performance statistics."""
-        if not db_pool:
-            raise HTTPException(
-                status_code=503,
-                detail="Database not available",
-            )
-
-        try:
-            query = """
-                SELECT * FROM sentiment_provider_stats
-            """
-            rows = await db_pool.fetch(query)
-            return {
-                "providers": [dict(row) for row in rows],
-                "retrieved_at": datetime.now(timezone.utc).isoformat(),
-            }
-        except Exception as e:
-            logger.error(f"Database query failed: {e}")
-            raise HTTPException(
-                status_code=500,
-                detail=f"Failed to retrieve provider stats: {e}",
-            )
-
     return router
 
 
@@ -310,6 +413,8 @@ def _output_to_response(output) -> 'SentimentResponse':
         social_score=output.social_score,
         news_score=output.news_score,
         overall_score=output.overall_score,
+        social_analysis=output.social_analysis,
+        news_analysis=output.news_analysis,
         fear_greed=output.fear_greed.value,
         key_events=[
             KeyEventResponse(
@@ -329,8 +434,6 @@ def _output_to_response(output) -> 'SentimentResponse':
 
 def _row_to_response(row) -> 'SentimentResponse':
     """Convert database row to API response."""
-    import json
-
     # Parse JSON fields
     key_events_data = row.get('key_events') or []
     if isinstance(key_events_data, str):
@@ -348,6 +451,8 @@ def _row_to_response(row) -> 'SentimentResponse':
         social_score=float(row.get('social_score') or 0),
         news_score=float(row.get('news_score') or 0),
         overall_score=float(row.get('overall_score') or 0),
+        social_analysis=row.get('social_analysis') or '',
+        news_analysis=row.get('news_analysis') or '',
         fear_greed=row.get('fear_greed') or 'neutral',
         key_events=[
             KeyEventResponse(

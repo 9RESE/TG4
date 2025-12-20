@@ -239,30 +239,43 @@ class TestSentimentBias:
 
 
 class TestFearGreedLevel:
-    """Test FearGreedLevel enum and conversions."""
+    """Test FearGreedLevel enum and conversions.
+
+    Uses same >= boundary logic as SentimentBias for consistency:
+    - EXTREME_GREED: score >= 0.6
+    - GREED: score >= 0.2 and < 0.6
+    - NEUTRAL: score >= -0.2 and < 0.2
+    - FEAR: score >= -0.6 and < -0.2
+    - EXTREME_FEAR: score < -0.6
+    """
 
     def test_from_score_extreme_greed(self):
-        """Score > 0.6 should be EXTREME_GREED."""
+        """Score >= 0.6 should be EXTREME_GREED."""
+        assert FearGreedLevel.from_score(0.6) == FearGreedLevel.EXTREME_GREED
         assert FearGreedLevel.from_score(0.8) == FearGreedLevel.EXTREME_GREED
         assert FearGreedLevel.from_score(1.0) == FearGreedLevel.EXTREME_GREED
 
     def test_from_score_greed(self):
-        """Score 0.2 to 0.6 should be GREED."""
+        """Score >= 0.2 and < 0.6 should be GREED."""
+        assert FearGreedLevel.from_score(0.2) == FearGreedLevel.GREED
         assert FearGreedLevel.from_score(0.4) == FearGreedLevel.GREED
-        assert FearGreedLevel.from_score(0.6) == FearGreedLevel.GREED
+        assert FearGreedLevel.from_score(0.59) == FearGreedLevel.GREED
 
     def test_from_score_neutral(self):
-        """Score -0.2 to 0.2 should be NEUTRAL."""
+        """Score >= -0.2 and < 0.2 should be NEUTRAL."""
+        assert FearGreedLevel.from_score(-0.2) == FearGreedLevel.NEUTRAL
         assert FearGreedLevel.from_score(0.0) == FearGreedLevel.NEUTRAL
-        assert FearGreedLevel.from_score(0.2) == FearGreedLevel.NEUTRAL
+        assert FearGreedLevel.from_score(0.19) == FearGreedLevel.NEUTRAL
 
     def test_from_score_fear(self):
-        """Score -0.6 to -0.2 (exclusive) should be FEAR."""
+        """Score >= -0.6 and < -0.2 should be FEAR."""
+        assert FearGreedLevel.from_score(-0.6) == FearGreedLevel.FEAR
         assert FearGreedLevel.from_score(-0.4) == FearGreedLevel.FEAR
-        assert FearGreedLevel.from_score(-0.59) == FearGreedLevel.FEAR
+        assert FearGreedLevel.from_score(-0.21) == FearGreedLevel.FEAR
 
     def test_from_score_extreme_fear(self):
         """Score < -0.6 should be EXTREME_FEAR."""
+        assert FearGreedLevel.from_score(-0.61) == FearGreedLevel.EXTREME_FEAR
         assert FearGreedLevel.from_score(-0.8) == FearGreedLevel.EXTREME_FEAR
         assert FearGreedLevel.from_score(-1.0) == FearGreedLevel.EXTREME_FEAR
 

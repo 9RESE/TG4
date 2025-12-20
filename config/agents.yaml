@@ -83,8 +83,13 @@ agents:
   # --------------------------------------------------------------------------
   # Sentiment Analysis Agent (Phase 7)
   # --------------------------------------------------------------------------
-  # Dual-model sentiment using Grok (xAI) and GPT (OpenAI) with web search.
-  # Grok focuses on social/Twitter sentiment, GPT focuses on news.
+  # Dual-model sentiment using Grok (xAI) for social/Twitter and GPT (OpenAI)
+  # for fundamental/news analysis.
+  #
+  # NOTE: Grok has X/Twitter search capability. Standard GPT-4 models do NOT
+  # have web search - they use training data. For real-time news, consider
+  # integrating an external news API (CryptoPanic, NewsAPI) in future phases.
+  # OpenAI's gpt-4o-search-preview model supports web search but costs more.
   sentiment_analysis:
     enabled: true
     tier: tier2_api
@@ -105,7 +110,7 @@ agents:
           - web_search
           - twitter_search
         weight:
-          social: 0.6
+          social: 0.6  # Grok excels at social/Twitter sentiment
           news: 0.4
         retry:
           max_attempts: 2
@@ -113,13 +118,12 @@ agents:
 
       gpt:
         enabled: true
-        model: gpt-4-turbo
+        model: gpt-4-turbo  # Uses training data, not real-time search
         timeout_ms: 30000
-        capabilities:
-          - web_search
+        capabilities: []  # No real-time web search capability
         weight:
           social: 0.4
-          news: 0.6
+          news: 0.6  # GPT excels at fundamental analysis
         retry:
           max_attempts: 2
           backoff_ms: 5000
@@ -133,6 +137,15 @@ agents:
       cache_ttl_seconds: 1750  # Just under 30 min
       max_events: 5
       max_narratives: 3
+
+    # Circuit breaker for provider failures
+    circuit_breaker:
+      failure_threshold: 3  # Open after 3 consecutive failures
+      cooldown_seconds: 300  # Wait 5 minutes before retrying
+
+    # Rate limiting for API endpoints
+    rate_limit:
+      refresh_rpm: 5  # 5 refresh requests per minute per user
 
     # Integration with other agents
     integration:

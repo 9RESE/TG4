@@ -1240,11 +1240,16 @@ class CoordinatorAgent:
                     logger.debug(f"Consensus: Regime supports signal ({regime})")
 
         # Check sentiment agreement
+        # Note: SentimentOutput.to_dict() outputs "bias", not "sentiment_bias"
         if sentiment_msg:
             total_agents += 1
-            sent_bias = sentiment_msg.payload.get("sentiment_bias", "neutral")
-            if (signal_action == "BUY" and sent_bias == "bullish") or \
-               (signal_action == "SELL" and sent_bias == "bearish"):
+            sent_bias = sentiment_msg.payload.get("bias", "neutral")
+            # Map sentiment bias values to bullish/bearish for comparison
+            # Sentiment uses: very_bullish, bullish, neutral, bearish, very_bearish
+            bullish_biases = ("very_bullish", "bullish")
+            bearish_biases = ("very_bearish", "bearish")
+            if (signal_action == "BUY" and sent_bias in bullish_biases) or \
+               (signal_action == "SELL" and sent_bias in bearish_biases):
                 agreement_count += 1
                 logger.debug(f"Consensus: Sentiment agrees ({sent_bias})")
 
@@ -1325,14 +1330,19 @@ class CoordinatorAgent:
         sentiment_payload = sentiment_msg.payload if sentiment_msg else {}
 
         # Check TA vs Sentiment conflict
+        # Note: SentimentOutput.to_dict() outputs "bias", not "sentiment_bias"
         if ta_payload and sentiment_payload:
             ta_bias = ta_payload.get("bias", "neutral")
-            sent_bias = sentiment_payload.get("sentiment_bias", "neutral")
+            sent_bias = sentiment_payload.get("bias", "neutral")
 
-            # Opposing bias?
+            # Opposing bias? Map sentiment bias values appropriately
+            # Sentiment uses: very_bullish, bullish, neutral, bearish, very_bearish
+            # TA uses: long, short, neutral
+            bullish_biases = ("very_bullish", "bullish")
+            bearish_biases = ("very_bearish", "bearish")
             opposing = (
-                (ta_bias == "long" and sent_bias == "bearish") or
-                (ta_bias == "short" and sent_bias == "bullish")
+                (ta_bias == "long" and sent_bias in bearish_biases) or
+                (ta_bias == "short" and sent_bias in bullish_biases)
             )
 
             if opposing:
@@ -1348,8 +1358,8 @@ class CoordinatorAgent:
                         details={
                             "ta_bias": ta_bias,
                             "ta_confidence": ta_conf,
-                            "sentiment_bias": sent_bias,
-                            "sentiment_confidence": sent_conf,
+                            "sent_bias": sent_bias,  # Renamed from sentiment_bias for consistency
+                            "sent_confidence": sent_conf,
                             "confidence_diff": conf_diff,
                         }
                     ))

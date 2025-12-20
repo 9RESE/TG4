@@ -97,7 +97,7 @@ triplegain/
 config/                 # agents.yaml, risk.yaml, orchestration.yaml, portfolio.yaml, execution.yaml
 data/kraken_db/         # Data collectors (operational)
 docs/development/       # Design + Implementation plans + Reviews
-migrations/             # Database migrations (001-007)
+migrations/             # Database migrations (001-008)
 ```
 
 ## Documentation
@@ -109,7 +109,7 @@ migrations/             # Database migrations (001-007)
 - [Changelog](CHANGELOG.md)
 
 ## Version
-**v0.5.0** (2025-12-19) - Phase 7 Sentiment Analysis complete (Grok + GPT dual-model, 37 new tests)
+**v0.5.1** (2025-12-19) - Phase 7 Deep Review Fixes (circuit breaker, rate limiting, weighted aggregation)
 
 ---
 *Uses global config from ~/.claude/CLAUDE.md*

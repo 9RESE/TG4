@@ -12,6 +12,7 @@ import asyncio
 import json
 import logging
 import re
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
@@ -25,6 +26,60 @@ if TYPE_CHECKING:
     from ..llm.clients.base import BaseLLMClient
 
 logger = logging.getLogger(__name__)
+
+
+# =============================================================================
+# Circuit Breaker State
+# =============================================================================
+
+@dataclass
+class CircuitBreakerState:
+    """
+    Circuit breaker state for provider failure handling.
+
+    States:
+    - CLOSED: Normal operation, requests pass through
+    - OPEN: Failures exceeded threshold, requests are blocked
+    - HALF_OPEN: Testing if provider has recovered
+    """
+    consecutive_failures: int = 0
+    last_failure_time: Optional[datetime] = None
+    is_open: bool = False
+    half_open_attempts: int = 0
+
+    def record_success(self) -> None:
+        """Reset on success."""
+        self.consecutive_failures = 0
+        self.is_open = False
+        self.half_open_attempts = 0
+
+    def record_failure(self, failure_threshold: int, cooldown_seconds: int) -> None:
+        """Record failure and potentially open circuit."""
+        self.consecutive_failures += 1
+        self.last_failure_time = datetime.now(timezone.utc)
+
+        if self.consecutive_failures >= failure_threshold:
+            self.is_open = True
+            logger.warning(
+                f"Circuit breaker OPENED after {self.consecutive_failures} failures. "
+                f"Will retry after {cooldown_seconds}s cooldown."
+            )
+
+    def should_allow_request(self, cooldown_seconds: int) -> bool:
+        """Check if request should be allowed."""
+        if not self.is_open:
+            return True
+
+        # Check if cooldown has passed
+        if self.last_failure_time:
+            elapsed = (datetime.now(timezone.utc) - self.last_failure_time).total_seconds()
+            if elapsed >= cooldown_seconds:
+                # Enter half-open state
+                self.half_open_attempts += 1
+                logger.info(f"Circuit breaker HALF-OPEN, attempt {self.half_open_attempts}")
+                return True
+
+        return False
 
 
 class SentimentBias(Enum):
@@ -71,22 +126,30 @@ class FearGreedLevel(Enum):
         """
         Convert score to fear/greed level.
 
+        Uses same boundary logic as SentimentBias (>= for consistency):
+        - EXTREME_GREED: score >= 0.6
+        - GREED: score >= 0.2 and < 0.6
+        - NEUTRAL: score >= -0.2 and < 0.2
+        - FEAR: score >= -0.6 and < -0.2
+        - EXTREME_FEAR: score < -0.6
+
         Args:
             score: Score from -1 to 1
 
         Returns:
             FearGreedLevel enum value
         """
-        if score <= -0.6:
-            return cls.EXTREME_FEAR
-        elif score <= -0.2:
-            return cls.FEAR
-        elif score <= 0.2:
-            return cls.NEUTRAL
-        elif score <= 0.6:
-            return cls.GREED
-        else:
+        # Use consistent >= boundaries matching SentimentBias
+        if score >= 0.6:
             return cls.EXTREME_GREED
+        elif score >= 0.2:
+            return cls.GREED
+        elif score >= -0.2:
+            return cls.NEUTRAL
+        elif score >= -0.6:
+            return cls.FEAR
+        else:
+            return cls.EXTREME_FEAR
 
 
 class EventImpact(Enum):
@@ -354,18 +417,20 @@ Important:
 
 GPT_SENTIMENT_PROMPT = """Analyze current market sentiment for {asset} cryptocurrency.
 
-TASK: Search the web for recent news and analysis about {asset}.
+TASK: Provide fundamental and news-based sentiment analysis for {asset}.
 
-SEARCH FOR:
-- Breaking news from major crypto outlets (CoinDesk, CoinTelegraph, The Block)
-- Regulatory news and developments
-- Institutional investment news
-- Market analysis and price predictions
-- On-chain metrics and analysis
-- Macro economic factors affecting crypto
-- Any upcoming events (upgrades, halvings, unlocks)
+ANALYZE BASED ON YOUR KNOWLEDGE:
+- Recent regulatory developments affecting {asset}
+- Known institutional investment trends
+- Fundamental analysis and market conditions
+- Macro economic factors affecting crypto markets
+- Known upcoming events (upgrades, halvings, token unlocks)
+- General market structure and sentiment indicators
 
-Focus on FACTUAL NEWS rather than social media speculation.
+Focus on FUNDAMENTAL FACTORS rather than short-term price action.
+
+NOTE: This analysis is based on model knowledge up to training cutoff.
+For real-time news, Grok social analysis provides complementary data.
 
 RESPOND WITH JSON ONLY:
 {{
@@ -374,7 +439,7 @@ RESPOND WITH JSON ONLY:
   "confidence": <number from 0.0 to 1.0>,
   "key_events": [
     {{
-      "event": "Brief description of significant event",
+      "event": "Brief description of significant factor",
       "impact": "positive|negative|neutral",
       "significance": "low|medium|high",
       "source": "Source name"
@@ -385,11 +450,11 @@ RESPOND WITH JSON ONLY:
 }}
 
 Important:
-- Include up to 5 key events, prioritize by significance
+- Include up to 5 key factors, prioritize by significance
 - Include up to 3 current market narratives
 - Be objective and evidence-based
-- Distinguish between confirmed news and speculation
-- If no significant news, return neutral sentiment with low confidence"""
+- Acknowledge knowledge limitations with lower confidence
+- If limited knowledge, return neutral sentiment with low confidence"""
 
 
 class SentimentAnalysisAgent(BaseAgent):
@@ -463,10 +528,24 @@ class SentimentAnalysisAgent(BaseAgent):
         self.max_events = output_config.get('max_events', 5)
         self.max_narratives = output_config.get('max_narratives', 3)
 
-        # Retry config
+        # Retry config (loaded from grok config, applies to both)
         retry_config = grok_config.get('retry', {})
         self.max_retries = retry_config.get('max_attempts', 2)
         self.backoff_ms = retry_config.get('backoff_ms', 5000)
+
+        # Circuit breaker config
+        cb_config = config.get('circuit_breaker', {})
+        self.cb_failure_threshold = cb_config.get('failure_threshold', 3)
+        self.cb_cooldown_seconds = cb_config.get('cooldown_seconds', 300)  # 5 min default
+
+        # Circuit breaker states (per provider)
+        self._circuit_breakers: dict[str, CircuitBreakerState] = {
+            "grok": CircuitBreakerState(),
+            "gpt": CircuitBreakerState(),
+        }
+
+        # Rate limiting for refresh (requests per minute per user)
+        self._rate_limit_rpm = config.get('rate_limit', {}).get('refresh_rpm', 5)
 
     async def process(
         self,
@@ -575,6 +654,11 @@ class SentimentAnalysisAgent(BaseAgent):
         """
         Query Grok for sentiment with web/Twitter search.
 
+        Implements:
+        - Timeout enforcement (asyncio.wait_for)
+        - Retry with exponential backoff
+        - Circuit breaker pattern
+
         Args:
             asset: Asset symbol
             include_twitter: Whether to include Twitter search
@@ -582,75 +666,130 @@ class SentimentAnalysisAgent(BaseAgent):
         Returns:
             ProviderResult with Grok's analysis
         """
-        import time
-        start_time = time.perf_counter()
+        provider = "grok"
+        circuit_breaker = self._circuit_breakers[provider]
 
-        try:
-            client = self.llm_clients.get("grok")
-            if not client:
-                raise RuntimeError("Grok client not available")
-
-            # Build prompt
-            prompt = GROK_SENTIMENT_PROMPT.format(asset=asset)
-            system_prompt = "You are a cryptocurrency market analyst with access to real-time web and social media data. Respond only with valid JSON."
-
-            # Call Grok with search
-            if hasattr(client, 'generate_with_search'):
-                response = await client.generate_with_search(
-                    model=self.grok_model,
-                    system_prompt=system_prompt,
-                    user_message=prompt,
-                    search_enabled=include_twitter,
-                    temperature=0.3,
-                    max_tokens=2048,
-                )
-            else:
-                response = await client.generate(
-                    model=self.grok_model,
-                    system_prompt=system_prompt,
-                    user_message=prompt,
-                    temperature=0.3,
-                    max_tokens=2048,
-                )
-
-            latency_ms = int((time.perf_counter() - start_time) * 1000)
-
-            # Parse response
-            parsed = self._parse_provider_response(response.text, "grok")
-
+        # Check circuit breaker
+        if not circuit_breaker.should_allow_request(self.cb_cooldown_seconds):
+            logger.warning(f"Circuit breaker OPEN for {provider}, skipping query")
             return ProviderResult(
-                provider="grok",
-                model=self.grok_model,
-                bias=SentimentBias(parsed.get("bias", "neutral")),
-                score=parsed.get("score", 0.0),
-                confidence=parsed.get("confidence", 0.5),
-                events=[KeyEvent.from_dict(e) for e in parsed.get("key_events", [])[:self.max_events]],
-                narratives=parsed.get("narratives", [])[:self.max_narratives],
-                reasoning=parsed.get("reasoning", "")[:500],
-                latency_ms=latency_ms,
-                tokens_used=response.tokens_used,
-                cost_usd=response.cost_usd,
-                success=True,
-                raw_response=parsed,
-            )
-
-        except Exception as e:
-            latency_ms = int((time.perf_counter() - start_time) * 1000)
-            logger.error(f"Grok query failed: {e}")
-            return ProviderResult(
-                provider="grok",
+                provider=provider,
                 model=self.grok_model,
                 bias=SentimentBias.NEUTRAL,
                 score=0.0,
                 confidence=0.0,
-                latency_ms=latency_ms,
+                latency_ms=0,
                 success=False,
-                error=str(e),
+                error="Circuit breaker open",
             )
+
+        start_time = time.perf_counter()
+        last_error = None
+
+        # Retry with exponential backoff
+        for attempt in range(self.max_retries + 1):
+            try:
+                if attempt > 0:
+                    # Exponential backoff: backoff_ms * 2^(attempt-1)
+                    wait_ms = self.backoff_ms * (2 ** (attempt - 1))
+                    logger.info(f"Grok retry attempt {attempt + 1}, waiting {wait_ms}ms")
+                    await asyncio.sleep(wait_ms / 1000)
+
+                client = self.llm_clients.get("grok")
+                if not client:
+                    raise RuntimeError("Grok client not available")
+
+                # Build prompt
+                prompt = GROK_SENTIMENT_PROMPT.format(asset=asset)
+                system_prompt = "You are a cryptocurrency market analyst with access to real-time web and social media data. Respond only with valid JSON."
+
+                # Call Grok with search - wrapped in timeout
+                timeout_seconds = self.grok_timeout_ms / 1000
+
+                if hasattr(client, 'generate_with_search'):
+                    response = await asyncio.wait_for(
+                        client.generate_with_search(
+                            model=self.grok_model,
+                            system_prompt=system_prompt,
+                            user_message=prompt,
+                            search_enabled=include_twitter,
+                            temperature=0.3,
+                            max_tokens=2048,
+                        ),
+                        timeout=timeout_seconds,
+                    )
+                else:
+                    response = await asyncio.wait_for(
+                        client.generate(
+                            model=self.grok_model,
+                            system_prompt=system_prompt,
+                            user_message=prompt,
+                            temperature=0.3,
+                            max_tokens=2048,
+                        ),
+                        timeout=timeout_seconds,
+                    )
+
+                latency_ms = int((time.perf_counter() - start_time) * 1000)
+
+                # Parse response
+                parsed = self._parse_provider_response(response.text, provider)
+
+                # Success - reset circuit breaker
+                circuit_breaker.record_success()
+
+                return ProviderResult(
+                    provider=provider,
+                    model=self.grok_model,
+                    bias=SentimentBias(parsed.get("bias", "neutral")),
+                    score=parsed.get("score", 0.0),
+                    confidence=parsed.get("confidence", 0.5),
+                    events=[KeyEvent.from_dict(e) for e in parsed.get("key_events", [])[:self.max_events]],
+                    narratives=parsed.get("narratives", [])[:self.max_narratives],
+                    reasoning=parsed.get("reasoning", "")[:500],
+                    latency_ms=latency_ms,
+                    tokens_used=response.tokens_used,
+                    cost_usd=response.cost_usd,
+                    success=True,
+                    raw_response=parsed,
+                )
+
+            except asyncio.TimeoutError:
+                last_error = f"Timeout after {self.grok_timeout_ms}ms"
+                logger.warning(f"Grok query timeout (attempt {attempt + 1}/{self.max_retries + 1})")
+
+            except Exception as e:
+                last_error = str(e)
+                logger.warning(f"Grok query failed (attempt {attempt + 1}/{self.max_retries + 1}): {e}")
+
+        # All retries failed
+        latency_ms = int((time.perf_counter() - start_time) * 1000)
+        circuit_breaker.record_failure(self.cb_failure_threshold, self.cb_cooldown_seconds)
+        logger.error(f"Grok query failed after {self.max_retries + 1} attempts: {last_error}")
+
+        return ProviderResult(
+            provider=provider,
+            model=self.grok_model,
+            bias=SentimentBias.NEUTRAL,
+            score=0.0,
+            confidence=0.0,
+            latency_ms=latency_ms,
+            success=False,
+            error=last_error,
+        )
 
     async def _query_gpt(self, asset: str) -> ProviderResult:
         """
         Query GPT for sentiment with web search.
+
+        Implements:
+        - Timeout enforcement (asyncio.wait_for)
+        - Retry with exponential backoff
+        - Circuit breaker pattern
+
+        NOTE: For actual web search, use gpt-4o-search-preview model or
+        OpenAI's Responses API with web_search tool. Standard GPT-4 models
+        do not have web search capability and will use training data only.
 
         Args:
             asset: Asset symbol
@@ -658,61 +797,109 @@ class SentimentAnalysisAgent(BaseAgent):
         Returns:
             ProviderResult with GPT's analysis
         """
-        import time
-        start_time = time.perf_counter()
+        provider = "gpt"
+        circuit_breaker = self._circuit_breakers[provider]
 
-        try:
-            client = self.llm_clients.get("gpt")
-            if not client:
-                raise RuntimeError("GPT client not available")
-
-            # Build prompt
-            prompt = GPT_SENTIMENT_PROMPT.format(asset=asset)
-            system_prompt = "You are a cryptocurrency market analyst. Search the web for recent news and provide objective sentiment analysis. Respond only with valid JSON."
-
-            # Call GPT (note: web search depends on OpenAI's capabilities)
-            response = await client.generate(
-                model=self.gpt_model,
-                system_prompt=system_prompt,
-                user_message=prompt,
-                temperature=0.3,
-                max_tokens=2048,
-            )
-
-            latency_ms = int((time.perf_counter() - start_time) * 1000)
-
-            # Parse response
-            parsed = self._parse_provider_response(response.text, "gpt")
-
+        # Check circuit breaker
+        if not circuit_breaker.should_allow_request(self.cb_cooldown_seconds):
+            logger.warning(f"Circuit breaker OPEN for {provider}, skipping query")
             return ProviderResult(
-                provider="gpt",
-                model=self.gpt_model,
-                bias=SentimentBias(parsed.get("bias", "neutral")),
-                score=parsed.get("score", 0.0),
-                confidence=parsed.get("confidence", 0.5),
-                events=[KeyEvent.from_dict(e) for e in parsed.get("key_events", [])[:self.max_events]],
-                narratives=parsed.get("narratives", [])[:self.max_narratives],
-                reasoning=parsed.get("reasoning", "")[:500],
-                latency_ms=latency_ms,
-                tokens_used=response.tokens_used,
-                cost_usd=response.cost_usd,
-                success=True,
-                raw_response=parsed,
-            )
-
-        except Exception as e:
-            latency_ms = int((time.perf_counter() - start_time) * 1000)
-            logger.error(f"GPT query failed: {e}")
-            return ProviderResult(
-                provider="gpt",
+                provider=provider,
                 model=self.gpt_model,
                 bias=SentimentBias.NEUTRAL,
                 score=0.0,
                 confidence=0.0,
-                latency_ms=latency_ms,
+                latency_ms=0,
                 success=False,
-                error=str(e),
+                error="Circuit breaker open",
             )
+
+        start_time = time.perf_counter()
+        last_error = None
+
+        # Retry with exponential backoff
+        for attempt in range(self.max_retries + 1):
+            try:
+                if attempt > 0:
+                    # Exponential backoff: backoff_ms * 2^(attempt-1)
+                    wait_ms = self.backoff_ms * (2 ** (attempt - 1))
+                    logger.info(f"GPT retry attempt {attempt + 1}, waiting {wait_ms}ms")
+                    await asyncio.sleep(wait_ms / 1000)
+
+                client = self.llm_clients.get("gpt")
+                if not client:
+                    raise RuntimeError("GPT client not available")
+
+                # Build prompt
+                prompt = GPT_SENTIMENT_PROMPT.format(asset=asset)
+                system_prompt = (
+                    "You are a cryptocurrency market analyst. "
+                    "Provide objective sentiment analysis based on your knowledge. "
+                    "Respond only with valid JSON."
+                )
+
+                # Call GPT with timeout
+                # NOTE: For web search, use gpt-4o-search-preview or Responses API
+                timeout_seconds = self.gpt_timeout_ms / 1000
+
+                response = await asyncio.wait_for(
+                    client.generate(
+                        model=self.gpt_model,
+                        system_prompt=system_prompt,
+                        user_message=prompt,
+                        temperature=0.3,
+                        max_tokens=2048,
+                    ),
+                    timeout=timeout_seconds,
+                )
+
+                latency_ms = int((time.perf_counter() - start_time) * 1000)
+
+                # Parse response
+                parsed = self._parse_provider_response(response.text, provider)
+
+                # Success - reset circuit breaker
+                circuit_breaker.record_success()
+
+                return ProviderResult(
+                    provider=provider,
+                    model=self.gpt_model,
+                    bias=SentimentBias(parsed.get("bias", "neutral")),
+                    score=parsed.get("score", 0.0),
+                    confidence=parsed.get("confidence", 0.5),
+                    events=[KeyEvent.from_dict(e) for e in parsed.get("key_events", [])[:self.max_events]],
+                    narratives=parsed.get("narratives", [])[:self.max_narratives],
+                    reasoning=parsed.get("reasoning", "")[:500],
+                    latency_ms=latency_ms,
+                    tokens_used=response.tokens_used,
+                    cost_usd=response.cost_usd,
+                    success=True,
+                    raw_response=parsed,
+                )
+
+            except asyncio.TimeoutError:
+                last_error = f"Timeout after {self.gpt_timeout_ms}ms"
+                logger.warning(f"GPT query timeout (attempt {attempt + 1}/{self.max_retries + 1})")
+
+            except Exception as e:
+                last_error = str(e)
+                logger.warning(f"GPT query failed (attempt {attempt + 1}/{self.max_retries + 1}): {e}")
+
+        # All retries failed
+        latency_ms = int((time.perf_counter() - start_time) * 1000)
+        circuit_breaker.record_failure(self.cb_failure_threshold, self.cb_cooldown_seconds)
+        logger.error(f"GPT query failed after {self.max_retries + 1} attempts: {last_error}")
+
+        return ProviderResult(
+            provider=provider,
+            model=self.gpt_model,
+            bias=SentimentBias.NEUTRAL,
+            score=0.0,
+            confidence=0.0,
+            latency_ms=latency_ms,
+            success=False,
+            error=last_error,
+        )
 
     def _parse_provider_response(self, response_text: str, provider: str) -> dict:
         """
@@ -848,17 +1035,33 @@ class SentimentAnalysisAgent(BaseAgent):
         gpt_result = next((r for r in successful if r.provider == "gpt"), None)
 
         # Social score comes from Grok (Twitter/X analysis)
-        # News score comes from GPT (news/web analysis)
+        # News score comes from GPT (news/fundamental analysis)
         social_score = grok_result.score if grok_result else 0.0
         news_score = gpt_result.score if gpt_result else 0.0
 
-        # Overall score is average of available scores
-        available_scores = []
-        if grok_result:
-            available_scores.append(social_score)
-        if gpt_result:
-            available_scores.append(news_score)
-        overall_score = sum(available_scores) / len(available_scores) if available_scores else 0.0
+        # Calculate overall score using configured weights
+        # Weights determine relative importance of social vs news sentiment
+        # Default: Grok social=0.6, GPT news=0.6 (each provider's primary strength)
+        if grok_result and gpt_result:
+            # Both providers available - use weighted average
+            # Social weight from Grok config, news weight from GPT config
+            total_weight = self.grok_social_weight + self.gpt_news_weight
+            overall_score = (
+                (social_score * self.grok_social_weight) +
+                (news_score * self.gpt_news_weight)
+            ) / total_weight
+            logger.debug(
+                f"Weighted aggregation: social={social_score:.2f}*{self.grok_social_weight} + "
+                f"news={news_score:.2f}*{self.gpt_news_weight} = {overall_score:.2f}"
+            )
+        elif grok_result:
+            # Only Grok available - use social score
+            overall_score = social_score
+        elif gpt_result:
+            # Only GPT available - use news score
+            overall_score = news_score
+        else:
+            overall_score = 0.0
 
         # Confidence is average of provider confidences
         base_confidence = sum(r.confidence for r in successful) / len(successful)
@@ -1010,9 +1213,10 @@ class SentimentAnalysisAgent(BaseAgent):
                 INSERT INTO sentiment_outputs (
                     id, timestamp, symbol,
                     bias, confidence, social_score, news_score, overall_score,
+                    social_analysis, news_analysis,
                     fear_greed, grok_available, gpt_available,
                     key_events, market_narratives, reasoning, total_latency_ms, created_at
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
             """
             await self.db.execute(
                 query,
@@ -1024,6 +1228,8 @@ class SentimentAnalysisAgent(BaseAgent):
                 output.social_score,
                 output.news_score,
                 output.overall_score,
+                output.social_analysis,  # Provider analysis text
+                output.news_analysis,    # Provider analysis text
                 output.fear_greed.value,
                 output.grok_available,
                 output.gpt_available,
