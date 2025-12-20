@@ -21,6 +21,7 @@ from typing import Optional, Any, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from ..orchestration.message_bus import MessageBus
+    from .hodl_bag import HodlBagManager
 
 logger = logging.getLogger(__name__)
 
@@ -230,6 +231,7 @@ class PositionTracker:
         risk_engine=None,
         db_pool=None,
         config: Optional[dict] = None,
+        hodl_manager: Optional['HodlBagManager'] = None,
     ):
         """
         Initialize PositionTracker.
@@ -239,11 +241,13 @@ class PositionTracker:
             risk_engine: RiskManagementEngine for exposure updates
             db_pool: Database pool for persistence
             config: Position tracking configuration
+            hodl_manager: Phase 8 HodlBagManager for profit allocation
         """
         self.bus = message_bus
         self.risk_engine = risk_engine
         self.db = db_pool
         self.config = config or {}
+        self.hodl_manager = hodl_manager
 
         # Position tracking
         self._positions: dict[str, Position] = {}
@@ -432,6 +436,17 @@ class PositionTracker:
             self.risk_engine.record_trade_result(is_win)
             if is_win:
                 self.risk_engine.apply_post_trade_cooldown()
+
+        # Phase 8: Notify hodl bag manager for profit allocation
+        if self.hodl_manager and position.realized_pnl > 0:
+            try:
+                await self.hodl_manager.process_trade_profit(
+                    trade_id=position.id,
+                    profit_usd=position.realized_pnl,
+                    source_symbol=position.symbol,
+                )
+            except Exception as e:
+                logger.warning(f"Hodl bag profit allocation failed: {e}")
 
         # Publish event
         if self.bus:

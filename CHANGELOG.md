@@ -5,6 +5,41 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2025-12-20
+
+### Added
+- **Phase 8: Hodl Bag Profit Allocation System** - Automated long-term accumulation from trading profits
+- **HodlBagManager**: Core manager in `triplegain/src/execution/hodl_bag.py` (600+ lines)
+  - 10% profit allocation automatically split across USDT/XRP/BTC (33.33% each)
+  - Per-asset purchase thresholds: USDT $1, XRP $25, BTC $15
+  - Paper trading mode with simulated purchases
+  - Daily accumulation limits ($5,000/day) and single accumulation caps ($1,000)
+- **Hodl Bag API Routes**: 7 new endpoints in `triplegain/src/api/routes_hodl.py`
+  - GET `/api/v1/hodl/status` - Current hodl bag states with P&L
+  - GET `/api/v1/hodl/pending` - Pending accumulation amounts per asset
+  - GET `/api/v1/hodl/thresholds` - Per-asset purchase thresholds
+  - GET `/api/v1/hodl/history` - Transaction history
+  - GET `/api/v1/hodl/metrics` - Performance metrics
+  - POST `/api/v1/hodl/force-accumulation` - Force pending purchase (ADMIN only)
+  - GET `/api/v1/hodl/snapshots` - Historical value snapshots
+- **Database Migration 009**: `hodl_bags`, `hodl_transactions`, `hodl_pending`, `hodl_bag_snapshots` tables with views
+- **Configuration**: `config/hodl.yaml` with allocation percentages, thresholds, limits, and paper trading settings
+- **Position Tracker Integration**: Automatic profit notification to HodlBagManager on position close
+- **56 New Unit Tests**: 45 hodl bag manager tests, 11 API route tests
+
+### Changed
+- PositionTracker now accepts optional `hodl_manager` parameter for profit allocation
+- Execution module exports updated with hodl bag components
+- API app includes `register_hodl_routes()` function
+- Test count: 1202 (up from 1156)
+
+### Documentation
+- [Phase 8 Implementation Plan](docs/development/TripleGain-implementation-plan/08-phase-8-hodl-bag-system.md) - Marked complete
+- [ADR-014: Hodl Bag System Architecture](docs/architecture/09-decisions/ADR-014-hodl-bag-system.md)
+- [Phase 8 Feature Documentation](docs/development/features/phase-8-hodl-bag-system.md)
+
+---
+
 ## [0.5.2] - 2025-12-20
 
 ### Added

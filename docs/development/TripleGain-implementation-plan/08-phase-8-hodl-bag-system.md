@@ -1,14 +1,31 @@
 # Phase 8: Hodl Bag System
 
-**Phase Status**: Ready to Start
+**Phase Status**: COMPLETE (2025-12-20)
 **Dependencies**: Phase 3 (Execution Manager, Position Tracker), Phase 6 (Paper Trading)
 **Deliverable**: Automated profit allocation system for long-term BTC/XRP accumulation
+
+## Completed Implementation
+
+| Component | File | Tests |
+|-----------|------|-------|
+| Database Migration | `migrations/009_hodl_bags.sql` | N/A |
+| Configuration | `config/hodl.yaml` | N/A |
+| HodlBagManager | `triplegain/src/execution/hodl_bag.py` | 45 tests |
+| API Routes | `triplegain/src/api/routes_hodl.py` | 11 tests |
+| Position Tracker Integration | `triplegain/src/execution/position_tracker.py` | Existing tests |
+| API App Integration | `triplegain/src/api/app.py` | N/A |
+| Execution Module Exports | `triplegain/src/execution/__init__.py` | N/A |
 
 ---
 
 ## Overview
 
-The Hodl Bag System automatically allocates a percentage of trading profits to long-term "hodl bag" positions in BTC and XRP. These positions are **excluded from rebalancing and trading**, representing a separate wealth accumulation strategy built on trading success.
+The Hodl Bag System automatically allocates 10% of trading profits to long-term "hodl bag" positions in BTC, XRP, and USDT. These positions are **excluded from rebalancing and trading**, representing a separate wealth accumulation strategy built on trading success.
+
+**Example**: A profitable BTC trade yielding $100 USDT profit allocates:
+- $3.33 USDT → USDT hodl (reserve)
+- $3.33 USDT → XRP purchase (when threshold reached)
+- $3.33 USDT → BTC purchase (when threshold reached)
 
 ### Why This Phase Matters
 
@@ -31,9 +48,15 @@ The Hodl Bag System automatically allocates a percentage of trading profits to l
 │                           │                                                  │
 │                           ▼                                                  │
 │                    ┌─────────────┐                                          │
-│                    │  50% BTC    │  Long-term growth asset                  │
-│                    │  50% XRP    │  Long-term growth asset                  │
+│                    │  3.33% USDT │  Stable reserve                          │
+│                    │  3.33% XRP  │  Long-term growth asset                  │
+│                    │  3.33% BTC  │  Long-term growth asset                  │
 │                    └─────────────┘                                          │
+│                                                                             │
+│  Execution:                                                                 │
+│  • USDT: Held immediately (no purchase needed)                             │
+│  • XRP: Purchased when pending reaches $25 threshold                       │
+│  • BTC: Purchased when pending reaches $15 threshold                       │
 │                                                                             │
 │  Rules:                                                                     │
 │  • Only profitable trades contribute                                        │
@@ -59,48 +82,56 @@ The Hodl Bag System automatically allocates a percentage of trading profits to l
 │  ┌─────────────────────────────────────────────────────────────────────┐   │
 │  │ Trade Result:                                                        │   │
 │  │   Symbol: BTC/USDT                                                   │   │
-│  │   Realized P&L: +$85.00                                             │   │
+│  │   Realized P&L: +$100.00                                            │   │
 │  │                                                                      │   │
 │  │ Hodl Allocation: 10% of profit                                      │   │
-│  │   To Hodl: $8.50                                                    │   │
+│  │   To Hodl: $10.00                                                   │   │
 │  └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
 │  2. ALLOCATION CALCULATION                                                  │
 │  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │ Default Split: 50% to BTC hodl, 50% to XRP hodl                     │   │
+│  │ Split: 1/3 USDT, 1/3 XRP, 1/3 BTC (equal distribution)              │   │
 │  │                                                                      │   │
-│  │ This example ($8.50 from BTC trade):                                │   │
-│  │   BTC hodl: +$4.25 worth                                            │   │
-│  │   XRP hodl: +$4.25 worth                                            │   │
+│  │ This example ($10.00 from BTC trade):                               │   │
+│  │   USDT hodl: +$3.33 (held immediately)                              │   │
+│  │   XRP pending: +$3.33 (executes at $25 threshold)                   │   │
+│  │   BTC pending: +$3.33 (executes at $15 threshold)                   │   │
 │  └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
-│  3. EXECUTION (Batched when threshold reached)                              │
+│  3. EXECUTION (Per-asset thresholds)                                        │
 │  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │ If accumulated hodl amount >= minimum threshold ($10):              │   │
-│  │   → Execute purchase                                                 │   │
+│  │ Thresholds:                                                          │   │
+│  │   USDT: $1 (just rounding, held immediately)                        │   │
+│  │   XRP:  $25 (Kraken minimum ~$25)                                   │   │
+│  │   BTC:  $15 (Kraken minimum ~$10 + buffer)                          │   │
+│  │                                                                      │   │
+│  │ When pending >= threshold:                                           │   │
+│  │   → Execute market purchase                                          │   │
 │  │   → Transfer to hodl balance (excluded from trading)                │   │
 │  │   → Update hodl_bags table                                          │   │
-│  │                                                                      │   │
-│  │ Else:                                                                │   │
-│  │   → Add to pending hodl accumulation                                │   │
-│  │   → Execute when threshold reached                                  │   │
 │  └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
 │  4. HODL BAG STATE (Example after 1 year)                                   │
 │  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │ USDT Hodl Bag:                                                       │   │
+│  │   Balance: 420.00 USDT                                              │   │
+│  │   DCA Queue: $180.00 pending deployment                             │   │
+│  │   First Accumulation: 2025-01-15                                    │   │
+│  │   Last Accumulation: 2025-12-18                                     │   │
+│  │                                                                      │   │
 │  │ BTC Hodl Bag:                                                        │   │
-│  │   Balance: 0.0155 BTC                                               │   │
-│  │   Value: $698.25                                                    │   │
-│  │   Cost Basis: $612.40                                               │   │
-│  │   Unrealized Gain: +$85.85 (+14.0%)                                │   │
+│  │   Balance: 0.0093 BTC                                               │   │
+│  │   Value: $418.95                                                    │   │
+│  │   Cost Basis: $367.44                                               │   │
+│  │   Unrealized Gain: +$51.51 (+14.0%)                                │   │
 │  │   First Accumulation: 2025-01-15                                    │   │
 │  │   Last Accumulation: 2025-12-18                                     │   │
 │  │                                                                      │   │
 │  │ XRP Hodl Bag:                                                        │   │
-│  │   Balance: 850 XRP                                                  │   │
-│  │   Value: $510.00                                                    │   │
-│  │   Cost Basis: $442.00                                               │   │
-│  │   Unrealized Gain: +$68.00 (+15.4%)                                │   │
+│  │   Balance: 510 XRP                                                  │   │
+│  │   Value: $306.00                                                    │   │
+│  │   Cost Basis: $265.20                                               │   │
+│  │   Unrealized Gain: +$40.80 (+15.4%)                                │   │
 │  │   First Accumulation: 2025-01-15                                    │   │
 │  │   Last Accumulation: 2025-12-18                                     │   │
 │  └─────────────────────────────────────────────────────────────────────┘   │
@@ -128,7 +159,7 @@ The Hodl Bag System automatically allocates a percentage of trading profits to l
 -- Hodl bag holdings (one row per asset)
 CREATE TABLE hodl_bags (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    asset VARCHAR(10) NOT NULL,  -- BTC, XRP
+    asset VARCHAR(10) NOT NULL,  -- BTC, XRP, USDT
     balance DECIMAL(20, 10) NOT NULL DEFAULT 0,
     cost_basis_usd DECIMAL(20, 2) NOT NULL DEFAULT 0,
     first_accumulation TIMESTAMPTZ,
@@ -142,7 +173,7 @@ CREATE TABLE hodl_bags (
 
 -- Initialize with zero balances
 INSERT INTO hodl_bags (asset, balance, cost_basis_usd)
-VALUES ('BTC', 0, 0), ('XRP', 0, 0)
+VALUES ('BTC', 0, 0), ('XRP', 0, 0), ('USDT', 0, 0)
 ON CONFLICT (asset) DO NOTHING;
 
 -- Hodl bag transactions (all accumulations/withdrawals)
@@ -208,9 +239,10 @@ SELECT create_hypertable('hodl_bag_snapshots', 'timestamp',
 | Class | Purpose | Fields |
 |-------|---------|--------|
 | `HodlBagState` | Current bag status | asset, balance, cost_basis, current_value, unrealized_pnl, dates |
-| `HodlAllocation` | Allocation from profit | btc_amount_usd, xrp_amount_usd, total_amount_usd |
+| `HodlAllocation` | Allocation from profit | usdt_amount, xrp_amount_usd, btc_amount_usd, total_amount_usd |
 | `HodlTransaction` | Single transaction record | asset, type, amount, price, value, source |
-| `HodlPending` | Pending accumulation | asset, amount_usd, source_trade_id |
+| `HodlPending` | Pending accumulation | asset, amount_usd, threshold_usd, source_trade_id |
+| `HodlThresholds` | Per-asset thresholds | usdt, xrp, btc |
 
 ---
 
@@ -306,20 +338,26 @@ hodl_bags:
   # Allocation from profits
   allocation_pct: 10  # 10% of realized profits to hodl bags
 
-  # Minimum accumulation before purchase
-  min_accumulation_usd: 10
-
-  # Assets to accumulate
+  # Assets to accumulate with equal split (1/3 each = 3.33% of profit)
   assets:
-    - BTC
-    - XRP
+    - USDT  # Stable reserve (held, not purchased)
+    - XRP   # Long-term growth
+    - BTC   # Long-term growth
 
-  # Split strategy
+  # Split strategy (must sum to 100)
   split:
-    btc_pct: 50
-    xrp_pct: 50
+    usdt_pct: 33.34
+    xrp_pct: 33.33
+    btc_pct: 33.33
 
-  # Execution settings
+  # Per-asset minimum thresholds before purchase
+  # Based on exchange minimums + buffer for fees
+  min_accumulation:
+    usdt: 1    # Just rounding threshold (no purchase needed)
+    xrp: 25    # Kraken minimum ~$25
+    btc: 15    # Kraken minimum ~$10 + buffer
+
+  # Execution settings (instant when threshold reached)
   execution:
     order_type: market  # Immediate execution for simplicity
     retry_on_failure: true
@@ -344,6 +382,30 @@ hodl_bags:
 ---
 
 ## 8.5 Execution Modes
+
+### Instant Execution (Threshold-Based)
+
+Purchases execute immediately when pending accumulation reaches per-asset thresholds:
+
+```
+Profit $100 → 10% = $10.00
+├── USDT: $3.33 → Held immediately (no purchase needed)
+├── XRP:  $3.33 → Added to pending (executes at $25)
+└── BTC:  $3.33 → Added to pending (executes at $15)
+
+After ~8 profitable trades ($750+ in profits):
+├── XRP pending: $26.64 → Threshold reached! Market buy XRP
+├── BTC pending: $26.64 → Threshold reached! Market buy BTC
+└── USDT hodl: $26.64 → Already held
+```
+
+### Per-Asset Thresholds
+
+| Asset | Threshold | Rationale |
+|-------|-----------|-----------|
+| USDT | $1 | Just rounding, no purchase needed |
+| XRP | $25 | Kraken minimum order ~$25 |
+| BTC | $15 | Kraken minimum ~$10 + fee buffer |
 
 ### Paper Trading Mode
 
@@ -374,7 +436,8 @@ When paper trading is enabled, accumulations are simulated:
 | Method | Path | Description | Response |
 |--------|------|-------------|----------|
 | GET | `/api/v1/hodl/status` | Current hodl bag states | dict[asset, HodlBagState] |
-| GET | `/api/v1/hodl/pending` | Pending accumulations | dict[asset, Decimal] |
+| GET | `/api/v1/hodl/pending` | Pending accumulations per asset | dict[asset, Decimal] |
+| GET | `/api/v1/hodl/thresholds` | Per-asset purchase thresholds | dict[asset, Decimal] |
 | GET | `/api/v1/hodl/history` | Transaction history | list[HodlTransaction] |
 | GET | `/api/v1/hodl/metrics` | Performance metrics | HodlMetrics |
 | POST | `/api/v1/hodl/force-accumulation` | Force pending purchase | ExecutionResult |
@@ -407,35 +470,47 @@ When paper trading is enabled, accumulations are simulated:
 │                           HODL BAG STATUS                                    │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │                                                                             │
+│  USDT HODL BAG (Stable Reserve)                                             │
+│  ───────────────────────────────────────────────────────────────────────── │
+│  Balance:         420.00 USDT                                              │
+│  DCA Queue:       $180.00 pending deployment                               │
+│  Accumulations:   45 deposits                                              │
+│  First Deposit:   2025-01-15                                               │
+│  Last Deposit:    2025-12-18                                               │
+│                                                                             │
 │  BTC HODL BAG                                                               │
 │  ───────────────────────────────────────────────────────────────────────── │
-│  Balance:         0.0155 BTC                                               │
-│  Current Value:   $698.25                                                  │
-│  Cost Basis:      $612.40                                                  │
-│  Unrealized P&L:  +$85.85 (+14.0%)                                        │
+│  Balance:         0.0093 BTC                                               │
+│  Current Value:   $418.95                                                  │
+│  Cost Basis:      $367.44                                                  │
+│  Unrealized P&L:  +$51.51 (+14.0%)                                        │
 │  Avg Cost:        $39,509.68 /BTC                                          │
-│  Accumulations:   45 purchases                                             │
+│  Accumulations:   27 purchases                                             │
 │  First Buy:       2025-01-15                                               │
 │  Last Buy:        2025-12-18                                               │
 │                                                                             │
 │  XRP HODL BAG                                                               │
 │  ───────────────────────────────────────────────────────────────────────── │
-│  Balance:         850 XRP                                                  │
-│  Current Value:   $510.00                                                  │
-│  Cost Basis:      $442.00                                                  │
-│  Unrealized P&L:  +$68.00 (+15.4%)                                        │
+│  Balance:         510 XRP                                                  │
+│  Current Value:   $306.00                                                  │
+│  Cost Basis:      $265.20                                                  │
+│  Unrealized P&L:  +$40.80 (+15.4%)                                        │
 │  Avg Cost:        $0.52 /XRP                                               │
-│  Accumulations:   45 purchases                                             │
+│  Accumulations:   27 purchases                                             │
 │  First Buy:       2025-01-15                                               │
 │  Last Buy:        2025-12-18                                               │
 │                                                                             │
 │  PENDING ACCUMULATION                                                       │
 │  ───────────────────────────────────────────────────────────────────────── │
-│  BTC Pending:     $6.25 (threshold: $10.00)                                │
-│  XRP Pending:     $6.25 (threshold: $10.00)                                │
+│  USDT Pending:    $0.85 (threshold: $1.00)    ████████░░ 85%               │
+│  BTC Pending:     $12.45 (threshold: $15.00)  ████████░░ 83%               │
+│  XRP Pending:     $18.20 (threshold: $25.00)  ███████░░░ 73%               │
 │                                                                             │
-│  TOTAL HODL VALUE:  $1,208.25                                              │
-│  TOTAL UNREALIZED:  +$153.85 (+14.6%)                                      │
+│  TOTALS                                                                     │
+│  ───────────────────────────────────────────────────────────────────────── │
+│  Total Hodl Value:    $1,144.95 (USDT + BTC + XRP)                         │
+│  Total Unrealized:    +$92.31 (+14.6% on BTC/XRP)                          │
+│  Total Accumulated:   $1,052.64 cost basis                                 │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -449,12 +524,14 @@ When paper trading is enabled, accumulations are simulated:
 | Test | Description | Acceptance Criteria |
 |------|-------------|---------------------|
 | `test_profit_allocation` | Correct percentage allocated | 10% of profit |
-| `test_split_calculation` | 50/50 BTC/XRP split | Equal amounts |
+| `test_split_calculation` | 1/3 USDT, 1/3 XRP, 1/3 BTC split | Equal amounts (~3.33% each) |
+| `test_usdt_held_not_converted` | USDT allocation stays as USDT | No purchase executed |
+| `test_per_asset_thresholds` | Each asset has correct threshold | USDT=$1, XRP=$25, BTC=$15 |
 | `test_threshold_batching` | Below threshold accumulated | Not executed |
 | `test_threshold_execution` | At threshold executed | Order placed |
 | `test_state_tracking` | Balances updated correctly | Accurate state |
 | `test_cost_basis_update` | Cost basis calculated | Weighted average |
-| `test_pending_tracking` | Pending amounts tracked | Correct totals |
+| `test_pending_tracking` | Pending amounts tracked per asset | Correct totals |
 | `test_pending_clear` | Pending cleared on execution | Zero after |
 | `test_zero_profit` | No allocation on loss | No pending created |
 | `test_negative_profit` | Loss handling | No action taken |
@@ -465,7 +542,7 @@ When paper trading is enabled, accumulations are simulated:
 | Test | Description | Acceptance Criteria |
 |------|-------------|---------------------|
 | `test_position_close_triggers` | Profit triggers allocation | HodlManager notified |
-| `test_portfolio_excludes_hodl` | Rebalancing excludes | Correct available |
+| `test_portfolio_excludes_hodl` | Rebalancing excludes all 3 assets | Correct available |
 | `test_database_persistence` | Data persists | Survives restart |
 | `test_api_endpoints` | REST endpoints work | Valid responses |
 | `test_snapshot_creation` | Daily snapshots created | Data recorded |
@@ -497,14 +574,14 @@ When paper trading is enabled, accumulations are simulated:
 
 ## 8.10 Deliverables Checklist
 
-- [ ] `triplegain/src/execution/hodl_bag.py` - Core manager implementation
+- [ ] `triplegain/src/execution/hodl_bag.py` - Core manager implementation (USDT, XRP, BTC)
 - [ ] `triplegain/src/api/routes_hodl.py` - API endpoints
-- [ ] `config/hodl.yaml` - Configuration file
-- [ ] `migrations/008_hodl_bags.sql` - Database migration
+- [ ] `config/hodl.yaml` - Configuration file (10% allocation, per-asset thresholds)
+- [ ] `migrations/009_hodl_bags.sql` - Database migration
 - [ ] `triplegain/tests/unit/execution/test_hodl_bag.py` - Unit tests
 - [ ] `triplegain/tests/integration/test_hodl_integration.py` - Integration tests
 - [ ] Update `position_tracker.py` with profit notification
-- [ ] Update `portfolio_rebalance.py` to exclude hodl
+- [ ] Update `portfolio_rebalance.py` to exclude hodl (all 3 assets)
 - [ ] Update paper trading to simulate hodl accumulation
 
 ---
@@ -516,9 +593,11 @@ When paper trading is enabled, accumulations are simulated:
 | Requirement | Test Method | Acceptance |
 |-------------|-------------|------------|
 | 10% profit allocation | Unit test | Exact 10% |
-| 50/50 BTC/XRP split | Unit test | Equal amounts |
-| Threshold batching | Unit test | Executes at $10 |
-| Portfolio exclusion | Integration | Hodl excluded |
+| 1/3 USDT, 1/3 XRP, 1/3 BTC split | Unit test | ~3.33% each |
+| USDT held as stable | Unit test | Not converted |
+| Per-asset thresholds | Unit test | USDT=$1, XRP=$25, BTC=$15 |
+| Threshold batching | Unit test | Executes at asset threshold |
+| Portfolio exclusion (all 3 assets) | Integration | Hodl excluded |
 | Persistent tracking | Integration | Data survives restart |
 
 ### Non-Functional Requirements
@@ -541,4 +620,5 @@ When paper trading is enabled, accumulations are simulated:
 
 ---
 
-*Phase 8 Implementation Plan v1.0 - December 2025*
+*Phase 8 Implementation Plan v2.0 - December 2025*
+*Updated: 10% allocation (3.33% each USDT/XRP/BTC), per-asset thresholds (USDT=$1, XRP=$25, BTC=$15)*

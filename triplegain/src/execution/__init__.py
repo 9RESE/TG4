@@ -10,6 +10,9 @@ Phase 6 Components:
 - PaperPortfolio: Simulated balance tracking
 - PaperOrderExecutor: Paper trade execution with slippage/fees
 - PaperPriceSource: Real-time price source for paper trading
+
+Phase 8 Components:
+- HodlBagManager: Automated profit allocation for long-term accumulation
 """
 
 from .order_manager import (
@@ -50,6 +53,15 @@ from .paper_price_source import (
     PaperPriceSource,
     MockPriceSource,
 )
+from .hodl_bag import (
+    HodlBagManager,
+    HodlBagState,
+    HodlAllocation,
+    HodlTransaction,
+    HodlPending,
+    HodlThresholds,
+    TransactionType,
+)
 
 __all__ = [
     # Order Management
@@ -82,4 +94,12 @@ __all__ = [
     'PaperFillResult',
     'PaperPriceSource',
     'MockPriceSource',
+    # Hodl Bag (Phase 8)
+    'HodlBagManager',
+    'HodlBagState',
+    'HodlAllocation',
+    'HodlTransaction',
+    'HodlPending',
+    'HodlThresholds',
+    'TransactionType',
 ]

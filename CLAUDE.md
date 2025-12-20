@@ -5,7 +5,7 @@ Python trading system with TimescaleDB + 6-model LLM comparison
 
 ## Quick Commands
 ```bash
-pytest triplegain/tests/                            # Run all tests (1156 passing)
+pytest triplegain/tests/                            # Run all tests (1202 passing)
 pytest --cov=triplegain/src --cov-report=term       # Run with coverage (87%)
 docker-compose up -d timescaledb                    # Start database
 python -m data.kraken_db.gap_filler --db-url "$DB_URL"  # Fill data gaps
@@ -13,9 +13,9 @@ uvicorn triplegain.src.api.app:app --reload         # Start API server
 python -m triplegain.run_paper_trading              # Run paper trading system
 ```
 
-## Current Phase: Phase 7 Complete
+## Current Phase: Phase 8 Complete
 
-**Status**: Phase 7 COMPLETE - Sentiment Analysis Agent with dual-model architecture (2025-12-19)
+**Status**: Phase 8 COMPLETE - Hodl Bag Profit Allocation System (2025-12-20)
 
 | Phase | Status | Description |
 |-------|--------|-------------|
@@ -26,7 +26,7 @@ python -m triplegain.run_paper_trading              # Run paper trading system
 | 5. Configuration | **COMPLETE** | Config validation, integration fixes |
 | 6. Paper Trading | **COMPLETE** | Simulated execution, session persistence |
 | 7. Sentiment | **COMPLETE** | Grok (social) + GPT (news) dual-model |
-| 8. Hodl Bag | Ready | 10% profit allocation to BTC/XRP |
+| 8. Hodl Bag | **COMPLETE** | 10% profit allocation (33.33% each USDT/XRP/BTC) |
 | 9. A/B Testing | Ready | 6-model comparison framework |
 | 10. Dashboard | Ready | React monitoring UI |
 | 11. Production | Not Started | Live Trading, Deployment |
@@ -52,7 +52,7 @@ python -m triplegain.run_paper_trading              # Run paper trading system
 | In-Memory Message Bus | Simple, fast, sufficient for single-process |
 | Trend-following | Mean reversion does NOT work on crypto |
 | Conservative | Quality over quantity (3 trades beat 44 in Alpha Arena) |
-| 33/33/33 Allocation | BTC/XRP/USDT with Hodl Bag (10% of profits) |
+| 33/33/33 Allocation | BTC/XRP/USDT with Hodl Bag (10% of profits, per-asset thresholds) |
 
 ### LLM Model Roles
 | Role | Model | Frequency |
@@ -80,24 +80,24 @@ triplegain/
 │   ├── agents/         # Base, TA, Regime, Trading Decision, Portfolio Rebalance, Sentiment
 │   ├── risk/           # Rules engine, circuit breakers, cooldowns
 │   ├── orchestration/  # Message bus, coordinator agent
-│   ├── execution/      # Order manager, position tracker, paper trading
+│   ├── execution/      # Order manager, position tracker, paper trading, hodl bag
 │   ├── data/           # Indicator library, market snapshot, database
 │   ├── llm/            # Prompt builder, LLM clients (5 providers)
-│   ├── api/            # FastAPI endpoints, agent routes, orchestration routes, paper trading, sentiment
+│   ├── api/            # FastAPI endpoints, agent routes, orchestration routes, paper trading, sentiment, hodl
 │   └── utils/          # Config loader
 ├── tests/
-│   ├── unit/           # 1156 unit tests (87% coverage)
+│   ├── unit/           # 1202 unit tests (87% coverage)
 │   │   ├── agents/     # Agent tests (271 tests, including 56 sentiment)
 │   │   ├── risk/       # Risk engine tests (90 tests)
 │   │   ├── orchestration/  # Message bus, coordinator tests (114 tests)
-│   │   ├── execution/  # Order manager, position tracker, paper trading (157 tests)
+│   │   ├── execution/  # Order manager, position tracker, paper trading, hodl bag (202 tests)
 │   │   ├── llm/        # LLM client tests (209 tests)
-│   │   └── api/        # API endpoint tests (110 tests)
+│   │   └── api/        # API endpoint tests (121 tests)
 │   └── integration/    # Database integration tests
-config/                 # agents.yaml, risk.yaml, orchestration.yaml, portfolio.yaml, execution.yaml
+config/                 # agents.yaml, risk.yaml, orchestration.yaml, portfolio.yaml, execution.yaml, hodl.yaml
 data/kraken_db/         # Data collectors (operational)
 docs/development/       # Design + Implementation plans + Reviews
-migrations/             # Database migrations (001-008)
+migrations/             # Database migrations (001-009)
 ```
 
 ## Documentation
@@ -109,7 +109,7 @@ migrations/             # Database migrations (001-008)
 - [Changelog](CHANGELOG.md)
 
 ## Version
-**v0.5.2** (2025-12-20) - Phase 7 Deep Review v2 Fixes (OpenAI web search, memory cleanup, circuit breaker improvements)
+**v0.6.0** (2025-12-20) - Phase 8 Hodl Bag System (profit allocation, per-asset thresholds, paper trading support)
 
 ---
 *Uses global config from ~/.claude/CLAUDE.md*

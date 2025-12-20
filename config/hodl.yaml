@@ -1,0 +1,152 @@
+# ============================================================================
+# Hodl Bag Configuration
+# ============================================================================
+# Phase 8: Automated profit allocation system for long-term BTC/XRP accumulation.
+#
+# The Hodl Bag System automatically allocates 10% of trading profits to
+# long-term "hodl bag" positions. These positions are:
+# - Excluded from rebalancing
+# - Never sold by the trading system
+# - Separate from active trading capital
+# ============================================================================
+
+hodl_bags:
+  # Master enable/disable for hodl bag system
+  enabled: true
+
+  # ============================================================================
+  # Allocation Settings
+  # ============================================================================
+  # Percentage of realized profits to allocate to hodl bags
+  allocation_pct: 10  # 10% of realized profits
+
+  # Assets to accumulate with their split percentages
+  # Must sum to 100%
+  assets:
+    - USDT  # Stable reserve (held, not purchased)
+    - XRP   # Long-term growth
+    - BTC   # Long-term growth
+
+  # Split strategy (must sum to 100)
+  split:
+    usdt_pct: 33.34  # 1/3 to USDT stable reserve
+    xrp_pct: 33.33   # 1/3 to XRP
+    btc_pct: 33.33   # 1/3 to BTC
+
+  # ============================================================================
+  # Per-Asset Purchase Thresholds
+  # ============================================================================
+  # Minimum USD amount before executing purchase.
+  # Based on exchange minimum order sizes + buffer for fees.
+  min_accumulation:
+    usdt: 1     # Just rounding threshold (no purchase needed, held as-is)
+    xrp: 25     # Kraken minimum ~$25 for XRP
+    btc: 15     # Kraken minimum ~$10 + buffer for fees
+
+  # ============================================================================
+  # Execution Settings
+  # ============================================================================
+  execution:
+    # Order type for hodl purchases
+    # market = immediate execution (recommended for small amounts)
+    # limit = place limit order at current price
+    order_type: market
+
+    # Retry settings for failed purchases
+    retry_on_failure: true
+    max_retries: 3
+    retry_delay_seconds: 30
+
+    # Maximum slippage tolerance for market orders (%)
+    max_slippage_pct: 0.5
+
+  # ============================================================================
+  # Paper Trading Mode
+  # ============================================================================
+  paper_trading:
+    # Enable paper mode simulation for hodl bags
+    enabled: true
+
+    # Simulate accumulation purchases in paper mode
+    simulate_purchases: true
+
+    # Use real-time prices for simulated cost basis
+    use_live_prices: true
+
+  # ============================================================================
+  # Snapshot Settings
+  # ============================================================================
+  snapshots:
+    # Enable daily snapshots for value tracking
+    enabled: true
+
+    # Hours between snapshots (24 = daily)
+    interval_hours: 24
+
+    # Retention period for snapshots (days)
+    retention_days: 365
+
+  # ============================================================================
+  # Safety Limits
+  # ============================================================================
+  limits:
+    # Maximum single accumulation purchase (USD)
+    # Prevents unexpectedly large purchases from a single profitable trade
+    max_single_accumulation_usd: 1000
+
+    # Maximum daily accumulation total (USD)
+    # Prevents runaway accumulation on unusually profitable days
+    daily_accumulation_limit_usd: 5000
+
+    # Minimum profit to trigger allocation (USD)
+    # Avoids tiny allocations that would never reach threshold
+    min_profit_to_allocate_usd: 1.0
+
+  # ============================================================================
+  # Logging and Notifications
+  # ============================================================================
+  logging:
+    # Log all hodl transactions
+    log_transactions: true
+
+    # Log accumulation triggers
+    log_triggers: true
+
+    # Log threshold executions
+    log_executions: true
+
+  # ============================================================================
+  # Price Source Configuration
+  # ============================================================================
+  prices:
+    # Cache duration for price lookups (seconds)
+    cache_duration_seconds: 5
+
+    # Fallback prices if API unavailable (for paper trading only)
+    fallback:
+      BTC/USDT: 45000
+      XRP/USDT: 0.60
+
+# ============================================================================
+# Example Profit Flow
+# ============================================================================
+# A profitable trade yields $100 USDT:
+#
+#   1. Hodl allocation = 10% of $100 = $10.00
+#
+#   2. Split across assets:
+#      - USDT: $3.33 (33.34%) - held immediately
+#      - XRP:  $3.33 (33.33%) - added to pending
+#      - BTC:  $3.33 (33.33%) - added to pending
+#
+#   3. When pending reaches threshold:
+#      - XRP pending >= $25 -> market buy XRP
+#      - BTC pending >= $15 -> market buy BTC
+#
+#   4. Purchased assets added to hodl bags (excluded from trading)
+#
+# After ~8 profitable trades ($750+ in profits):
+# - Each asset accumulates ~$25 in pending
+# - XRP and BTC purchases execute
+# - USDT continues to accumulate as stable reserve
+# ============================================================================

@@ -2,6 +2,16 @@
 **DO NOT EDIT**
 Update the docs based on all recent git changes. Review git log and diff to identify what changed, then update relevant documentation (architecture, features, ADRs, etc.) following the CLAUDE.md standards (Arc42, Diataxis, C4). Commit the documentation updates.
 
+
+DONE - Phase 8 Hodl Bag System implemented (v0.6.0, 2025-12-20):
+- migrations/009_hodl_bags.sql
+- config/hodl.yaml
+- triplegain/src/execution/hodl_bag.py (HodlBagManager)
+- triplegain/src/api/routes_hodl.py (7 endpoints)
+- 63 new tests (45 unit + 18 integration)
+
+
+
 do a deep code and logic review of the implementation of docs/development/TripleGain-implementation-plan/07-phase-7-sentiment-analysis.md Provide a document of your findings and recommendations in this folder docs/development/reviews/phase-7/. ultrathink
 
 address all issues and implement the fixes/recommendations outlined in docs/development/reviews/phase-7/deep-review.md ultrathink

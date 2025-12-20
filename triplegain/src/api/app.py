@@ -555,6 +555,31 @@ def register_sentiment_routes(app: FastAPI, app_state: dict) -> None:
         logger.warning(f"Failed to register sentiment routes: {e}")
 
 
+def register_hodl_routes(app: FastAPI, app_state: dict) -> None:
+    """
+    Register hodl bag routes with the application.
+
+    Phase 8: Hodl bag API endpoints.
+    Should be called after hodl_manager is initialized.
+
+    Args:
+        app: FastAPI application instance
+        app_state: Dictionary with hodl_manager
+    """
+    global _app_state
+    _app_state.update(app_state)
+
+    try:
+        from .routes_hodl import get_hodl_router
+
+        router = get_hodl_router(app_state)
+        if router:
+            app.include_router(router)
+            logger.info("Hodl bag routes registered")
+    except Exception as e:
+        logger.warning(f"Failed to register hodl routes: {e}")
+
+
 def get_app() -> FastAPI:
     """Get or create the singleton FastAPI app instance."""
     global _app
