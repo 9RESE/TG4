@@ -102,7 +102,8 @@ class OrderStatus(Enum):
     FILLED = "filled"
     CANCELLED = "cancelled"
     EXPIRED = "expired"
-    ERROR = "error"
+    REJECTED = "rejected"            # CRITICAL-01: Business logic rejection (e.g., insufficient balance)
+    ERROR = "error"                  # System/technical error
 
 
 class OrderType(Enum):

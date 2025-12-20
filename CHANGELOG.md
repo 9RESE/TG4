@@ -5,6 +5,44 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2025-12-19
+
+### Added
+- **Phase 6: Paper Trading Integration** - Complete paper trading infrastructure as default execution mode
+- **TradingMode Enum**: System-wide trading mode with dual-confirmation for live trading (CRITICAL-01)
+- **PaperPortfolio**: Full balance tracking, P&L calculation, trade history, and session persistence
+- **PaperOrderExecutor**: Configurable fill simulation with slippage, delays, and fees
+- **PaperPriceSource**: Multi-source price provider (live feed, historical DB, mock fallback)
+- **Paper Trading API**: 6 new endpoints for portfolio, positions, trades, and reset operations
+- **Database Migration 005**: Isolated paper trading tables (sessions, orders, positions, trades, snapshots)
+- **OrderStatus.REJECTED**: New enum value for business logic rejections vs system errors (CRITICAL-01)
+- **Session Persistence**: Paper portfolio saves/restores across restarts (HIGH-01)
+- **53 New Unit Tests**: Full coverage of paper trading components and review fixes
+
+### Fixed
+- **Thread-Safe Statistics**: Added `asyncio.Lock` for concurrent counter updates (CRITICAL-02)
+- **Async Price Queries**: Created `get_price_async()` for proper async database access (CRITICAL-03)
+- **Size Quantization**: Trade sizes now respect symbol's `size_decimals` config (HIGH-02)
+- **Entry Price Handling**: API uses `None` instead of `0` for market orders (MEDIUM-01)
+- **Price Cache Timestamps**: Stale price updates rejected based on timestamp comparison (MEDIUM-02)
+- **Order History Persistence**: Orders persisted before memory trimming (MEDIUM-03)
+
+### Changed
+- Coordinator now auto-initializes paper trading in PAPER mode
+- Rate limiting added for `/paper/trade` and `/paper/reset` endpoints
+- Audit logging enhanced with `RISK_RESET` event for portfolio resets
+- Test count increased from 1045 to 1098
+
+### Security
+- Triple confirmation required for live trading (ENV + CONFIG + explicit confirmation)
+- Paper trading endpoints protected by authentication and rate limiting
+- Complete data isolation between paper and live trading
+
+### Documentation
+- [Phase 6 Feature Documentation](docs/development/features/phase-6-paper-trading.md)
+- [ADR-013: Paper Trading Design](docs/architecture/09-decisions/ADR-013-paper-trading-design.md)
+- [Phase 6 Code Review](docs/development/reviews/phase-6/phase-6-code-review.md)
+
 ## [0.3.7] - 2025-12-19
 
 ### Added

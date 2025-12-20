@@ -5,24 +5,27 @@ Python trading system with TimescaleDB + 6-model LLM comparison
 
 ## Quick Commands
 ```bash
-pytest triplegain/tests/                            # Run all tests (1045 passing)
+pytest triplegain/tests/                            # Run all tests (1098 passing)
 pytest --cov=triplegain/src --cov-report=term       # Run with coverage (87%)
 docker-compose up -d timescaledb                    # Start database
 python -m data.kraken_db.gap_filler --db-url "$DB_URL"  # Fill data gaps
 uvicorn triplegain.src.api.app:app --reload         # Start API server
 ```
 
-## Current Phase: Phase 3 Complete
+## Current Phase: Phase 6 Complete
 
-**Status**: Phase 3 COMPLETE with all review fixes + enhancements (2025-12-19), ready for Phase 4 or paper trading
+**Status**: Phase 6 COMPLETE - Paper Trading Integration with all review fixes (2025-12-19)
 
 | Phase | Status | Description |
 |-------|--------|-------------|
 | 1. Foundation | **COMPLETE** | Data pipeline, indicators, snapshots, prompts |
 | 2. Core Agents | **COMPLETE** | TA, Regime, Risk, Trading Decision agents |
 | 3. Orchestration | **COMPLETE** | Communication, Coordinator, Execution |
-| 4. Extended | Ready to Start | Sentiment, Hodl Bag tracking, Dashboard |
-| 5. Production | Not Started | Testing, Paper Trading, Live Deployment |
+| 4. API Security | **COMPLETE** | Authentication, RBAC, rate limiting |
+| 5. Configuration | **COMPLETE** | Config validation, integration fixes |
+| 6. Paper Trading | **COMPLETE** | Simulated execution, session persistence |
+| 7. Extended | Ready to Start | Sentiment, Hodl Bag tracking, Dashboard |
+| 8. Production | Not Started | Live Trading, Deployment |
 
 ## Key Facts (Memory)
 
@@ -71,36 +74,37 @@ triplegain/
 │   ├── agents/         # Base, TA, Regime, Trading Decision, Portfolio Rebalance
 │   ├── risk/           # Rules engine, circuit breakers, cooldowns
 │   ├── orchestration/  # Message bus, coordinator agent
-│   ├── execution/      # Order manager, position tracker
+│   ├── execution/      # Order manager, position tracker, paper trading
 │   ├── data/           # Indicator library, market snapshot, database
 │   ├── llm/            # Prompt builder, LLM clients (5 providers)
-│   ├── api/            # FastAPI endpoints, agent routes, orchestration routes, validation, security
+│   ├── api/            # FastAPI endpoints, agent routes, orchestration routes, paper trading
 │   └── utils/          # Config loader
 ├── tests/
-│   ├── unit/           # 1045 unit tests (87% coverage)
+│   ├── unit/           # 1098 unit tests (87% coverage)
 │   │   ├── agents/     # Agent tests (215 tests)
 │   │   ├── risk/       # Risk engine tests (90 tests)
 │   │   ├── orchestration/  # Message bus, coordinator tests (114 tests)
-│   │   ├── execution/  # Order manager, position tracker tests (102 tests)
+│   │   ├── execution/  # Order manager, position tracker, paper trading (155 tests)
 │   │   ├── llm/        # LLM client tests (209 tests)
 │   │   └── api/        # API endpoint tests (110 tests)
 │   └── integration/    # Database integration tests
 config/                 # agents.yaml, risk.yaml, orchestration.yaml, portfolio.yaml, execution.yaml
 data/kraken_db/         # Data collectors (operational)
 docs/development/       # Design + Implementation plans + Reviews
-migrations/             # Database migrations (001, 002, 003, 004)
+migrations/             # Database migrations (001-005)
 ```
 
 ## Documentation
 - [Master Design](docs/development/TripleGain-master-design/README.md)
 - [Implementation Plan](docs/development/TripleGain-implementation-plan/README.md)
 - [Architecture Decisions (ADRs)](docs/architecture/09-decisions/README.md)
+- [Phase 6: Paper Trading](docs/development/features/phase-6-paper-trading.md)
 - [Code Reviews](docs/development/reviews/)
 - [Kraken API](docs/api/kraken/kraken-api-reference.md)
 - [Changelog](CHANGELOG.md)
 
 ## Version
-**v0.3.7** (2025-12-19) - Phase 5 Configuration & Integration fixes (15 issues resolved)
+**v0.4.0** (2025-12-19) - Phase 6 Paper Trading with all 8 review fixes
 
 ---
 *Uses global config from ~/.claude/CLAUDE.md*

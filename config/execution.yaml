@@ -4,6 +4,21 @@
 # Settings for Kraken API integration, order management, and position tracking.
 
 # ============================================================================
+# CRITICAL: Trading Mode Setting
+# ============================================================================
+# PAPER = Simulated trades with virtual balance (DEFAULT, SAFE)
+# LIVE = Real trades with real money (requires additional env confirmation)
+#
+# SAFETY: Live trading requires BOTH:
+#   1. This setting = "live"
+#   2. Environment variable: TRIPLEGAIN_TRADING_MODE=live
+#   3. Environment variable: TRIPLEGAIN_CONFIRM_LIVE_TRADING='I_UNDERSTAND_THE_RISKS'
+#   4. Valid KRAKEN_API_KEY and KRAKEN_API_SECRET
+#
+# NEVER change to "live" without understanding the financial risks!
+trading_mode: paper
+
+# ============================================================================
 # Kraken API Configuration
 # ============================================================================
 kraken:
@@ -160,17 +175,36 @@ logging:
 # Paper Trading Mode
 # ============================================================================
 paper_trading:
-  enabled: true  # Set to false for live trading
+  enabled: true  # Backwards compatibility flag
 
-  # Initial paper balance
+  # Starting portfolio for paper trading
+  # These balances are used when initializing a new paper trading session
   initial_balance:
     USDT: 10000
+    BTC: 0.0
+    XRP: 0.0
 
-  # Simulated fill delay (ms)
-  fill_delay_ms: 100
-
-  # Simulate partial fills
+  # Fill simulation settings
+  fill_delay_ms: 100          # Network latency simulation (milliseconds)
+  simulated_slippage_pct: 0.1 # 0.1% slippage on market orders
   simulate_partial_fills: false
 
-  # Simulated slippage (%)
-  simulated_slippage_pct: 0.1
+  # Price source for paper trading
+  # Options:
+  #   - "live_feed": Use real WebSocket prices (most realistic)
+  #   - "historical": Use database cached prices
+  #   - "mock": Use hardcoded mock prices (for testing only)
+  price_source: live_feed
+
+  # Database table prefix for data isolation
+  # Paper trading data is stored in separate tables (paper_orders, paper_positions, etc.)
+  db_table_prefix: "paper_"
+
+  # Session persistence
+  # If true, paper trading state is saved to database and restored on restart
+  persist_state: true
+
+  # Auto-reset settings
+  # Optionally reset paper portfolio on startup or schedule
+  auto_reset_on_startup: false
+  reset_balance_on_error: false

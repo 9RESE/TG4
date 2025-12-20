@@ -32,9 +32,13 @@ This directory contains detailed documentation for each major feature, including
 | Execution Engine | 3 | **COMPLETE** | [phase-3-orchestration.md](./phase-3-orchestration.md#3-execution-engine) |
 | API Security | 4 | **COMPLETE** | [phase-4-api-security.md](./phase-4-api-security.md) |
 | Configuration & Integration | 5 | **COMPLETE** | [phase-5-configuration.md](./phase-5-configuration.md) |
-| Sentiment Analysis | 6 | Planned | Pending |
-| Multi-LLM A/B Testing | 6 | Planned | Pending |
-| Dashboard | 6 | Planned | Pending |
+| Paper Trading | 6 | **COMPLETE** | [phase-6-paper-trading.md](./phase-6-paper-trading.md) |
+| Paper Portfolio | 6 | **COMPLETE** | [phase-6-paper-trading.md](./phase-6-paper-trading.md#2-paper-portfolio) |
+| Paper Order Executor | 6 | **COMPLETE** | [phase-6-paper-trading.md](./phase-6-paper-trading.md#3-paper-order-executor) |
+| Session Persistence | 6 | **COMPLETE** | [phase-6-paper-trading.md](./phase-6-paper-trading.md#code-review-issues-addressed) |
+| Sentiment Analysis | 7 | Planned | Pending |
+| Hodl Bag Tracking | 7 | Planned | Pending |
+| Dashboard | 7 | Planned | Pending |
 
 ## Archived Features (v2)
 

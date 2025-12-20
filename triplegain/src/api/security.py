@@ -563,17 +563,21 @@ if FASTAPI_AVAILABLE:
             super().__init__(app)
             self.config = config
             # Finding 11: Add risk/reset to expensive paths
+            # Phase 6: Add paper trading endpoints to rate limiting
             self._expensive_paths = {
                 "/api/v1/agents/",
                 "/api/v1/coordinator/",
                 "/api/v1/risk/reset",
                 "/api/v1/portfolio/rebalance",
+                "/api/v1/paper/trade",   # Paper trade execution
+                "/api/v1/paper/reset",   # Paper portfolio reset
             }
             self._moderate_paths = {
                 "/api/v1/indicators/",
                 "/api/v1/snapshot/",
                 "/api/v1/positions/",
                 "/api/v1/orders/",
+                "/api/v1/paper/",  # All paper trading endpoints
             }
 
         async def dispatch(self, request: Request, call_next):

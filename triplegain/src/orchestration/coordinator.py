@@ -7,6 +7,13 @@ The Coordinator:
 - Uses LLM (DeepSeek V3 / Claude Sonnet fallback) for conflict resolution
 - Manages trading workflow from signal to execution
 - Handles emergencies and circuit breaker responses
+- Supports paper trading mode (Phase 6) with simulated execution
+
+Phase 6 Additions:
+- TradingMode integration (paper vs live)
+- PaperOrderExecutor for simulated trades
+- PaperPortfolio for balance tracking
+- PaperPriceSource for realistic pricing
 """
 
 import asyncio
@@ -29,6 +36,9 @@ from .message_bus import (
 
 if TYPE_CHECKING:
     from ..risk.rules_engine import RiskManagementEngine, TradeProposal
+    from ..execution.paper_portfolio import PaperPortfolio
+    from ..execution.paper_executor import PaperOrderExecutor
+    from ..execution.paper_price_source import PaperPriceSource
 
 logger = logging.getLogger(__name__)
 
@@ -187,6 +197,8 @@ class CoordinatorAgent:
         risk_engine: Optional['RiskManagementEngine'] = None,
         execution_manager=None,
         db_pool=None,
+        trading_mode=None,  # Phase 6: TradingMode enum
+        execution_config: Optional[dict] = None,  # Phase 6: execution.yaml config
     ):
         """
         Initialize CoordinatorAgent.
@@ -199,6 +211,8 @@ class CoordinatorAgent:
             risk_engine: RiskManagementEngine for trade validation
             execution_manager: OrderExecutionManager for trade execution
             db_pool: Database pool for persistence
+            trading_mode: TradingMode enum (PAPER or LIVE) - Phase 6
+            execution_config: Execution configuration (from execution.yaml) - Phase 6
         """
         self.bus = message_bus
         self.agents = agents
@@ -207,6 +221,10 @@ class CoordinatorAgent:
         self.risk_engine = risk_engine
         self.execution_manager = execution_manager
         self.db = db_pool
+        self.execution_config = execution_config or {}
+
+        # Phase 6: Trading mode initialization
+        self._init_trading_mode(trading_mode)
 
         # State
         self._state = CoordinatorState.RUNNING
@@ -263,18 +281,156 @@ class CoordinatorAgent:
         self._total_conflicts_resolved = 0
         self._total_trades_routed = 0
 
+    def _init_trading_mode(self, trading_mode) -> None:
+        """
+        Initialize trading mode and paper trading infrastructure.
+
+        Phase 6: Paper Trading Integration
+
+        Sets up:
+        - Trading mode (PAPER or LIVE)
+        - PaperPortfolio for balance tracking (paper mode)
+        - PaperPriceSource for pricing (paper mode)
+        - PaperOrderExecutor for simulated execution (paper mode)
+        """
+        from ..execution.trading_mode import TradingMode, get_trading_mode
+
+        # Determine trading mode
+        if trading_mode is None:
+            self.trading_mode = get_trading_mode(self.execution_config)
+        else:
+            self.trading_mode = trading_mode
+
+        # Initialize paper trading components if in paper mode
+        self.paper_portfolio = None
+        self.paper_price_source = None
+        self.paper_executor = None
+
+        if self.trading_mode == TradingMode.PAPER:
+            self._init_paper_trading()
+            logger.info("🟢 Coordinator initialized in PAPER trading mode")
+        else:
+            logger.warning("🔴 Coordinator initialized in LIVE trading mode")
+
+    def _init_paper_trading(self) -> None:
+        """
+        Initialize paper trading components.
+
+        Creates:
+        - PaperPortfolio with initial balances from config
+        - PaperPriceSource for realistic pricing
+        - PaperOrderExecutor for simulated execution
+
+        Note: Portfolio restoration from DB happens in start() for async support.
+        """
+        from ..execution.paper_portfolio import PaperPortfolio
+        from ..execution.paper_price_source import PaperPriceSource
+        from ..execution.paper_executor import PaperOrderExecutor
+
+        # Create paper portfolio from config (will be replaced if DB restore succeeds)
+        self.paper_portfolio = PaperPortfolio.from_config(self.execution_config)
+        logger.info(f"Paper portfolio initialized: {self.paper_portfolio.get_balances_dict()}")
+
+        # Create paper price source
+        paper_config = self.execution_config.get("paper_trading", {})
+        price_source_type = paper_config.get("price_source", "live_feed")
+
+        self.paper_price_source = PaperPriceSource(
+            source_type=price_source_type,
+            db_connection=self.db,
+            websocket_feed=None,  # Will be set if WS feed is available
+            config=self.execution_config,
+        )
+
+        # Create paper executor
+        self.paper_executor = PaperOrderExecutor(
+            config=self.execution_config,
+            paper_portfolio=self.paper_portfolio,
+            price_source=self.paper_price_source.get_price,
+            position_tracker=None,  # Will be set when position tracker is available
+        )
+
+    def set_websocket_feed(self, ws_feed) -> None:
+        """
+        Set WebSocket feed for real-time prices in paper mode.
+
+        Args:
+            ws_feed: WebSocket feed instance with get_price/get_last_price method
+        """
+        if self.paper_price_source:
+            self.paper_price_source.ws_feed = ws_feed
+            logger.info("WebSocket feed connected to paper price source")
+
+    def set_position_tracker(self, position_tracker) -> None:
+        """
+        Set position tracker for paper trading.
+
+        Args:
+            position_tracker: PositionTracker instance
+        """
+        if self.paper_executor:
+            self.paper_executor.position_tracker = position_tracker
+            logger.info("Position tracker connected to paper executor")
+
     async def start(self) -> None:
         """Start the coordinator main loop."""
         self._setup_schedules()
         # Load persisted state before starting
         await self.load_state()
+
+        # HIGH-01: Restore paper portfolio from database if configured
+        await self._restore_paper_portfolio()
+
         await self._setup_subscriptions()
         self._main_loop_task = asyncio.create_task(self._main_loop())
         logger.info("CoordinatorAgent started")
 
+    async def _restore_paper_portfolio(self) -> None:
+        """
+        Restore paper portfolio from database if persist_state is enabled.
+
+        HIGH-01: Paper trading session persistence.
+        """
+        from ..execution.trading_mode import TradingMode
+
+        if self.trading_mode != TradingMode.PAPER:
+            return
+
+        paper_config = self.execution_config.get("paper_trading", {})
+        if not paper_config.get("persist_state", True):
+            logger.debug("Paper portfolio persistence disabled")
+            return
+
+        if not self.db:
+            logger.debug("No database connection - skipping portfolio restore")
+            return
+
+        try:
+            from ..execution.paper_portfolio import PaperPortfolio
+
+            restored = await PaperPortfolio.load_from_db(self.db)
+            if restored:
+                self.paper_portfolio = restored
+                # Reconnect executor to restored portfolio
+                if self.paper_executor:
+                    self.paper_executor.portfolio = self.paper_portfolio
+                logger.info(
+                    f"📝 Paper portfolio restored: session={restored.session_id}, "
+                    f"balances={restored.get_balances_dict()}"
+                )
+            else:
+                logger.info("No previous paper session found - using fresh portfolio")
+
+        except Exception as e:
+            logger.error(f"Failed to restore paper portfolio: {e}")
+
     async def stop(self) -> None:
         """Stop the coordinator and persist state."""
         self._state = CoordinatorState.HALTED
+
+        # HIGH-01: Persist paper portfolio before stopping
+        await self._persist_paper_portfolio()
+
         # Persist state before stopping
         await self.persist_state()
         if self._main_loop_task:
@@ -284,6 +440,30 @@ class CoordinatorAgent:
             except asyncio.CancelledError:
                 pass
         logger.info("CoordinatorAgent stopped")
+
+    async def _persist_paper_portfolio(self) -> None:
+        """
+        Persist paper portfolio to database on shutdown.
+
+        HIGH-01: Paper trading session persistence.
+        """
+        from ..execution.trading_mode import TradingMode
+
+        if self.trading_mode != TradingMode.PAPER:
+            return
+
+        paper_config = self.execution_config.get("paper_trading", {})
+        if not paper_config.get("persist_state", True):
+            return
+
+        if not self.paper_portfolio or not self.db:
+            return
+
+        try:
+            await self.paper_portfolio.persist_to_db(self.db)
+            logger.info(f"📝 Paper portfolio persisted on shutdown: {self.paper_portfolio.session_id}")
+        except Exception as e:
+            logger.error(f"Failed to persist paper portfolio on shutdown: {e}")
 
     async def pause(self) -> None:
         """Pause trading (scheduled tasks still run for analysis)."""
@@ -1581,10 +1761,22 @@ Remember to respond in JSON format with action, confidence, reasoning, and optio
             return False
 
     async def _route_to_execution(self, signal: dict) -> None:
-        """Route validated signal to execution manager."""
-        if not self.risk_engine or not self.execution_manager:
-            logger.warning("Risk engine or execution manager not configured")
-            return
+        """
+        Route validated signal to execution manager.
+
+        Phase 6: Routes to paper executor or live executor based on trading mode.
+        """
+        from ..execution.trading_mode import TradingMode
+
+        # Check for required components based on trading mode
+        if self.trading_mode == TradingMode.PAPER:
+            if not self.risk_engine or not self.paper_executor:
+                logger.warning("Risk engine or paper executor not configured")
+                return
+        else:
+            if not self.risk_engine or not self.execution_manager:
+                logger.warning("Risk engine or execution manager not configured")
+                return
 
         from ..risk.rules_engine import TradeProposal
 
@@ -1613,6 +1805,7 @@ Remember to respond in JSON format with action, confidence, reasoning, and optio
                     "alert_type": "trade_rejected",
                     "symbol": proposal.symbol,
                     "rejections": validation.rejections,
+                    "trading_mode": self.trading_mode.value,
                 },
             ))
             return
@@ -1620,9 +1813,16 @@ Remember to respond in JSON format with action, confidence, reasoning, and optio
         # Use modified proposal if applicable
         final_proposal = validation.modified_proposal or proposal
 
-        # Execute trade
+        # Execute trade using appropriate executor
         try:
-            result = await self.execution_manager.execute_trade(final_proposal)
+            # Phase 6: Route based on trading mode
+            if self.trading_mode == TradingMode.PAPER:
+                result = await self.paper_executor.execute_trade(final_proposal)
+                execution_mode = "paper"
+            else:
+                result = await self.execution_manager.execute_trade(final_proposal)
+                execution_mode = "live"
+
             self._total_trades_routed += 1
 
             if result.success:
@@ -1632,9 +1832,17 @@ Remember to respond in JSON format with action, confidence, reasoning, and optio
                     payload={
                         "event_type": "order_placed",
                         "order_id": result.order.id if result.order else None,
+                        "position_id": result.position_id,
                         "symbol": final_proposal.symbol,
+                        "trading_mode": execution_mode,
                     },
                 ))
+
+                # Log paper trading portfolio update
+                if self.trading_mode == TradingMode.PAPER and self.paper_portfolio:
+                    logger.info(
+                        f"📝 Paper portfolio after trade: {self.paper_portfolio.get_balances_dict()}"
+                    )
             else:
                 await self.bus.publish(create_message(
                     topic=MessageTopic.EXECUTION_EVENTS,
@@ -1643,6 +1851,7 @@ Remember to respond in JSON format with action, confidence, reasoning, and optio
                         "event_type": "order_error",
                         "symbol": final_proposal.symbol,
                         "error_message": result.error_message,
+                        "trading_mode": execution_mode,
                     },
                     priority=MessagePriority.HIGH,
                 ))
@@ -1800,10 +2009,11 @@ Remember to respond in JSON format with action, confidence, reasoning, and optio
     # -------------------------------------------------------------------------
 
     def get_status(self) -> dict:
-        """Get coordinator status."""
-        return {
+        """Get coordinator status including trading mode (Phase 6)."""
+        status = {
             "state": self._state.value,
             "degradation_level": self._degradation_level.name,
+            "trading_mode": self.trading_mode.value if self.trading_mode else "unknown",
             "scheduled_tasks": [
                 {
                     "name": t.name,
@@ -1825,6 +2035,25 @@ Remember to respond in JSON format with action, confidence, reasoning, and optio
                 "consecutive_api_failures": self._consecutive_api_failures,
             },
         }
+
+        # Phase 6: Add paper trading status if in paper mode
+        from ..execution.trading_mode import TradingMode
+        if self.trading_mode == TradingMode.PAPER:
+            paper_status = {}
+            if self.paper_portfolio:
+                paper_status["portfolio"] = {
+                    "session_id": self.paper_portfolio.session_id,
+                    "balances": self.paper_portfolio.get_balances_dict(),
+                    "trade_count": self.paper_portfolio.trade_count,
+                    "total_fees_paid": float(self.paper_portfolio.total_fees_paid),
+                }
+            if self.paper_executor:
+                paper_status["executor"] = self.paper_executor.get_stats()
+            if self.paper_price_source:
+                paper_status["price_source"] = self.paper_price_source.get_stats()
+            status["paper_trading"] = paper_status
+
+        return status
 
     def enable_task(self, task_name: str) -> bool:
         """Enable a scheduled task."""

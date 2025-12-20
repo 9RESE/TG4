@@ -495,6 +495,34 @@ def register_debug_routes(app: FastAPI, debug_mode: bool = False):
 # Singleton app instance
 _app: Optional[FastAPI] = None
 
+# Application state for routes that need shared components
+_app_state: dict = {}
+
+
+def register_paper_trading_routes(app: FastAPI, app_state: dict) -> None:
+    """
+    Register paper trading routes with the application.
+
+    Phase 6: Paper trading API endpoints.
+    Should be called after coordinator is initialized.
+
+    Args:
+        app: FastAPI application instance
+        app_state: Dictionary with coordinator and other shared state
+    """
+    global _app_state
+    _app_state = app_state
+
+    try:
+        from .routes_paper_trading import get_paper_trading_router
+
+        router = get_paper_trading_router(app_state)
+        if router:
+            app.include_router(router)
+            logger.info("Paper trading routes registered")
+    except Exception as e:
+        logger.warning(f"Failed to register paper trading routes: {e}")
+
 
 def get_app() -> FastAPI:
     """Get or create the singleton FastAPI app instance."""
@@ -502,6 +530,11 @@ def get_app() -> FastAPI:
     if _app is None:
         _app = create_app()
     return _app
+
+
+def get_app_state() -> dict:
+    """Get current application state dictionary."""
+    return _app_state
 
 
 # For running directly with uvicorn
