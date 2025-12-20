@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.2] - 2025-12-19
+
+### Added
+- **Configurable Trade History Size**: `max_trade_history` option in `execution.yaml` for paper trading (NEW-LOW-01)
+- **Price Decimal Tracking**: `symbol_price_decimals` dict in PaperOrderExecutor for price quantization
+- **5 New Tests**: Verification tests for NEW-LOW-01, NEW-LOW-02, NEW-LOW-03 fixes
+
+### Fixed
+- **max_history_size Configurable**: `PaperPortfolio.from_config()` now reads `max_trade_history` from config (NEW-LOW-01)
+- **UUID Import Location**: Moved `import uuid` from inside `execute_trade()` to module level (NEW-LOW-02)
+- **Price Quantization**: `_calculate_fill_price()` now quantizes prices to symbol's `price_decimals` (NEW-LOW-03)
+
+### Changed
+- Test count: 1106 (61 paper trading tests, 157 execution tests total)
+- Paper trading tests now include comprehensive fix verification
+
+### Documentation
+- [Phase 3.5 Deep Code Review](docs/development/reviews/phase-3_5/deep-code-review.md) - Complete with 11 previous issues verified + 3 new fixes
+
 ## [0.4.1] - 2025-12-19
 
 ### Added

@@ -83,13 +83,16 @@ class PaperOrderExecutor:
         self.slippage_pct = Decimal(str(paper_config.get("simulated_slippage_pct", 0.1)))
         self.simulate_partial_fills = paper_config.get("simulate_partial_fills", False)
 
-        # Get fee rates from symbol config
+        # Get fee rates and price decimals from symbol config
         self.symbol_fees: Dict[str, Decimal] = {}
+        self.symbol_price_decimals: Dict[str, int] = {}  # NEW-LOW-03: For price quantization
         for symbol, cfg in config.get("symbols", {}).items():
             self.symbol_fees[symbol] = Decimal(str(cfg.get("fee_pct", 0.26)))
+            self.symbol_price_decimals[symbol] = cfg.get("price_decimals", 8)
 
         # Default fee if symbol not configured
         self.default_fee_pct = Decimal("0.26")
+        self.default_price_decimals = 8  # NEW-LOW-03: Default price precision
 
         # Order tracking
         self._open_orders: Dict[str, Order] = {}
@@ -335,12 +338,15 @@ class PaperOrderExecutor:
         Limit orders fill at limit price (if they fill).
         Stop orders trigger at stop price then fill with slippage.
 
+        NEW-LOW-03: Prices are quantized to valid price increments based on
+        symbol's price_decimals configuration to avoid unrealistic precision.
+
         Args:
             order: The order being executed
             current_price: Current market price
 
         Returns:
-            Calculated fill price
+            Calculated fill price (quantized to valid precision)
         """
         if order.order_type == OrderType.LIMIT:
             return order.price  # Limit orders fill at limit price
@@ -354,10 +360,21 @@ class PaperOrderExecutor:
 
         if order.side == OrderSide.BUY:
             # Buying: pay slightly more (slippage up)
-            return current_price * (Decimal("1") + actual_slippage)
+            raw_price = current_price * (Decimal("1") + actual_slippage)
         else:
             # Selling: receive slightly less (slippage down)
-            return current_price * (Decimal("1") - actual_slippage)
+            raw_price = current_price * (Decimal("1") - actual_slippage)
+
+        # NEW-LOW-03: Quantize price to valid precision for the symbol
+        price_decimals = self.symbol_price_decimals.get(
+            order.symbol, self.default_price_decimals
+        )
+        if price_decimals > 0:
+            quantize_str = Decimal("0." + "0" * price_decimals)
+        else:
+            quantize_str = Decimal("1")
+
+        return raw_price.quantize(quantize_str)
 
     def _would_limit_fill(self, order: Order, current_price: Decimal) -> bool:
         """

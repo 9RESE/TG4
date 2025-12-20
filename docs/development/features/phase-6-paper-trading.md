@@ -1,9 +1,9 @@
 # Phase 6: Paper Trading Integration
 
-**Version**: 1.1
+**Version**: 1.2
 **Date**: 2025-12-19
 **Status**: COMPLETE
-**Review**: All 8 initial issues + 8 Phase 3.5 deep review issues addressed
+**Review**: All 8 initial issues + 8 Phase 3.5 review + 3 additional fixes = 19 total issues addressed
 
 ---
 
@@ -16,13 +16,13 @@ Phase 6 implements comprehensive paper trading infrastructure as the **default e
 | Component | Status | Description |
 |-----------|--------|-------------|
 | Trading Mode | COMPLETE | TradingMode enum with dual-confirmation for live |
-| Paper Portfolio | COMPLETE | Balance tracking, P&L, trade history |
-| Paper Executor | COMPLETE | Configurable fills, slippage, fees |
+| Paper Portfolio | COMPLETE | Balance tracking, P&L, trade history, configurable history size |
+| Paper Executor | COMPLETE | Configurable fills, slippage, fees, price quantization |
 | Price Source | COMPLETE | Live feed, historical DB, mock fallback |
 | API Routes | COMPLETE | Portfolio, trades, positions, reset endpoints |
 | DB Isolation | COMPLETE | Separate paper_* tables (migration 005) |
 | Session Persistence | COMPLETE | Save/restore paper sessions across restarts |
-| 56 Unit Tests | PASSING | Full coverage of paper trading components |
+| 61 Unit Tests | PASSING | Full coverage of paper trading components |
 
 ---
 
@@ -171,6 +171,7 @@ paper_trading:
   simulate_partial_fills: false
   price_source: live_feed
   db_table_prefix: "paper_"
+  max_trade_history: 1000      # NEW-LOW-01: Configurable trade history size
   persist_state: true
 ```
 
@@ -238,8 +239,22 @@ A secondary deep review (Phase 3.5) identified and fixed 8 additional issues:
 
 ### Review Documents
 
-- [Phase 3.5 Deep Code Review](../reviews/phase-3_5/phase-3-5-deep-code-logic-review.md)
+- [Phase 3.5 Deep Code Review](../reviews/phase-3_5/deep-code-review.md)
 - [Original Phase 6 Code Review](../reviews/phase-3_5/phase-6-code-review.md)
+
+---
+
+## Additional Fixes (v0.4.2)
+
+A follow-up review identified 3 additional low-priority improvements:
+
+| ID | Issue | Fix |
+|----|-------|-----|
+| NEW-LOW-01 | `max_history_size` hardcoded to 1000 | Added `max_trade_history` config option in `execution.yaml` |
+| NEW-LOW-02 | `import uuid` inside `execute_trade()` | Moved import to module level for better performance |
+| NEW-LOW-03 | Price not quantized after slippage | Added `symbol_price_decimals` and quantization in `_calculate_fill_price()` |
+
+**Tests Added**: 5 new tests in `TestNewLowFixes` class verifying each fix.
 
 ---
 
@@ -261,10 +276,11 @@ A secondary deep review (Phase 3.5) identified and fixed 8 additional issues:
 | TestHigh02SizeCalculationPrecision | 1 | Size quantization |
 | TestMedium02PriceCacheTimestamp | 2 | Stale price rejection |
 | TestEdgeCases | 2 | Zero balance, no price |
-| TestConcurrentDatabasePersistence | 3 | NEW-LOW-03: DB persistence tests |
+| TestConcurrentDatabasePersistence | 3 | DB persistence tests |
 | TestSessionPersistence | 1 | Serialization roundtrip |
+| TestNewLowFixes | 5 | v0.4.2: Configurable history, uuid import, price quantization |
 
-**Total**: 56 tests passing
+**Total**: 61 tests passing
 
 ---
 
@@ -302,7 +318,7 @@ if self.trading_mode == TradingMode.PAPER:
 - [x] Coordinator logs trading mode at startup
 - [x] Position tracker respects trading mode
 - [x] Risk engine works identically in both modes
-- [x] All 1087 tests pass (including 56 paper trading tests)
+- [x] All 1106 tests pass (including 61 paper trading tests)
 
 ---
 
@@ -317,7 +333,7 @@ if self.trading_mode == TradingMode.PAPER:
 | `triplegain/src/execution/paper_price_source.py` | ~220 | Price source for paper trading |
 | `triplegain/src/api/routes_paper_trading.py` | ~350 | API endpoints |
 | `migrations/005_paper_trading.sql` | ~320 | Database schema |
-| `triplegain/tests/unit/execution/test_paper_trading.py` | ~1050 | Unit tests |
+| `triplegain/tests/unit/execution/test_paper_trading.py` | ~1370 | Unit tests (61 tests) |
 
 ### Modified Files
 | File | Changes |

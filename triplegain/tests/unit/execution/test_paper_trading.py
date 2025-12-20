@@ -1184,3 +1184,189 @@ class TestSessionPersistence:
         assert restored.winning_trades == 6
         assert restored.losing_trades == 4
         assert restored.session_id == "test-session-123"
+
+
+# =============================================================================
+# NEW-LOW-01, NEW-LOW-02, NEW-LOW-03 Fix Verification Tests
+# =============================================================================
+
+class TestNewLowFixes:
+    """Tests for NEW-LOW-01, NEW-LOW-02, NEW-LOW-03 fixes."""
+
+    def test_new_low_01_max_history_size_configurable(self):
+        """NEW-LOW-01: Verify max_history_size is read from config."""
+        # Test default value
+        config_default = {"paper_trading": {"initial_balance": {"USDT": 5000}}}
+        portfolio_default = PaperPortfolio.from_config(config_default)
+        assert portfolio_default.max_history_size == 1000  # Default
+
+        # Test custom value
+        config_custom = {
+            "paper_trading": {
+                "initial_balance": {"USDT": 5000},
+                "max_trade_history": 500,
+            }
+        }
+        portfolio_custom = PaperPortfolio.from_config(config_custom)
+        assert portfolio_custom.max_history_size == 500
+
+        # Test large custom value
+        config_large = {
+            "paper_trading": {
+                "initial_balance": {"USDT": 5000},
+                "max_trade_history": 5000,
+            }
+        }
+        portfolio_large = PaperPortfolio.from_config(config_large)
+        assert portfolio_large.max_history_size == 5000
+
+    def test_new_low_02_uuid_import_at_module_level(self):
+        """NEW-LOW-02: Verify uuid is imported at module level (not inside function)."""
+        # We verify by checking that uuid is available at module level
+        from triplegain.src.execution import paper_portfolio
+        assert hasattr(paper_portfolio, 'uuid')
+
+        # Also verify execute_trade works (which uses uuid)
+        portfolio = PaperPortfolio.from_config({
+            "paper_trading": {"initial_balance": {"USDT": 1000}}
+        })
+        result = portfolio.execute_trade(
+            symbol="BTC/USDT",
+            side="buy",
+            size=Decimal("0.01"),
+            price=Decimal("40000"),
+        )
+        # Trade ID should be a valid UUID string
+        assert "trade_id" in result
+        assert len(result["trade_id"]) == 36  # UUID format
+
+    def test_new_low_03_price_quantization_after_slippage(self):
+        """NEW-LOW-03: Verify prices are quantized after slippage."""
+        from triplegain.src.execution.order_manager import Order, OrderSide, OrderType
+
+        portfolio = PaperPortfolio.from_config({
+            "paper_trading": {"initial_balance": {"USDT": 10000}}
+        })
+
+        # Config with specific price_decimals
+        config = {
+            "paper_trading": {
+                "fill_delay_ms": 0,
+                "simulated_slippage_pct": 0.1,
+            },
+            "symbols": {
+                "BTC/USDT": {"price_decimals": 2, "fee_pct": 0.26},
+                "XRP/USDT": {"price_decimals": 5, "fee_pct": 0.26},
+            }
+        }
+
+        executor = PaperOrderExecutor(
+            config=config,
+            paper_portfolio=portfolio,
+            price_source=lambda s: Decimal("45000.123456789"),
+        )
+
+        # Check BTC/USDT has 2 decimal places in price_decimals map
+        assert executor.symbol_price_decimals.get("BTC/USDT") == 2
+        assert executor.symbol_price_decimals.get("XRP/USDT") == 5
+
+        # Create market order (slippage applies to market orders)
+        order = Order(
+            id="test-order-1",
+            symbol="BTC/USDT",
+            side=OrderSide.BUY,
+            order_type=OrderType.MARKET,
+            size=Decimal("0.01"),
+        )
+
+        # Calculate fill price with slippage
+        fill_price = executor._calculate_fill_price(order, Decimal("45000.123456789"))
+
+        # Verify price is quantized to 2 decimal places
+        # The price should have at most 2 decimal places
+        price_str = str(fill_price)
+        if '.' in price_str:
+            decimal_places = len(price_str.split('.')[1])
+            assert decimal_places <= 2, f"Price {fill_price} has {decimal_places} decimals, expected <= 2"
+
+    def test_new_low_03_price_quantization_xrp(self):
+        """NEW-LOW-03: Verify XRP price quantization (5 decimals)."""
+        from triplegain.src.execution.order_manager import Order, OrderSide, OrderType
+
+        portfolio = PaperPortfolio.from_config({
+            "paper_trading": {"initial_balance": {"USDT": 10000}}
+        })
+
+        config = {
+            "paper_trading": {
+                "fill_delay_ms": 0,
+                "simulated_slippage_pct": 0.1,
+            },
+            "symbols": {
+                "XRP/USDT": {"price_decimals": 5, "fee_pct": 0.26},
+            }
+        }
+
+        executor = PaperOrderExecutor(
+            config=config,
+            paper_portfolio=portfolio,
+            price_source=lambda s: Decimal("0.5123456789"),
+        )
+
+        order = Order(
+            id="test-order-2",
+            symbol="XRP/USDT",
+            side=OrderSide.SELL,
+            order_type=OrderType.MARKET,
+            size=Decimal("100"),
+        )
+
+        fill_price = executor._calculate_fill_price(order, Decimal("0.5123456789"))
+
+        # Verify price is quantized to 5 decimal places
+        price_str = str(fill_price)
+        if '.' in price_str:
+            decimal_places = len(price_str.split('.')[1])
+            assert decimal_places <= 5, f"Price {fill_price} has {decimal_places} decimals, expected <= 5"
+
+    def test_new_low_03_default_price_decimals(self):
+        """NEW-LOW-03: Verify default price decimals for unknown symbols."""
+        from triplegain.src.execution.order_manager import Order, OrderSide, OrderType
+
+        portfolio = PaperPortfolio.from_config({
+            "paper_trading": {"initial_balance": {"USDT": 10000}}
+        })
+
+        # Config without symbol-specific settings
+        config = {
+            "paper_trading": {
+                "fill_delay_ms": 0,
+                "simulated_slippage_pct": 0.1,
+            },
+            "symbols": {}  # No symbols configured
+        }
+
+        executor = PaperOrderExecutor(
+            config=config,
+            paper_portfolio=portfolio,
+            price_source=lambda s: Decimal("100.123456789012345"),
+        )
+
+        # Default should be 8 decimals
+        assert executor.default_price_decimals == 8
+
+        order = Order(
+            id="test-order-3",
+            symbol="UNKNOWN/USDT",
+            side=OrderSide.BUY,
+            order_type=OrderType.MARKET,
+            size=Decimal("1"),
+        )
+
+        fill_price = executor._calculate_fill_price(order, Decimal("100.123456789012345"))
+
+        # Verify price is quantized to default 8 decimal places
+        price_str = str(fill_price)
+        if '.' in price_str:
+            decimal_places = len(price_str.split('.')[1])
+            assert decimal_places <= 8, f"Price {fill_price} has {decimal_places} decimals, expected <= 8"

@@ -13,6 +13,7 @@ Tracks:
 
 import json
 import logging
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
@@ -145,10 +146,14 @@ class PaperPortfolio:
         if not session_id:
             session_id = f"paper_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}"
 
+        # NEW-LOW-01: Read max_trade_history from config (default 1000)
+        max_history = paper_config.get("max_trade_history", 1000)
+
         return cls(
             balances=balances.copy(),
             initial_balances=balances.copy(),
             session_id=session_id,
+            max_history_size=max_history,
         )
 
     def get_balance(self, asset: str) -> Decimal:
@@ -291,8 +296,7 @@ class PaperPortfolio:
         self.total_fees_paid += fee
         self.trade_count += 1
 
-        # Create trade record
-        import uuid
+        # Create trade record (NEW-LOW-02: uuid imported at module level)
         trade_id = order_id or str(uuid.uuid4())
         trade_record = PaperTradeRecord(
             id=trade_id,

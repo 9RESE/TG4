@@ -200,6 +200,10 @@ paper_trading:
   # Paper trading data is stored in separate tables (paper_orders, paper_positions, etc.)
   db_table_prefix: "paper_"
 
+  # NEW-LOW-01: Maximum trade history size to keep in memory
+  # Older trades are persisted to database before being trimmed
+  max_trade_history: 1000
+
   # Session persistence
   # If true, paper trading state is saved to database and restored on restart
   persist_state: true
