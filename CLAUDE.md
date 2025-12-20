@@ -97,7 +97,7 @@ triplegain/
 config/                 # agents.yaml, risk.yaml, orchestration.yaml, portfolio.yaml, execution.yaml, hodl.yaml
 data/kraken_db/         # Data collectors (operational)
 docs/development/       # Design + Implementation plans + Reviews
-migrations/             # Database migrations (001-009)
+migrations/             # Database migrations (001-010)
 ```
 
 ## Documentation
@@ -109,7 +109,7 @@ migrations/             # Database migrations (001-009)
 - [Changelog](CHANGELOG.md)
 
 ## Version
-**v0.6.0** (2025-12-20) - Phase 8 Hodl Bag System (profit allocation, per-asset thresholds, paper trading support)
+**v0.6.1** (2025-12-20) - Phase 8 Deep Review v2 Fixes (coordinator integration, retry logic, thread-safety, snapshots)
 
 ---
 *Uses global config from ~/.claude/CLAUDE.md*

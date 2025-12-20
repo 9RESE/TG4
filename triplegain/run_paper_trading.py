@@ -309,11 +309,15 @@ async def main():
     print("[7/7] Starting coordinator...")
     message_bus = MessageBus()
 
+    # Build coordinator config with hodl settings
+    orchestration_config = configs.get("orchestration", {})
+    orchestration_config["hodl"] = configs.get("hodl", {})
+
     coordinator = CoordinatorAgent(
         message_bus=message_bus,
         agents=agents,
         llm_client=llm_clients.get("deepseek") or llm_clients.get("anthropic"),
-        config=configs.get("orchestration", {}),
+        config=orchestration_config,
         risk_engine=risk_engine,
         execution_manager=None,  # Paper trading doesn't need real execution
         db_pool=db_pool,
@@ -349,6 +353,18 @@ async def main():
             for asset, balance in balances.items():
                 print(f"  {asset}: {balance:,.6f}")
             print()
+
+        # Phase 8: Show hodl bag status
+        if hasattr(coordinator, 'hodl_manager') and coordinator.hodl_manager:
+            hodl_stats = coordinator.hodl_manager.get_stats()
+            if hodl_stats.get('enabled'):
+                print("Hodl Bag System:")
+                print(f"  Enabled: Yes (Paper Mode)")
+                print(f"  Allocation: {hodl_stats.get('allocation_pct', 10)}% of profits")
+                print(f"  Thresholds: USDT ${hodl_stats['thresholds'].get('usdt', '1')}, "
+                      f"XRP ${hodl_stats['thresholds'].get('xrp', '25')}, "
+                      f"BTC ${hodl_stats['thresholds'].get('btc', '15')}")
+                print()
 
         # Wait for shutdown signal
         await shutdown_event.wait()

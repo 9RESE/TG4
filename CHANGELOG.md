@@ -5,6 +5,35 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.1] - 2025-12-20
+
+### Added
+- **Phase 8 Deep Review v2 Fixes** - Comprehensive fixes from deep code/logic review
+- **Coordinator Integration (H1/H2/H3)**: HodlBagManager now properly initialized in paper trading mode
+  - Added `hodl_manager` initialization in `_init_paper_trading()`
+  - Created `PositionTracker` with hodl integration in coordinator
+  - Added hodl bag status display on paper trading startup
+- **Daily Snapshot Creation (L2)**: `create_daily_snapshot()` and `get_snapshots()` methods for value tracking
+- **Database Migration 010**: Added `is_paper` column to `hodl_bags` table for paper/live separation
+
+### Fixed
+- **Force Accumulation Bypass (M1)**: `force_accumulation()` now properly bypasses threshold check via `_execute_accumulation_internal()` with `ignore_threshold` flag
+- **Retry Logic (M2)**: `_execute_purchase_with_retry()` implements configurable retry mechanism (3 attempts, 30s delay)
+- **Thread-Safe Price Cache (M3)**: Added separate `_price_cache_lock` for concurrent-safe cache access
+- **Fallback Prices Outdated (L1)**: Updated to 2025 market prices (BTC=$100k, XRP=$2.50)
+- **Test Assertion (L6)**: Updated `test_force_accumulation_below_threshold` to expect success with M1 fix
+
+### Changed
+- HodlBagManager now starts/stops with coordinator lifecycle
+- Coordinator `get_status()` includes hodl bag statistics
+- run_paper_trading.py passes hodl config to coordinator
+- Test count: 1177 (45 hodl bag + 27 API route tests)
+
+### Documentation
+- [Phase 8 Deep Review v2](docs/development/reviews/phase-8/deep-review-2025-12-20.md) - All findings addressed
+
+---
+
 ## [0.6.0] - 2025-12-20
 
 ### Added

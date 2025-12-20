@@ -15,7 +15,7 @@ import asyncio
 import logging
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from decimal import Decimal, ROUND_DOWN
 from enum import Enum
 from typing import Any, Callable, Dict, List, Optional, TYPE_CHECKING
@@ -255,11 +255,12 @@ class HodlBagManager:
         self._daily_accumulated_usd = Decimal(0)
         self._daily_reset_date: Optional[datetime] = None
 
-        # Price cache
+        # Price cache with separate lock for thread safety (M3 fix)
         self._price_cache: Dict[str, Decimal] = {}
         self._price_cache_time: Optional[datetime] = None
+        self._price_cache_lock = asyncio.Lock()  # M3: Separate lock for price cache
 
-        # Lock for thread safety
+        # Lock for thread safety (main operations)
         self._lock = asyncio.Lock()
 
         # Statistics
@@ -479,100 +480,8 @@ class HodlBagManager:
         Returns:
             Amount of asset accumulated, or None if failed
         """
-        async with self._lock:
-            pending_usd = self._pending.get(asset, Decimal(0))
-
-            if pending_usd <= 0:
-                logger.debug(f"No pending {asset} to execute")
-                return None
-
-            threshold = self.thresholds.get(asset)
-            if pending_usd < threshold:
-                logger.debug(
-                    f"{asset} pending ${float(pending_usd):.2f} "
-                    f"below threshold ${float(threshold):.2f}"
-                )
-                return None
-
-            try:
-                if asset == "USDT":
-                    # USDT is just held, no purchase needed
-                    amount = pending_usd
-                    price = Decimal(1)
-                    order_id = None
-                else:
-                    # Get current price
-                    symbol = HODL_SYMBOL_MAP.get(asset)
-                    if not symbol:
-                        logger.error(f"Unknown asset: {asset}")
-                        return None
-
-                    price = await self._get_current_price(symbol)
-                    if not price or price <= 0:
-                        logger.error(f"Could not get price for {symbol}")
-                        return None
-
-                    # Calculate amount
-                    amount = (pending_usd / price).quantize(
-                        Decimal("0.00000001") if asset == "BTC" else Decimal("0.000001"),
-                        rounding=ROUND_DOWN
-                    )
-
-                    # Execute purchase
-                    order_id = await self._execute_purchase(asset, symbol, amount, price, pending_usd)
-                    if not order_id and not self.is_paper_mode:
-                        logger.error(f"Failed to execute {asset} purchase")
-                        return None
-
-                # Record transaction
-                transaction = await self._record_transaction(
-                    asset=asset,
-                    amount=amount,
-                    price_usd=price,
-                    value_usd=pending_usd,
-                    order_id=order_id,
-                )
-
-                # Update hodl bag state
-                await self._update_hodl_bag(asset, amount, pending_usd)
-
-                # Mark pending as executed
-                await self._mark_pending_executed(asset, transaction.id if transaction else None)
-
-                # Clear pending
-                self._pending[asset] = Decimal(0)
-
-                # Update statistics
-                self._total_executions += 1
-
-                logger.info(
-                    f"Hodl {asset} executed: {float(amount)} @ ${float(price):.2f} "
-                    f"= ${float(pending_usd):.2f}"
-                )
-
-                # Publish event
-                if self.bus:
-                    from ..orchestration.message_bus import MessageTopic, create_message, MessagePriority
-                    await self.bus.publish(create_message(
-                        topic=MessageTopic.PORTFOLIO_UPDATES,
-                        source="hodl_bag_manager",
-                        payload={
-                            "event_type": "hodl_execution",
-                            "asset": asset,
-                            "amount": str(amount),
-                            "price_usd": str(price),
-                            "value_usd": str(pending_usd),
-                            "order_id": order_id,
-                            "is_paper": self.is_paper_mode,
-                        },
-                        priority=MessagePriority.NORMAL,
-                    ))
-
-                return amount
-
-            except Exception as e:
-                logger.error(f"Hodl accumulation failed for {asset}: {e}", exc_info=True)
-                return None
+        # Delegate to internal method with threshold check enabled
+        return await self._execute_accumulation_internal(asset, ignore_threshold=False)
 
     async def _execute_purchase(
         self,
@@ -625,6 +534,60 @@ class HodlBagManager:
         except Exception as e:
             logger.error(f"Failed to execute hodl purchase: {e}")
             return None
+
+    async def _execute_purchase_with_retry(
+        self,
+        asset: str,
+        symbol: str,
+        amount: Decimal,
+        price: Decimal,
+        value_usd: Decimal,
+    ) -> Optional[str]:
+        """
+        Execute purchase with retry logic.
+
+        M2 Fix: Implements configurable retry mechanism for failed purchases.
+
+        Args:
+            asset: Asset being purchased
+            symbol: Trading symbol (e.g., "BTC/USDT")
+            amount: Amount to purchase in asset units
+            price: Expected price
+            value_usd: USD value of purchase
+
+        Returns:
+            Order ID if successful, None if all retries failed
+        """
+        last_error = None
+
+        for attempt in range(self.max_retries):
+            try:
+                order_id = await self._execute_purchase(asset, symbol, amount, price, value_usd)
+                if order_id:
+                    if attempt > 0:
+                        logger.info(f"Hodl purchase succeeded on attempt {attempt + 1}")
+                    return order_id
+
+                # Purchase returned None but no exception - log and retry
+                logger.warning(f"Hodl purchase attempt {attempt + 1} returned None")
+
+            except Exception as e:
+                last_error = e
+                logger.warning(
+                    f"Hodl purchase attempt {attempt + 1}/{self.max_retries} failed: {e}"
+                )
+
+            # Wait before retry (except on last attempt)
+            if attempt < self.max_retries - 1:
+                await asyncio.sleep(self.retry_delay_seconds)
+
+        # All retries failed
+        if last_error:
+            logger.error(f"Hodl purchase failed after {self.max_retries} attempts: {last_error}")
+        else:
+            logger.error(f"Hodl purchase returned None after {self.max_retries} attempts")
+
+        return None
 
     async def _wait_for_fill(self, order_id: str, timeout_seconds: int = 60) -> bool:
         """Wait for order to fill."""
@@ -789,6 +752,8 @@ class HodlBagManager:
         """
         Force immediate accumulation regardless of threshold.
 
+        M1 Fix: Now properly bypasses threshold check for forced accumulation.
+
         Args:
             asset: Asset to accumulate (BTC, XRP, USDT)
 
@@ -800,8 +765,127 @@ class HodlBagManager:
             logger.info(f"No pending {asset} to force accumulate")
             return False
 
-        result = await self.execute_accumulation(asset)
+        # M1: Execute with threshold bypass flag
+        result = await self._execute_accumulation_internal(asset, ignore_threshold=True)
         return result is not None
+
+    async def _execute_accumulation_internal(
+        self,
+        asset: str,
+        ignore_threshold: bool = False,
+    ) -> Optional[Decimal]:
+        """
+        Internal accumulation execution with optional threshold bypass.
+
+        M1 Fix: Separated from execute_accumulation to allow threshold bypass.
+
+        Args:
+            asset: Asset to accumulate (BTC, XRP, USDT)
+            ignore_threshold: If True, skip threshold check (for force accumulation)
+
+        Returns:
+            Amount of asset accumulated, or None if failed
+        """
+        async with self._lock:
+            pending_usd = self._pending.get(asset, Decimal(0))
+
+            if pending_usd <= 0:
+                logger.debug(f"No pending {asset} to execute")
+                return None
+
+            # Check threshold only if not bypassed
+            if not ignore_threshold:
+                threshold = self.thresholds.get(asset)
+                if pending_usd < threshold:
+                    logger.debug(
+                        f"{asset} pending ${float(pending_usd):.2f} "
+                        f"below threshold ${float(threshold):.2f}"
+                    )
+                    return None
+
+            try:
+                if asset == "USDT":
+                    # USDT is just held, no purchase needed
+                    amount = pending_usd
+                    price = Decimal(1)
+                    order_id = None
+                else:
+                    # Get current price
+                    symbol = HODL_SYMBOL_MAP.get(asset)
+                    if not symbol:
+                        logger.error(f"Unknown asset: {asset}")
+                        return None
+
+                    price = await self._get_current_price(symbol)
+                    if not price or price <= 0:
+                        logger.error(f"Could not get price for {symbol}")
+                        return None
+
+                    # Calculate amount
+                    amount = (pending_usd / price).quantize(
+                        Decimal("0.00000001") if asset == "BTC" else Decimal("0.000001"),
+                        rounding=ROUND_DOWN
+                    )
+
+                    # Execute purchase with retry logic (M2)
+                    order_id = await self._execute_purchase_with_retry(
+                        asset, symbol, amount, price, pending_usd
+                    )
+                    if not order_id and not self.is_paper_mode:
+                        logger.error(f"Failed to execute {asset} purchase after retries")
+                        return None
+
+                # Record transaction
+                transaction = await self._record_transaction(
+                    asset=asset,
+                    amount=amount,
+                    price_usd=price,
+                    value_usd=pending_usd,
+                    order_id=order_id,
+                )
+
+                # Update hodl bag state
+                await self._update_hodl_bag(asset, amount, pending_usd)
+
+                # Mark pending as executed
+                await self._mark_pending_executed(asset, transaction.id if transaction else None)
+
+                # Clear pending
+                self._pending[asset] = Decimal(0)
+
+                # Update statistics
+                self._total_executions += 1
+
+                logger.info(
+                    f"Hodl {asset} executed: {float(amount)} @ ${float(price):.2f} "
+                    f"= ${float(pending_usd):.2f}"
+                    f"{' (forced)' if ignore_threshold else ''}"
+                )
+
+                # Publish event
+                if self.bus:
+                    from ..orchestration.message_bus import MessageTopic, create_message, MessagePriority
+                    await self.bus.publish(create_message(
+                        topic=MessageTopic.PORTFOLIO_UPDATES,
+                        source="hodl_bag_manager",
+                        payload={
+                            "event_type": "hodl_execution",
+                            "asset": asset,
+                            "amount": str(amount),
+                            "price_usd": str(price),
+                            "value_usd": str(pending_usd),
+                            "order_id": order_id,
+                            "is_paper": self.is_paper_mode,
+                            "forced": ignore_threshold,
+                        },
+                        priority=MessagePriority.NORMAL,
+                    ))
+
+                return amount
+
+            except Exception as e:
+                logger.error(f"Hodl accumulation failed for {asset}: {e}", exc_info=True)
+                return None
 
     async def get_hodl_state(self) -> Dict[str, HodlBagState]:
         """Get current state of all hodl bags."""
@@ -929,21 +1013,27 @@ class HodlBagManager:
                     bag.unrealized_pnl_pct = Decimal(0)
 
     async def _get_current_price(self, symbol: str) -> Optional[Decimal]:
-        """Get current price for symbol."""
-        # Check price source function first
+        """
+        Get current price for symbol.
+
+        M3 Fix: Uses separate lock for thread-safe cache access.
+        """
+        # Check price source function first (no lock needed - external function)
         if self.get_price:
             price = self.get_price(symbol)
             if price:
                 return price
 
-        # Check cache (5 second TTL)
-        now = datetime.now(timezone.utc)
-        if self._price_cache_time:
-            age = (now - self._price_cache_time).total_seconds()
-            if age < 5 and symbol in self._price_cache:
-                return self._price_cache[symbol]
+        # M3: Thread-safe cache access
+        async with self._price_cache_lock:
+            # Check cache (5 second TTL)
+            now = datetime.now(timezone.utc)
+            if self._price_cache_time:
+                age = (now - self._price_cache_time).total_seconds()
+                if age < 5 and symbol in self._price_cache:
+                    return self._price_cache[symbol]
 
-        # Try Kraken API
+        # Try Kraken API (outside lock to avoid blocking)
         if self.kraken:
             try:
                 kraken_symbol = self._to_kraken_symbol(symbol)
@@ -953,8 +1043,10 @@ class HodlBagManager:
                     pair_data = list(result.get("result", {}).values())[0] if result.get("result") else {}
                     if "c" in pair_data:
                         price = Decimal(pair_data["c"][0])
-                        self._price_cache[symbol] = price
-                        self._price_cache_time = now
+                        # M3: Thread-safe cache update
+                        async with self._price_cache_lock:
+                            self._price_cache[symbol] = price
+                            self._price_cache_time = now
                         return price
 
             except Exception as e:
@@ -1070,3 +1162,145 @@ class HodlBagManager:
             "pending": {k: float(v) for k, v in self._pending.items()},
             "thresholds": self.thresholds.to_dict(),
         }
+
+    async def create_daily_snapshot(self) -> int:
+        """
+        Create daily snapshots for all hodl bags.
+
+        L2 Fix: Implements daily snapshot creation for value tracking.
+
+        Returns:
+            Number of snapshots created
+        """
+        if not self.db:
+            logger.debug("No database - skipping snapshot creation")
+            return 0
+
+        await self._update_valuations()
+        now = datetime.now(timezone.utc)
+        created = 0
+
+        async with self._lock:
+            for asset, bag in self._hodl_bags.items():
+                if bag.balance <= 0:
+                    continue
+
+                try:
+                    # Get current price
+                    if asset == "USDT":
+                        price = Decimal(1)
+                    else:
+                        symbol = HODL_SYMBOL_MAP.get(asset)
+                        price = await self._get_current_price(symbol) if symbol else None
+
+                    if not price:
+                        continue
+
+                    value_usd = bag.balance * price
+                    unrealized_pnl = value_usd - bag.cost_basis_usd
+                    unrealized_pnl_pct = (
+                        (unrealized_pnl / bag.cost_basis_usd * 100)
+                        if bag.cost_basis_usd > 0
+                        else Decimal(0)
+                    )
+
+                    query = """
+                        INSERT INTO hodl_bag_snapshots (
+                            timestamp, asset, balance, price_usd, value_usd,
+                            cost_basis_usd, unrealized_pnl_usd, unrealized_pnl_pct
+                        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                        ON CONFLICT (timestamp, asset) DO UPDATE SET
+                            balance = $3,
+                            price_usd = $4,
+                            value_usd = $5,
+                            cost_basis_usd = $6,
+                            unrealized_pnl_usd = $7,
+                            unrealized_pnl_pct = $8
+                    """
+                    await self.db.execute(
+                        query,
+                        now,
+                        asset,
+                        float(bag.balance),
+                        float(price),
+                        float(value_usd),
+                        float(bag.cost_basis_usd),
+                        float(unrealized_pnl),
+                        float(unrealized_pnl_pct),
+                    )
+                    created += 1
+
+                    # Also update hodl_bags with latest valuation
+                    update_query = """
+                        UPDATE hodl_bags SET
+                            last_valuation_usd = $2,
+                            last_valuation_timestamp = $3
+                        WHERE asset = $1
+                    """
+                    await self.db.execute(update_query, asset, float(value_usd), now)
+
+                except Exception as e:
+                    logger.error(f"Failed to create snapshot for {asset}: {e}")
+
+        if created > 0:
+            logger.info(f"Created {created} hodl bag snapshots")
+
+        return created
+
+    async def get_snapshots(
+        self,
+        asset: Optional[str] = None,
+        days: int = 30,
+    ) -> List[dict]:
+        """
+        Get hodl bag snapshots for analysis.
+
+        Args:
+            asset: Optional asset filter
+            days: Number of days of history
+
+        Returns:
+            List of snapshot dictionaries
+        """
+        if not self.db:
+            return []
+
+        try:
+            cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+
+            if asset:
+                query = """
+                    SELECT timestamp, asset, balance, price_usd, value_usd,
+                           cost_basis_usd, unrealized_pnl_usd, unrealized_pnl_pct
+                    FROM hodl_bag_snapshots
+                    WHERE asset = $1 AND timestamp >= $2
+                    ORDER BY timestamp DESC
+                """
+                rows = await self.db.fetch(query, asset, cutoff)
+            else:
+                query = """
+                    SELECT timestamp, asset, balance, price_usd, value_usd,
+                           cost_basis_usd, unrealized_pnl_usd, unrealized_pnl_pct
+                    FROM hodl_bag_snapshots
+                    WHERE timestamp >= $1
+                    ORDER BY timestamp DESC, asset
+                """
+                rows = await self.db.fetch(query, cutoff)
+
+            return [
+                {
+                    "timestamp": row['timestamp'].isoformat(),
+                    "asset": row['asset'],
+                    "balance": str(row['balance']),
+                    "price_usd": str(row['price_usd']),
+                    "value_usd": str(row['value_usd']),
+                    "cost_basis_usd": str(row['cost_basis_usd']),
+                    "unrealized_pnl_usd": str(row['unrealized_pnl_usd']),
+                    "unrealized_pnl_pct": str(row['unrealized_pnl_pct']),
+                }
+                for row in rows
+            ]
+
+        except Exception as e:
+            logger.error(f"Failed to get snapshots: {e}")
+            return []

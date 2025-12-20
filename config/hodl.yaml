@@ -123,9 +123,10 @@ hodl_bags:
     cache_duration_seconds: 5
 
     # Fallback prices if API unavailable (for paper trading only)
+    # L1 Fix: Updated to 2025 market prices
     fallback:
-      BTC/USDT: 45000
-      XRP/USDT: 0.60
+      BTC/USDT: 100000
+      XRP/USDT: 2.50
 
 # ============================================================================
 # Example Profit Flow

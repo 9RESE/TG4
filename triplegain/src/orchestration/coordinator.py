@@ -320,12 +320,16 @@ class CoordinatorAgent:
         - PaperPortfolio with initial balances from config
         - PaperPriceSource for realistic pricing
         - PaperOrderExecutor for simulated execution
+        - HodlBagManager for profit allocation (Phase 8)
+        - PositionTracker for position management
 
         Note: Portfolio restoration from DB happens in start() for async support.
         """
         from ..execution.paper_portfolio import PaperPortfolio
         from ..execution.paper_price_source import PaperPriceSource
         from ..execution.paper_executor import PaperOrderExecutor
+        from ..execution.hodl_bag import HodlBagManager
+        from ..execution.position_tracker import PositionTracker
 
         # Create paper portfolio from config (will be replaced if DB restore succeeds)
         self.paper_portfolio = PaperPortfolio.from_config(self.execution_config)
@@ -342,12 +346,33 @@ class CoordinatorAgent:
             config=self.execution_config,
         )
 
-        # Create paper executor
+        # Phase 8: Create HodlBagManager for profit allocation
+        hodl_config = self.config.get("hodl", {})
+        self.hodl_manager = HodlBagManager(
+            config=hodl_config,
+            db_pool=self.db,
+            kraken_client=None,  # Paper mode - no live trading
+            price_source=self.paper_price_source.get_price,
+            message_bus=self.bus,
+            is_paper_mode=True,
+        )
+        logger.info("📦 HodlBagManager initialized for paper trading")
+
+        # Create position tracker with hodl integration
+        self.position_tracker = PositionTracker(
+            message_bus=self.bus,
+            risk_engine=self.risk_engine,
+            db_pool=self.db,
+            hodl_manager=self.hodl_manager,  # Phase 8: Enable profit allocation
+        )
+        logger.info("📍 PositionTracker initialized with hodl integration")
+
+        # Create paper executor with position tracker
         self.paper_executor = PaperOrderExecutor(
             config=self.execution_config,
             paper_portfolio=self.paper_portfolio,
             price_source=self.paper_price_source.get_price,
-            position_tracker=None,  # Will be set when position tracker is available
+            position_tracker=self.position_tracker,  # Connect position tracker
         )
 
     def set_websocket_feed(self, ws_feed) -> None:
@@ -380,6 +405,16 @@ class CoordinatorAgent:
 
         # HIGH-01: Restore paper portfolio from database if configured
         await self._restore_paper_portfolio()
+
+        # Phase 8: Start hodl bag manager if available
+        if hasattr(self, 'hodl_manager') and self.hodl_manager:
+            await self.hodl_manager.start()
+            logger.info("📦 HodlBagManager started")
+
+        # Start position tracker if available
+        if hasattr(self, 'position_tracker') and self.position_tracker:
+            await self.position_tracker.start()
+            logger.info("📍 PositionTracker started")
 
         await self._setup_subscriptions()
         self._main_loop_task = asyncio.create_task(self._main_loop())
@@ -427,6 +462,16 @@ class CoordinatorAgent:
     async def stop(self) -> None:
         """Stop the coordinator and persist state."""
         self._state = CoordinatorState.HALTED
+
+        # Phase 8: Stop hodl bag manager if available
+        if hasattr(self, 'hodl_manager') and self.hodl_manager:
+            await self.hodl_manager.stop()
+            logger.info("📦 HodlBagManager stopped")
+
+        # Stop position tracker if available
+        if hasattr(self, 'position_tracker') and self.position_tracker:
+            await self.position_tracker.stop()
+            logger.info("📍 PositionTracker stopped")
 
         # HIGH-01: Persist paper portfolio before stopping
         await self._persist_paper_portfolio()
@@ -2093,6 +2138,9 @@ Remember to respond in JSON format with action, confidence, reasoning, and optio
                 paper_status["executor"] = self.paper_executor.get_stats()
             if self.paper_price_source:
                 paper_status["price_source"] = self.paper_price_source.get_stats()
+            # Phase 8: Add hodl bag status
+            if hasattr(self, 'hodl_manager') and self.hodl_manager:
+                paper_status["hodl_bags"] = self.hodl_manager.get_stats()
             status["paper_trading"] = paper_status
 
         return status

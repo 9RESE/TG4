@@ -558,18 +558,21 @@ class TestAccumulationExecution:
 
     @pytest.mark.asyncio
     async def test_force_accumulation_below_threshold(self, hodl_manager):
-        """Test force accumulation even below threshold."""
-        # Add pending XRP (below threshold)
+        """Test force accumulation even below threshold.
+
+        M1 Fix: force_accumulation now bypasses threshold check.
+        """
+        # Add pending XRP (below threshold of $25)
         hodl_manager._pending["XRP"] = Decimal("10.00")
 
-        # Force won't work because it also checks pending > 0
-        # and still checks threshold
+        # M1 Fix: Force accumulation now properly bypasses threshold
         success = await hodl_manager.force_accumulation("XRP")
 
-        # Force actually doesn't bypass threshold - it just executes
-        # Looking at the implementation, force_accumulation calls execute_accumulation
-        # which checks the threshold
-        assert success is False  # Below threshold
+        # Force should succeed because M1 fix bypasses threshold check
+        assert success is True  # Now works even below threshold
+
+        # Verify XRP pending was cleared
+        assert hodl_manager._pending["XRP"] == Decimal(0)
 
 
 # =============================================================================
