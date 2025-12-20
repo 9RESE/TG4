@@ -7,9 +7,9 @@ do a deep code and logic review of the implementation of docs/development/Triple
 
 address all issues and implement the fixes/recommendations outlined in docs/development/reviews/phase-7/deep-review.md ultrathink
 
-do a deep code and logic review of the implementation of docs/development/TripleGain-implementation-plan/08-phase-8-hodl-bag-system.md and the implementation of the fixes from the reviews in docs/development/reviews/phase-8/ Provide a document of your findings and recommendations in this folder docs/development/reviews/phase-8/. ultrathink
+do a deep code and logic review of the implementation of docs/development/TripleGain-implementation-plan/08-phase-8-hodl-bag-system.md and the implementation of the fixes/recommendations/improvements/ from the reviews in docs/development/reviews/phase-8/ Provide a document of your findings and recommendations in this folder docs/development/reviews/phase-8/. ultrathink
 
-address all issues and implement the fixes/recommendations/improvements outlined in docs/development/reviews/phase-8/deep-review-v2-2025-12-20.md ultrathink
+address all issues and implement the fixes/recommendations outlined in docs/development/reviews/phase-8/deep-review-2025-12-20.md ultrathink
 
 
 what issues do we have with any test?
